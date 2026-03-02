@@ -350,6 +350,23 @@ cargobay k3s uninstall
 
 > 注意：K3s 仅支持 Linux。macOS/Windows 上将在后续版本中通过 CargoBay Linux VM 运行。
 
+### Shell 自动补全
+
+为你的 Shell 生成自动补全脚本：
+
+```bash
+# Bash
+cargobay completions bash >> ~/.bashrc
+
+# Zsh
+cargobay completions zsh >> ~/.zshrc
+
+# Fish
+cargobay completions fish > ~/.config/fish/completions/cargobay.fish
+```
+
+添加补全后，重新启动 Shell 或 source 配置文件即可生效。
+
 ---
 
 ## 5. Docker Socket 自动识别

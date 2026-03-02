@@ -548,6 +548,7 @@ dependencies = [
  "bollard",
  "cargobay-core",
  "clap",
+ "clap_complete",
  "futures-util",
  "reqwest",
  "serde",
@@ -617,6 +618,7 @@ name = "cargobay-vz"
 version = "0.1.0"
 dependencies = [
  "cargobay-core",
+ "libc",
  "serde",
  "serde_json",
  "tracing",
@@ -707,6 +709,15 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+]
+
+[[package]]
+name = "clap_complete"
+version = "4.5.66"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c757a3b7e39161a4e56f9365141ada2a6c915a8622c408ab6bb4b5d047371031"
+dependencies = [
+ "clap",
 ]
 
 [[package]]

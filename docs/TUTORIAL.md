@@ -350,6 +350,23 @@ cargobay k3s uninstall
 
 > Note: K3s is Linux-only. On macOS/Windows, K3s will run inside a CargoBay Linux VM in a future release.
 
+### Shell Completions
+
+Generate shell completion scripts for your preferred shell:
+
+```bash
+# Bash
+cargobay completions bash >> ~/.bashrc
+
+# Zsh
+cargobay completions zsh >> ~/.zshrc
+
+# Fish
+cargobay completions fish > ~/.config/fish/completions/cargobay.fish
+```
+
+After adding completions, restart your shell or source the config file for changes to take effect.
+
 ---
 
 ## 5. Docker Socket Detection
