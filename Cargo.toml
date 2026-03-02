@@ -7,3 +7,11 @@ members = [
     "crates/cargobay-vz",
     "crates/cargobay-gui/src-tauri",
 ]
+
+# ── Release profile: optimise for small binary size ─────────────
+[profile.release]
+opt-level = "z"      # Optimise for binary size over speed
+lto = true           # Full link-time optimisation across all crates
+codegen-units = 1    # Single codegen unit → better inlining & dead-code removal
+panic = "abort"      # No unwind tables → smaller binary
+strip = true         # Strip debug symbols and metadata

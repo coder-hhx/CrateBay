@@ -31,7 +31,59 @@ pub struct AppState {
     hv: Box<dyn cargobay_core::hypervisor::Hypervisor>,
     grpc_addr: String,
     daemon: Mutex<Option<Child>>,
+    daemon_ready: Mutex<bool>,
     log_stream_handles: Mutex<HashMap<String, JoinHandle<()>>>,
+}
+
+impl AppState {
+    /// Ensure the daemon process is running (lazy start on first VM operation).
+    /// Subsequent calls are no-ops once the daemon is confirmed ready.
+    async fn ensure_daemon(&self) {
+        // Fast-path: already initialised.
+        {
+            let guard = self.daemon_ready.lock().unwrap_or_else(|e| e.into_inner());
+            if *guard {
+                return;
+            }
+        }
+
+        // Check if daemon is already running externally.
+        if connect_vm_service(&self.grpc_addr).await.is_ok() {
+            info!("CargoBay daemon already running at {}", self.grpc_addr);
+            let mut guard = self.daemon_ready.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = true;
+            return;
+        }
+
+        // Spawn it.
+        info!(
+            "CargoBay daemon not detected at {}, starting it",
+            self.grpc_addr
+        );
+        match spawn_daemon(&self.grpc_addr) {
+            Ok(child) => {
+                if let Ok(mut dg) = self.daemon.lock() {
+                    *dg = Some(child);
+                }
+
+                let ready = wait_for_daemon(&self.grpc_addr, Duration::from_secs(5)).await;
+                if ready {
+                    info!("CargoBay daemon is ready at {}", self.grpc_addr);
+                    let mut guard = self.daemon_ready.lock().unwrap_or_else(|e| e.into_inner());
+                    *guard = true;
+                } else {
+                    warn!(
+                        "CargoBay daemon did not become ready in time ({}), \
+                         falling back to local hypervisor",
+                        self.grpc_addr
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Failed to start CargoBay daemon: {}", e);
+            }
+        }
+    }
 }
 
 impl Drop for AppState {
@@ -990,6 +1042,7 @@ fn vm_state_to_string(state: cargobay_core::hypervisor::VmState) -> String {
 
 #[tauri::command]
 async fn vm_list(state: State<'_, AppState>) -> Result<Vec<VmInfoDto>, String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         let resp = client
             .list_v_ms(proto::ListVMsRequest {})
@@ -1070,6 +1123,7 @@ async fn vm_create(
     rosetta: bool,
     os_image: Option<String>,
 ) -> Result<String, String> {
+    state.ensure_daemon().await;
     validation::validate_vm_name(&name)
         .map_err(|e| format!("Invalid VM name '{}': {}", name, e))?;
 
@@ -1123,6 +1177,7 @@ async fn vm_create(
 
 #[tauri::command]
 async fn vm_start(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .start_vm(proto::StartVmRequest { vm_id: id })
@@ -1136,6 +1191,7 @@ async fn vm_start(state: State<'_, AppState>, id: String) -> Result<(), String> 
 
 #[tauri::command]
 async fn vm_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .stop_vm(proto::StopVmRequest { vm_id: id })
@@ -1149,6 +1205,7 @@ async fn vm_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn vm_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .delete_vm(proto::DeleteVmRequest { vm_id: id })
@@ -1179,6 +1236,7 @@ async fn vm_console(
     id: String,
     offset: Option<u64>,
 ) -> Result<(String, u64), String> {
+    state.ensure_daemon().await;
     let off = offset.unwrap_or(0);
 
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
@@ -1208,6 +1266,7 @@ async fn vm_mount_add(
     guest_path: String,
     readonly: bool,
 ) -> Result<(), String> {
+    state.ensure_daemon().await;
     validation::validate_mount_path(&host_path)
         .map_err(|e| format!("Invalid host path '{}': {}", host_path, e))?;
     validation::validate_mount_path(&guest_path)
@@ -1248,6 +1307,7 @@ async fn vm_mount_remove(
     vm: String,
     tag: String,
 ) -> Result<(), String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .unmount_virtio_fs(proto::UnmountVirtioFsRequest { vm_id: vm, tag })
@@ -1267,6 +1327,7 @@ async fn vm_mount_list(
     state: State<'_, AppState>,
     vm: String,
 ) -> Result<Vec<SharedDirectoryDto>, String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         let resp = client
             .list_virtio_fs_mounts(proto::ListVirtioFsMountsRequest { vm_id: vm })
@@ -1295,6 +1356,7 @@ async fn vm_port_forward_add(
     guest_port: u16,
     protocol: String,
 ) -> Result<(), String> {
+    state.ensure_daemon().await;
     let proto_str = if protocol.is_empty() {
         "tcp".to_string()
     } else {
@@ -1331,6 +1393,7 @@ async fn vm_port_forward_remove(
     vm_id: String,
     host_port: u16,
 ) -> Result<(), String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .remove_port_forward(proto::RemovePortForwardRequest {
@@ -1353,6 +1416,7 @@ async fn vm_port_forward_list(
     state: State<'_, AppState>,
     vm_id: String,
 ) -> Result<Vec<PortForwardDto>, String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         let resp = client
             .list_port_forwards(proto::ListPortForwardsRequest { vm_id })
@@ -1419,6 +1483,7 @@ pub struct VmStatsDto {
 
 #[tauri::command]
 async fn vm_stats(state: State<'_, AppState>, id: String) -> Result<VmStatsDto, String> {
+    state.ensure_daemon().await;
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         let resp = client
             .get_vm_stats(proto::GetVmStatsRequest { vm_id: id })
@@ -2386,44 +2451,10 @@ pub fn run() {
             hv: cargobay_core::create_hypervisor(),
             grpc_addr: grpc_addr(),
             daemon: Mutex::new(None),
+            daemon_ready: Mutex::new(false),
             log_stream_handles: Mutex::new(HashMap::new()),
         })
         .setup(|app| {
-            // ── Daemon startup ──────────────────────────────────────────
-            let state = app.state::<AppState>();
-            let grpc_addr = state.grpc_addr.clone();
-            let daemon_up = tauri::async_runtime::block_on(async {
-                connect_vm_service(&grpc_addr).await.is_ok()
-            });
-
-            if daemon_up {
-                info!("CargoBay daemon already running at {}", grpc_addr);
-            } else {
-                info!("CargoBay daemon not detected at {}, starting it", grpc_addr);
-                match spawn_daemon(&grpc_addr) {
-                    Ok(child) => {
-                        if let Ok(mut guard) = state.daemon.lock() {
-                            *guard = Some(child);
-                        }
-
-                        let ready = tauri::async_runtime::block_on(async {
-                            wait_for_daemon(&grpc_addr, Duration::from_secs(5)).await
-                        });
-                        if ready {
-                            info!("CargoBay daemon is ready at {}", grpc_addr);
-                        } else {
-                            warn!(
-                                "CargoBay daemon did not become ready in time ({}), falling back to local hypervisor",
-                                grpc_addr
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to start CargoBay daemon: {}", e);
-                    }
-                }
-            }
-
             // ── System tray ─────────────────────────────────────────────
             let app_handle = app.handle().clone();
             let menu = build_tray_menu(&app_handle, 0, 0)?;

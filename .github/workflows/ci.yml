@@ -123,3 +123,58 @@ jobs:
 
       - name: Check i18n keys
         run: npm run check:i18n
+
+  # -----------------------------------------------------------
+  # Release binary size check (macOS only — primary target)
+  # -----------------------------------------------------------
+  size-check:
+    name: Binary Size Check
+    runs-on: macos-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: brew install protobuf
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: size-check
+
+      - name: Build release (CLI + daemon)
+        run: cargo build --release -p cargobay-cli -p cargobay-daemon
+
+      - name: Report binary sizes
+        run: |
+          echo "## Release binary sizes" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Binary | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|------|" >> "$GITHUB_STEP_SUMMARY"
+          for bin in cargobay cargobay-daemon; do
+            path="target/release/$bin"
+            if [ -f "$path" ]; then
+              size_bytes=$(stat -f%z "$path")
+              size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
+              echo "| $bin | ${size_mb} MB |" >> "$GITHUB_STEP_SUMMARY"
+              echo "$bin: ${size_mb} MB ($size_bytes bytes)"
+            fi
+          done
+
+      - name: Check binary size limit (20 MB each)
+        run: |
+          MAX_BYTES=$((20 * 1048576))
+          for bin in cargobay cargobay-daemon; do
+            path="target/release/$bin"
+            if [ -f "$path" ]; then
+              size=$(stat -f%z "$path")
+              if [ "$size" -gt "$MAX_BYTES" ]; then
+                echo "::error::$bin is $(echo "scale=2; $size/1048576" | bc) MB — exceeds 20 MB limit"
+                exit 1
+              fi
+            fi
+          done
+          echo "All binaries within size budget."
