@@ -1773,8 +1773,9 @@ mod tests {
         let (tmp_dir, _g1, _g2, _lock) = temp_config_dir();
 
         if LinuxHypervisor::kvm_available() {
+            let store_path = std::path::PathBuf::from(&tmp_dir).join("vms.json");
             // Create a VM with the first hypervisor instance.
-            let hyp1 = LinuxHypervisor::new();
+            let hyp1 = LinuxHypervisor::from_store(VmStore::with_path(store_path.clone()));
             let config = VmConfig {
                 name: "persist-test".into(),
                 cpus: 4,
@@ -1785,7 +1786,7 @@ mod tests {
 
             // Create a second hypervisor instance; it should load the VM
             // from the same directory.
-            let hyp2 = LinuxHypervisor::new();
+            let hyp2 = LinuxHypervisor::from_store(VmStore::with_path(store_path));
             let vms = hyp2.list_vms().unwrap();
             assert_eq!(vms.len(), 1);
             assert_eq!(vms[0].id, id);

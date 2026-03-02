@@ -256,8 +256,8 @@ impl K3sManager {
         #[cfg(unix)]
         {
             info!("K3s cluster stopped");
+            Ok(())
         }
-        Ok(())
     }
 
     /// Query the current status of the K3s cluster.
