@@ -17,7 +17,7 @@ import { Vms } from "./pages/Vms"
 import { Volumes } from "./pages/Volumes"
 import { Settings } from "./pages/Settings"
 import { Kubernetes } from "./pages/Kubernetes"
-import type { NavPage, Theme } from "./types"
+import type { NavPage, Theme, VmInfoDto } from "./types"
 import "./App.css"
 
 function App() {
@@ -186,7 +186,7 @@ function App() {
               const ok = await vmHook.createVm()
               if (ok) showToast(t("vmCreated"))
             }}
-            onLoginCmd={async (vm: { id: string; name: string }) => {
+            onLoginCmd={async (vm: VmInfoDto) => {
               const cmd = await vmHook.getLoginCmd(vm)
               if (cmd) modal.openTextModal(t("loginCommand"), cmd, cmd)
             }}
