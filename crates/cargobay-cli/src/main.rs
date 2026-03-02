@@ -1,5 +1,5 @@
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
@@ -121,6 +121,17 @@ enum DockerCommands {
         container: String,
         #[arg(long, default_value = "/bin/sh")]
         shell: String,
+    },
+    /// Show logs for a container
+    Logs {
+        /// Container name or ID
+        container: String,
+        /// Number of lines to show from the end of the logs (or "all")
+        #[arg(long, default_value = "200")]
+        tail: String,
+        /// Show timestamps
+        #[arg(long)]
+        timestamps: bool,
     },
 }
 
@@ -1450,6 +1461,25 @@ async fn handle_docker(cmd: DockerCommands) -> Result<(), String> {
         }
         DockerCommands::LoginCmd { container, shell } => {
             println!("docker exec -it {} {}", container, shell);
+        }
+        DockerCommands::Logs {
+            container,
+            tail,
+            timestamps,
+        } => {
+            let opts = LogsOptions::<String> {
+                follow: false,
+                stdout: true,
+                stderr: true,
+                timestamps,
+                tail: tail.clone(),
+                ..Default::default()
+            };
+
+            let mut stream = docker.logs(&container, Some(opts));
+            while let Some(chunk) = stream.try_next().await.map_err(|e| e.to_string())? {
+                print!("{}", chunk);
+            }
         }
     }
     Ok(())

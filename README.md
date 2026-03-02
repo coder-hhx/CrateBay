@@ -122,17 +122,17 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design.
 
 ```
 ┌──────────────────────────────────────────────┐
-│  GUI (Tauri + React)    CLI (Rust/clap)      │
+│   GUI (Tauri + React)    CLI (Rust/clap)     │
 ├──────────────────────────────────────────────┤
-│              gRPC (tonic)                     │
+│               gRPC (tonic)                   │
 ├──────────────────────────────────────────────┤
-│            Daemon (Rust)                      │
-├────────────┬────────────┬────────────────────┤
-│   macOS    │   Linux    │     Windows        │
-│   Vz.fw    │   KVM      │     Hyper-V        │
-│  +Rosetta  │ +virtiofsd │    +Plan 9/SMB     │
-│  +VirtioFS │            │                    │
-└────────────┴────────────┴────────────────────┘
+│              Daemon (Rust)                   │
+├──────────────┬──────────────┬────────────────┤
+│    macOS     │    Linux     │    Windows     │
+│    Vz.fw     │    KVM       │    Hyper-V     │
+│   +Rosetta   │  +virtiofsd  │  +Plan 9/SMB  │
+│   +VirtioFS  │              │               │
+└──────────────┴──────────────┴────────────────┘
 ```
 
 ## Contributing

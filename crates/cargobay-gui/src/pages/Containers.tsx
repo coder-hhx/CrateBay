@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { I } from "../icons"
 import { ErrorBanner } from "../components/ErrorDisplay"
@@ -36,6 +36,17 @@ export function Containers({
   const [runResult, setRunResult] = useState<RunContainerResult | null>(null)
   const [runError, setRunError] = useState("")
 
+  // Log viewer state
+  const [showLogModal, setShowLogModal] = useState(false)
+  const [logContainerId, setLogContainerId] = useState("")
+  const [logContainerName, setLogContainerName] = useState("")
+  const [logContent, setLogContent] = useState("")
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState("")
+  const [logTail, setLogTail] = useState("200")
+  const [logTimestamps, setLogTimestamps] = useState(false)
+  const logEndRef = useRef<HTMLDivElement>(null)
+
   const handleRun = async () => {
     if (!runImage.trim()) return
     setRunLoading(true)
@@ -60,6 +71,41 @@ export function Containers({
     setRunError("")
     setShowRunModal(true)
   }
+
+  const fetchLogs = async (containerId: string, tail: string, timestamps: boolean) => {
+    setLogLoading(true)
+    setLogError("")
+    try {
+      const tailParam = tail === "all" ? "all" : tail
+      const result = await invoke<string>("container_logs", {
+        id: containerId,
+        tail: tailParam,
+        timestamps,
+      })
+      setLogContent(result)
+    } catch (e) {
+      setLogError(String(e))
+    } finally {
+      setLogLoading(false)
+    }
+  }
+
+  const openLogModal = (c: ContainerInfo) => {
+    setLogContainerId(c.id)
+    setLogContainerName(c.name || c.id)
+    setLogContent("")
+    setLogError("")
+    setLogTail("200")
+    setLogTimestamps(false)
+    setShowLogModal(true)
+    fetchLogs(c.id, "200", false)
+  }
+
+  useEffect(() => {
+    if (showLogModal && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [logContent, showLogModal])
 
   if (loading) {
     return <div className="loading"><div className="spinner" />{t("loadingContainers")}</div>
@@ -103,6 +149,14 @@ export function Containers({
             title={t("loginCommand")}
           >
             {I.terminal}
+          </button>
+          <button
+            className="action-btn"
+            disabled={acting === c.id}
+            onClick={() => openLogModal(c)}
+            title={t("viewLogs")}
+          >
+            {I.fileText}
           </button>
           {isRunning ? (
             <button className="action-btn" disabled={acting === c.id} onClick={() => onContainerAction("stop_container", c.id)} title={t("stop")}>{I.stop}</button>
@@ -244,6 +298,77 @@ export function Containers({
               <button className="btn primary" disabled={runLoading || !runImage.trim()} onClick={handleRun} style={{ marginLeft: 8 }}>
                 {runLoading ? t("creating") : t("create")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Viewer Modal */}
+      {showLogModal && (
+        <div className="modal-backdrop" onClick={() => setShowLogModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="modal-head">
+              <div className="modal-title">{t("logs")} — {logContainerName}</div>
+              <div className="modal-actions">
+                <button className="icon-btn" onClick={() => setShowLogModal(false)} title={t("close")}>×</button>
+              </div>
+            </div>
+            <div className="modal-body" style={{ padding: "10px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text2)" }}>{t("tailLines")}</label>
+                <select
+                  className="select"
+                  value={logTail}
+                  onChange={e => {
+                    setLogTail(e.target.value)
+                    fetchLogs(logContainerId, e.target.value, logTimestamps)
+                  }}
+                >
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="500">500</option>
+                  <option value="all">All</option>
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text2)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={logTimestamps}
+                    onChange={e => {
+                      setLogTimestamps(e.target.checked)
+                      fetchLogs(logContainerId, logTail, e.target.checked)
+                    }}
+                    style={{ width: 14, height: 14 }}
+                  />
+                  {t("showTimestamps")}
+                </label>
+                <div style={{ flex: 1 }} />
+                <button
+                  className="btn sm"
+                  disabled={logLoading}
+                  onClick={() => fetchLogs(logContainerId, logTail, logTimestamps)}
+                >
+                  <span className="icon">{I.refresh}</span>
+                  {t("refreshLogs")}
+                </button>
+              </div>
+              {logError && <div className="hint" style={{ color: "var(--red)", marginBottom: 8 }}>{logError}</div>}
+              <div className="log-viewer">
+                {logLoading && !logContent ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 20, justifyContent: "center", color: "var(--text2)" }}>
+                    <div className="spinner" />{t("loading")}
+                  </div>
+                ) : logContent ? (
+                  <>
+                    <pre className="log-content">{logContent}</pre>
+                    <div ref={logEndRef} />
+                  </>
+                ) : (
+                  <div style={{ padding: 20, textAlign: "center", color: "var(--text3)" }}>{t("noLogs")}</div>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setShowLogModal(false)}>{t("close")}</button>
             </div>
           </div>
         </div>

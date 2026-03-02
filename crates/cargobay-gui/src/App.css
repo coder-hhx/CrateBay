@@ -1614,6 +1614,35 @@
   font-weight: 700;
 }
 
+/* === Log viewer === */
+.log-viewer {
+  background: #0a0c14;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-height: 400px;
+  min-height: 120px;
+  overflow: auto;
+}
+
+.log-content {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #c8d6e5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.app.light .log-viewer {
+  background: #f1f5f9;
+}
+
+.app.light .log-content {
+  color: #1e293b;
+}
+
 /* === Responsive === */
 @media (max-width: 900px) {
   .grid3 { grid-template-columns: 1fr; }

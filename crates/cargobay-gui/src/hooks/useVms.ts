@@ -37,6 +37,8 @@ export function useVms() {
 
   useEffect(() => {
     fetchVms()
+    const iv = setInterval(fetchVms, 3000)
+    return () => clearInterval(iv)
   }, [fetchVms])
 
   const vmAction = useCallback(async (cmd: string, id: string) => {
@@ -124,8 +126,10 @@ export function useVms() {
     }
   }, [fetchVms])
 
+  const running = vms.filter(v => v.state === "running")
+
   return {
-    vms, vmLoading, vmError, setVmError,
+    vms, running, vmLoading, vmError, setVmError,
     vmName, setVmName, vmCpus, setVmCpus,
     vmMem, setVmMem, vmDisk, setVmDisk,
     vmRosetta, setVmRosetta, vmActing,

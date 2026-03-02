@@ -42,7 +42,7 @@ function groupContainersByNamePrefix(containers: ContainerInfo[]): ContainerGrou
         const otherCands = containerGroupCandidates(other.name)
         if (otherCands.includes(cand)) count++
       }
-      if (count > bestCount) {
+      if (count > bestCount || (count === bestCount && cand.length > bestKey.length)) {
         bestCount = count
         bestKey = cand
       }

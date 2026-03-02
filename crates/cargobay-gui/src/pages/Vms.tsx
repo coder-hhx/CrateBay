@@ -90,7 +90,7 @@ export function Vms({
         <div className="empty-state">
           <div className="empty-icon">{I.server}</div>
           <h3>{t("noVms")}</h3>
-          <p>{t("vmHint")}</p>
+          <p>{t("createFirstVm")}</p>
           <button className="btn primary" style={{ marginTop: 16 }} onClick={() => setShowCreateModal(true)}>
             <span className="icon">{I.plus}</span>{t("createVm")}
           </button>

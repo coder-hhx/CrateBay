@@ -1,5 +1,5 @@
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
@@ -391,6 +391,34 @@ async fn docker_run(
 #[tauri::command]
 fn container_login_cmd(container: String, shell: String) -> String {
     format!("docker exec -it {} {}", container, shell)
+}
+
+#[tauri::command]
+async fn container_logs(
+    id: String,
+    tail: Option<String>,
+    timestamps: bool,
+) -> Result<String, String> {
+    let docker = connect_docker()?;
+
+    let tail_value = tail.unwrap_or_else(|| "200".to_string());
+
+    let opts = LogsOptions::<String> {
+        follow: false,
+        stdout: true,
+        stderr: true,
+        timestamps,
+        tail: tail_value,
+        ..Default::default()
+    };
+
+    let mut stream = docker.logs(&id, Some(opts));
+    let mut output = String::new();
+    while let Some(chunk) = stream.try_next().await.map_err(|e| e.to_string())? {
+        output.push_str(&chunk.to_string());
+    }
+
+    Ok(output)
 }
 
 #[derive(Debug, Serialize)]
@@ -1133,6 +1161,7 @@ pub fn run() {
             remove_container,
             docker_run,
             container_login_cmd,
+            container_logs,
             image_search,
             image_tags,
             image_load,

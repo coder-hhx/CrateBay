@@ -3,6 +3,7 @@ import { messages } from "./i18n/messages"
 import { I } from "./icons"
 import { useContainers } from "./hooks/useContainers"
 import { useImageSearch } from "./hooks/useImageSearch"
+import { useVms } from "./hooks/useVms"
 import { useToast } from "./hooks/useToast"
 import { useModal } from "./hooks/useModal"
 import { AppModal } from "./components/AppModal"
@@ -10,6 +11,7 @@ import { EmptyState } from "./components/EmptyState"
 import { Dashboard } from "./pages/Dashboard"
 import { Containers } from "./pages/Containers"
 import { Images } from "./pages/Images"
+import { Vms } from "./pages/VMs"
 import { Settings } from "./pages/Settings"
 import type { NavPage, Theme } from "./types"
 import "./App.css"
@@ -29,6 +31,7 @@ function App() {
   const modal = useModal(t)
   const containers = useContainers()
   const images = useImageSearch()
+  const vmHook = useVms()
 
   const copyText = async (text: string) => {
     try { await navigator.clipboard.writeText(text); showToast(t("copied")) }
@@ -39,7 +42,7 @@ function App() {
     { page: "dashboard", icon: I.dashboard },
     { page: "containers", icon: I.box, count: containers.containers.length },
     { page: "images", icon: I.layers },
-    { page: "vms", icon: I.server, soon: true },
+    { page: "vms", icon: I.server, count: vmHook.vms.length },
   ]
 
   const pageNames: Record<NavPage, string> = {
@@ -54,8 +57,8 @@ function App() {
           <Dashboard
             containers={containers.containers}
             running={containers.running}
-            vmsCount={0}
-            vmsRunningCount={0}
+            vmsCount={vmHook.vms.length}
+            vmsRunningCount={vmHook.running.length}
             imgResultsCount={images.imgResults.length}
             connected={containers.connected}
             onNavigate={setActivePage}
@@ -114,10 +117,51 @@ function App() {
         )
       case "vms":
         return (
-          <EmptyState
-            icon={I.server}
-            title={t("comingSoon")}
-            description={t("vmComingSoonDesc")}
+          <Vms
+            vms={vmHook.vms}
+            vmLoading={vmHook.vmLoading}
+            vmError={vmHook.vmError}
+            setVmError={vmHook.setVmError}
+            vmName={vmHook.vmName}
+            setVmName={vmHook.setVmName}
+            vmCpus={vmHook.vmCpus}
+            setVmCpus={vmHook.setVmCpus}
+            vmMem={vmHook.vmMem}
+            setVmMem={vmHook.setVmMem}
+            vmDisk={vmHook.vmDisk}
+            setVmDisk={vmHook.setVmDisk}
+            vmRosetta={vmHook.vmRosetta}
+            setVmRosetta={vmHook.setVmRosetta}
+            vmActing={vmHook.vmActing}
+            vmLoginUser={vmHook.vmLoginUser}
+            setVmLoginUser={vmHook.setVmLoginUser}
+            vmLoginHost={vmHook.vmLoginHost}
+            setVmLoginHost={vmHook.setVmLoginHost}
+            vmLoginPort={vmHook.vmLoginPort}
+            setVmLoginPort={vmHook.setVmLoginPort}
+            mountVmId={vmHook.mountVmId}
+            setMountVmId={vmHook.setMountVmId}
+            mountTag={vmHook.mountTag}
+            setMountTag={vmHook.setMountTag}
+            mountHostPath={vmHook.mountHostPath}
+            setMountHostPath={vmHook.setMountHostPath}
+            mountGuestPath={vmHook.mountGuestPath}
+            setMountGuestPath={vmHook.setMountGuestPath}
+            mountReadonly={vmHook.mountReadonly}
+            setMountReadonly={vmHook.setMountReadonly}
+            onFetchVms={vmHook.fetchVms}
+            onVmAction={vmHook.vmAction}
+            onCreateVm={async () => {
+              const ok = await vmHook.createVm()
+              if (ok) showToast(t("vmCreated"))
+            }}
+            onLoginCmd={async (vm) => {
+              const cmd = await vmHook.getLoginCmd(vm)
+              if (cmd) modal.openTextModal(t("loginCommand"), cmd, cmd)
+            }}
+            onAddMount={vmHook.addMount}
+            onRemoveMount={vmHook.removeMount}
+            t={t}
           />
         )
       case "settings":
@@ -189,6 +233,9 @@ function App() {
             <h1>{pageNames[activePage]}</h1>
             {activePage === "containers" && containers.running.length > 0 && (
               <span className="count-chip">{containers.running.length} {t("runningCount")}</span>
+            )}
+            {activePage === "vms" && vmHook.running.length > 0 && (
+              <span className="count-chip">{vmHook.running.length} {t("runningCount")}</span>
             )}
           </div>
           <div className="topbar-right">
