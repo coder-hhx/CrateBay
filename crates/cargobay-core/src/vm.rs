@@ -156,7 +156,10 @@ impl Hypervisor for StubHypervisor {
     }
 
     fn list_vms(&self) -> Result<Vec<VmInfo>, HypervisorError> {
-        Ok(crate::lock_or_recover(&self.vms).values().cloned().collect())
+        Ok(crate::lock_or_recover(&self.vms)
+            .values()
+            .cloned()
+            .collect())
     }
 
     fn mount_virtiofs(&self, vm_id: &str, share: &SharedDirectory) -> Result<(), HypervisorError> {

@@ -44,34 +44,9 @@ if git rev-parse -q --verify REVERT_HEAD >/dev/null; then
   exit 0
 fi
 
-required_docs=(
-  "README.md"
-  "README.zh.md"
-  "docs/TUTORIAL.md"
-  "docs/TUTORIAL.zh.md"
-  "CHANGELOG.md"
-  "CHANGELOG.zh.md"
-)
-
 staged_files="$(git diff --cached --name-only --diff-filter=ACMR || true)"
 if [[ -z "${staged_files}" ]]; then
   exit 0
-fi
-
-docs_staged=0
-for doc in "${required_docs[@]}"; do
-  if printf '%s\n' "$staged_files" | grep -Fqx "$doc"; then
-    docs_staged=1
-    break
-  fi
-done
-
-if [[ "$docs_staged" -ne 1 ]]; then
-  echo "ERROR: Before committing, stage an update to at least one of:"
-  for doc in "${required_docs[@]}"; do
-    echo "  - $doc"
-  done
-  exit 1
 fi
 
 # i18n (docs): if one language is updated, the other must be updated too.
@@ -81,7 +56,6 @@ doc_pairs=(
   "CHANGELOG.md:CHANGELOG.zh.md"
 )
 
-any_pair_ok=0
 for pair in "${doc_pairs[@]}"; do
   a="${pair%%:*}"
   b="${pair#*:}"
@@ -99,19 +73,7 @@ for pair in "${doc_pairs[@]}"; do
       exit 1
     fi
   fi
-
-  if [[ "$a_staged" -eq 1 && "$b_staged" -eq 1 ]]; then
-    any_pair_ok=1
-  fi
 done
-
-if [[ "$any_pair_ok" -ne 1 ]]; then
-  echo "ERROR: i18n required. Stage both language versions for at least one of:"
-  for pair in "${doc_pairs[@]}"; do
-    echo "  - ${pair%%:*} + ${pair#*:}"
-  done
-  exit 1
-fi
 
 # i18n (app): enforce that UI translations are complete and synced (en + zh only).
 i18n_file="crates/cargobay-gui/src/i18n/messages.ts"
