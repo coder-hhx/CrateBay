@@ -411,3 +411,239 @@ impl VmService for VmServiceImpl {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // vm_state_to_string tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn vm_state_to_string_running() {
+        assert_eq!(
+            VmServiceImpl::vm_state_to_string(VmState::Running),
+            "running"
+        );
+    }
+
+    #[test]
+    fn vm_state_to_string_stopped() {
+        assert_eq!(
+            VmServiceImpl::vm_state_to_string(VmState::Stopped),
+            "stopped"
+        );
+    }
+
+    #[test]
+    fn vm_state_to_string_creating() {
+        assert_eq!(
+            VmServiceImpl::vm_state_to_string(VmState::Creating),
+            "creating"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // proto_shared_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn proto_shared_dir_converts_fields() {
+        let core_dir = SharedDirectory {
+            tag: "code".into(),
+            host_path: "/Users/test/code".into(),
+            guest_path: "/mnt/code".into(),
+            read_only: true,
+        };
+        let proto_dir = VmServiceImpl::proto_shared_dir(core_dir);
+        assert_eq!(proto_dir.tag, "code");
+        assert_eq!(proto_dir.host_path, "/Users/test/code");
+        assert_eq!(proto_dir.guest_path, "/mnt/code");
+        assert!(proto_dir.read_only);
+    }
+
+    #[test]
+    fn proto_shared_dir_read_write() {
+        let core_dir = SharedDirectory {
+            tag: "data".into(),
+            host_path: "/host/data".into(),
+            guest_path: "/mnt/data".into(),
+            read_only: false,
+        };
+        let proto_dir = VmServiceImpl::proto_shared_dir(core_dir);
+        assert!(!proto_dir.read_only);
+    }
+
+    // -----------------------------------------------------------------------
+    // core_shared_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn core_shared_dir_converts_fields() {
+        let proto_dir = proto::SharedDirectory {
+            tag: "home".into(),
+            host_path: "/Users/test".into(),
+            guest_path: "/mnt/home".into(),
+            read_only: false,
+        };
+        let core_dir = VmServiceImpl::core_shared_dir(proto_dir);
+        assert_eq!(core_dir.tag, "home");
+        assert_eq!(core_dir.host_path, "/Users/test");
+        assert_eq!(core_dir.guest_path, "/mnt/home");
+        assert!(!core_dir.read_only);
+    }
+
+    #[test]
+    fn core_shared_dir_read_only() {
+        let proto_dir = proto::SharedDirectory {
+            tag: "ro".into(),
+            host_path: "/host".into(),
+            guest_path: "/guest".into(),
+            read_only: true,
+        };
+        let core_dir = VmServiceImpl::core_shared_dir(proto_dir);
+        assert!(core_dir.read_only);
+    }
+
+    // -----------------------------------------------------------------------
+    // Round-trip: core -> proto -> core
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shared_dir_round_trip() {
+        let original = SharedDirectory {
+            tag: "test-tag".into(),
+            host_path: "/original/host".into(),
+            guest_path: "/original/guest".into(),
+            read_only: true,
+        };
+        let proto = VmServiceImpl::proto_shared_dir(original.clone());
+        let back = VmServiceImpl::core_shared_dir(proto);
+        assert_eq!(back.tag, original.tag);
+        assert_eq!(back.host_path, original.host_path);
+        assert_eq!(back.guest_path, original.guest_path);
+        assert_eq!(back.read_only, original.read_only);
+    }
+
+    // -----------------------------------------------------------------------
+    // proto_port_forward tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn proto_port_forward_converts_fields() {
+        let pf = PortForward {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".into(),
+        };
+        let proto_pf = VmServiceImpl::proto_port_forward(pf);
+        assert_eq!(proto_pf.host_port, 8080);
+        assert_eq!(proto_pf.guest_port, 80);
+        assert_eq!(proto_pf.protocol, "tcp");
+    }
+
+    #[test]
+    fn proto_port_forward_udp() {
+        let pf = PortForward {
+            host_port: 5353,
+            guest_port: 53,
+            protocol: "udp".into(),
+        };
+        let proto_pf = VmServiceImpl::proto_port_forward(pf);
+        assert_eq!(proto_pf.protocol, "udp");
+    }
+
+    // -----------------------------------------------------------------------
+    // core_port_forward tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn core_port_forward_converts_fields() {
+        let proto_pf = proto::PortForwardEntry {
+            host_port: 3000,
+            guest_port: 3000,
+            protocol: "tcp".into(),
+        };
+        let core_pf = VmServiceImpl::core_port_forward(proto_pf);
+        assert_eq!(core_pf.host_port, 3000);
+        assert_eq!(core_pf.guest_port, 3000);
+        assert_eq!(core_pf.protocol, "tcp");
+    }
+
+    // -----------------------------------------------------------------------
+    // Port forward round-trip: core -> proto -> core
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn port_forward_round_trip() {
+        let original = PortForward {
+            host_port: 443,
+            guest_port: 8443,
+            protocol: "tcp".into(),
+        };
+        let proto = VmServiceImpl::proto_port_forward(original.clone());
+        let proto_entry = proto::PortForwardEntry {
+            host_port: proto.host_port,
+            guest_port: proto.guest_port,
+            protocol: proto.protocol,
+        };
+        let back = VmServiceImpl::core_port_forward(proto_entry);
+        assert_eq!(back.host_port, original.host_port);
+        assert_eq!(back.guest_port, original.guest_port);
+        assert_eq!(back.protocol, original.protocol);
+    }
+
+    // -----------------------------------------------------------------------
+    // status_from_error tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn status_from_error_not_found() {
+        let status =
+            VmServiceImpl::status_from_error("test_op", HypervisorError::NotFound("vm-1".into()));
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn status_from_error_unsupported() {
+        let status = VmServiceImpl::status_from_error("test_op", HypervisorError::Unsupported);
+        assert_eq!(status.code(), tonic::Code::Unimplemented);
+    }
+
+    #[test]
+    fn status_from_error_rosetta() {
+        let status = VmServiceImpl::status_from_error(
+            "test_op",
+            HypervisorError::RosettaUnavailable("msg".into()),
+        );
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[test]
+    fn status_from_error_virtiofs() {
+        let status = VmServiceImpl::status_from_error(
+            "test_op",
+            HypervisorError::VirtioFsError("err".into()),
+        );
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[test]
+    fn status_from_error_create_failed() {
+        let status = VmServiceImpl::status_from_error(
+            "test_op",
+            HypervisorError::CreateFailed("reason".into()),
+        );
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[test]
+    fn status_from_error_storage() {
+        let status = VmServiceImpl::status_from_error(
+            "test_op",
+            HypervisorError::Storage("db error".into()),
+        );
+        assert_eq!(status.code(), tonic::Code::Internal);
+    }
+}

@@ -354,3 +354,184 @@ impl K3sManager {
         Some(count as u32)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // K3sConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn k3s_config_default_values() {
+        let cfg = K3sConfig::default();
+        assert!(!cfg.disable_traefik, "traefik should be enabled by default");
+        assert_eq!(cfg.flannel_backend, "vxlan");
+        // data_dir should end with "k3s/data"
+        assert!(
+            cfg.data_dir.ends_with("k3s/data"),
+            "data_dir should end with k3s/data, got: {:?}",
+            cfg.data_dir
+        );
+    }
+
+    #[test]
+    fn k3s_config_custom_values() {
+        let cfg = K3sConfig {
+            data_dir: PathBuf::from("/custom/data"),
+            disable_traefik: true,
+            flannel_backend: "wireguard-native".to_string(),
+        };
+        assert_eq!(cfg.data_dir, PathBuf::from("/custom/data"));
+        assert!(cfg.disable_traefik);
+        assert_eq!(cfg.flannel_backend, "wireguard-native");
+    }
+
+    // -----------------------------------------------------------------------
+    // K3sStatus tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn k3s_status_default() {
+        let status = K3sStatus::default();
+        assert!(!status.installed);
+        assert!(!status.running);
+        assert!(status.version.is_empty());
+        assert_eq!(status.node_count, 0);
+    }
+
+    #[test]
+    fn k3s_status_serialization_round_trip() {
+        let status = K3sStatus {
+            installed: true,
+            running: true,
+            version: "v1.31.4+k3s1".to_string(),
+            node_count: 3,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: K3sStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.installed, true);
+        assert_eq!(deserialized.running, true);
+        assert_eq!(deserialized.version, "v1.31.4+k3s1");
+        assert_eq!(deserialized.node_count, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // download_url tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn download_url_amd64() {
+        let url = download_url("v1.31.4+k3s1", "x86_64");
+        assert_eq!(
+            url,
+            "https://github.com/k3s-io/k3s/releases/download/v1.31.4+k3s1/k3s"
+        );
+    }
+
+    #[test]
+    fn download_url_arm64_via_aarch64() {
+        let url = download_url("v1.31.4+k3s1", "aarch64");
+        assert_eq!(
+            url,
+            "https://github.com/k3s-io/k3s/releases/download/v1.31.4+k3s1/k3s-arm64"
+        );
+    }
+
+    #[test]
+    fn download_url_arm64_label() {
+        let url = download_url("v1.31.4+k3s1", "arm64");
+        assert_eq!(
+            url,
+            "https://github.com/k3s-io/k3s/releases/download/v1.31.4+k3s1/k3s-arm64"
+        );
+    }
+
+    #[test]
+    fn download_url_unknown_arch_defaults_to_k3s() {
+        let url = download_url("v1.31.4+k3s1", "riscv64");
+        assert!(
+            url.ends_with("/k3s"),
+            "unknown arch should default to k3s binary"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // k3s_binary_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn k3s_binary_path_ends_with_k3s() {
+        let path = k3s_binary_path();
+        assert!(
+            path.ends_with("k3s/bin/k3s"),
+            "binary path should end with k3s/bin/k3s, got: {:?}",
+            path
+        );
+    }
+
+    #[test]
+    fn k3s_base_dir_is_under_data_dir() {
+        let base = k3s_base_dir();
+        let data = store::data_dir();
+        assert!(
+            base.starts_with(&data),
+            "k3s base dir {:?} should be under data dir {:?}",
+            base,
+            data
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // K3sError display tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn k3s_error_display_messages() {
+        assert_eq!(K3sError::NotInstalled.to_string(), "K3s is not installed");
+        assert_eq!(
+            K3sError::AlreadyRunning.to_string(),
+            "K3s is already running"
+        );
+        assert_eq!(K3sError::NotRunning.to_string(), "K3s is not running");
+        assert_eq!(
+            K3sError::UnsupportedPlatform("test".into()).to_string(),
+            "unsupported platform: test"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // DEFAULT_K3S_VERSION test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_k3s_version_starts_with_v() {
+        assert!(
+            DEFAULT_K3S_VERSION.starts_with('v'),
+            "version should start with 'v'"
+        );
+    }
+
+    #[test]
+    fn default_k3s_version_contains_k3s_suffix() {
+        assert!(
+            DEFAULT_K3S_VERSION.contains("+k3s"),
+            "version should contain '+k3s' suffix"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // kubeconfig_path test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn kubeconfig_path_ends_correctly() {
+        let path = K3sManager::kubeconfig_path();
+        assert!(
+            path.ends_with("k3s/data/server/cred/admin.kubeconfig"),
+            "kubeconfig path should end with k3s/data/server/cred/admin.kubeconfig, got: {:?}",
+            path
+        );
+    }
+}

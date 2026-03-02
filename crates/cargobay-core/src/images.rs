@@ -464,3 +464,229 @@ pub fn create_disk_from_image(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // builtin_catalog tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn builtin_catalog_is_not_empty() {
+        let catalog = builtin_catalog();
+        assert!(
+            !catalog.is_empty(),
+            "builtin catalog should contain at least one image"
+        );
+    }
+
+    #[test]
+    fn builtin_catalog_has_unique_ids() {
+        let catalog = builtin_catalog();
+        let mut ids: Vec<&str> = catalog.iter().map(|e| e.id.as_str()).collect();
+        let len_before = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), len_before, "catalog image ids must be unique");
+    }
+
+    #[test]
+    fn builtin_catalog_entries_have_required_fields() {
+        for entry in builtin_catalog() {
+            assert!(!entry.id.is_empty(), "id should not be empty");
+            assert!(!entry.name.is_empty(), "name should not be empty");
+            assert!(!entry.version.is_empty(), "version should not be empty");
+            assert!(!entry.arch.is_empty(), "arch should not be empty");
+            assert!(
+                !entry.kernel_url.is_empty(),
+                "kernel_url should not be empty"
+            );
+            assert!(
+                !entry.initrd_url.is_empty(),
+                "initrd_url should not be empty"
+            );
+            assert!(entry.size_bytes > 0, "size_bytes should be > 0");
+            assert!(
+                !entry.default_cmdline.is_empty(),
+                "default_cmdline should not be empty"
+            );
+            assert_eq!(
+                entry.status,
+                ImageStatus::NotDownloaded,
+                "default status should be NotDownloaded"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_catalog_contains_alpine() {
+        let catalog = builtin_catalog();
+        assert!(
+            catalog.iter().any(|e| e.id == "alpine-3.19"),
+            "catalog should contain alpine-3.19"
+        );
+    }
+
+    #[test]
+    fn builtin_catalog_contains_ubuntu() {
+        let catalog = builtin_catalog();
+        assert!(
+            catalog.iter().any(|e| e.id == "ubuntu-24.04"),
+            "catalog should contain ubuntu-24.04"
+        );
+    }
+
+    #[test]
+    fn builtin_catalog_contains_debian() {
+        let catalog = builtin_catalog();
+        assert!(
+            catalog.iter().any(|e| e.id == "debian-12"),
+            "catalog should contain debian-12"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // find_image tests (uses builtin_catalog, no disk I/O needed)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_image_returns_some_for_known_id() {
+        let entry = find_image("alpine-3.19");
+        assert!(entry.is_some(), "alpine-3.19 should be found");
+        let entry = entry.unwrap();
+        assert_eq!(entry.id, "alpine-3.19");
+        assert_eq!(entry.name, "Alpine Linux 3.19");
+    }
+
+    #[test]
+    fn find_image_returns_none_for_unknown_id() {
+        let entry = find_image("nonexistent-distro-99");
+        assert!(entry.is_none(), "unknown id should return None");
+    }
+
+    // -----------------------------------------------------------------------
+    // image_paths tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn image_paths_contains_expected_filenames() {
+        let paths = image_paths("alpine-3.19");
+        assert!(
+            paths.kernel_path.ends_with("vmlinuz"),
+            "kernel should be vmlinuz"
+        );
+        assert!(
+            paths.initrd_path.ends_with("initramfs"),
+            "initrd should be initramfs"
+        );
+        assert!(
+            paths.rootfs_path.ends_with("rootfs.img"),
+            "rootfs should be rootfs.img"
+        );
+    }
+
+    #[test]
+    fn image_paths_contain_image_id_in_path() {
+        let paths = image_paths("ubuntu-24.04");
+        let kernel_str = paths.kernel_path.to_string_lossy();
+        assert!(
+            kernel_str.contains("ubuntu-24.04"),
+            "path should contain image id"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // image_dir / images_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn images_dir_is_under_data_dir() {
+        let img_dir = images_dir();
+        let data = store::data_dir();
+        assert!(
+            img_dir.starts_with(&data),
+            "images dir {:?} should be under data dir {:?}",
+            img_dir,
+            data
+        );
+    }
+
+    #[test]
+    fn image_dir_appends_image_id() {
+        let dir = image_dir("debian-12");
+        assert!(
+            dir.ends_with("debian-12"),
+            "image dir should end with the image id"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ImageStatus tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn image_status_equality() {
+        assert_eq!(ImageStatus::NotDownloaded, ImageStatus::NotDownloaded);
+        assert_eq!(ImageStatus::Downloading, ImageStatus::Downloading);
+        assert_eq!(ImageStatus::Ready, ImageStatus::Ready);
+        assert_ne!(ImageStatus::NotDownloaded, ImageStatus::Ready);
+    }
+
+    #[test]
+    fn image_status_serde_round_trip() {
+        let statuses = [
+            ImageStatus::NotDownloaded,
+            ImageStatus::Downloading,
+            ImageStatus::Ready,
+        ];
+        for status in &statuses {
+            let json = serde_json::to_string(status).unwrap();
+            let deserialized: ImageStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(&deserialized, status);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ImageError tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn image_error_display_messages() {
+        assert_eq!(
+            ImageError::NotFound("test".into()).to_string(),
+            "image not found: test"
+        );
+        assert_eq!(
+            ImageError::AlreadyExists("test".into()).to_string(),
+            "image already exists: test"
+        );
+        let checksum_err = ImageError::ChecksumMismatch {
+            expected: "abc".into(),
+            actual: "def".into(),
+        };
+        assert_eq!(
+            checksum_err.to_string(),
+            "checksum mismatch: expected abc, got def"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_image_ready test (safe -- checks disk status)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_image_ready_returns_false_for_non_downloaded() {
+        assert!(!is_image_ready("nonexistent-image-xyz"));
+    }
+
+    // -----------------------------------------------------------------------
+    // default_status test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_status_is_not_downloaded() {
+        assert_eq!(default_status(), ImageStatus::NotDownloaded);
+    }
+}
