@@ -4,6 +4,7 @@ use bollard::container::{
 };
 use bollard::image::CreateImageOptions;
 use bollard::service::HostConfig;
+use bollard::volume::{CreateVolumeOptions, ListVolumesOptions};
 use bollard::Docker;
 use clap::{Parser, Subcommand};
 use futures_util::stream::TryStreamExt;
@@ -49,6 +50,11 @@ enum Commands {
     Mount {
         #[command(subcommand)]
         command: MountCommands,
+    },
+    /// Docker volume management
+    Volume {
+        #[command(subcommand)]
+        command: VolumeCommands,
     },
     /// Show system status and platform info
     Status,
@@ -197,6 +203,30 @@ enum MountCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum VolumeCommands {
+    /// List all Docker volumes
+    List,
+    /// Create a Docker volume
+    Create {
+        /// Volume name
+        name: String,
+        /// Volume driver (default: local)
+        #[arg(long, default_value = "local")]
+        driver: String,
+    },
+    /// Inspect a Docker volume (show details as JSON)
+    Inspect {
+        /// Volume name
+        name: String,
+    },
+    /// Remove a Docker volume
+    Remove {
+        /// Volume name
+        name: String,
+    },
+}
+
 fn detect_docker_socket() -> Option<String> {
     // Unix socket detection (macOS / Linux)
     #[cfg(unix)]
@@ -294,6 +324,12 @@ async fn main() {
             }
         }
         Commands::Mount { command } => handle_mount(command).await,
+        Commands::Volume { command } => {
+            if let Err(e) = handle_volume(command).await {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
         Commands::Status => {
             println!("CargoBay v0.1.0");
             println!("Platform: {}", cargobay_core::platform_info());
@@ -1549,6 +1585,61 @@ fn run_docker_cli(args: &[&str]) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+async fn handle_volume(cmd: VolumeCommands) -> Result<(), String> {
+    let docker = connect_docker()?;
+    match cmd {
+        VolumeCommands::List => {
+            let opts = ListVolumesOptions::<String> {
+                ..Default::default()
+            };
+            let resp = docker
+                .list_volumes(Some(opts))
+                .await
+                .map_err(|e| e.to_string())?;
+            let volumes = resp.volumes.unwrap_or_default();
+            println!(
+                "{:<32} {:<12} {}",
+                "VOLUME NAME", "DRIVER", "MOUNTPOINT"
+            );
+            for v in volumes {
+                println!(
+                    "{:<32} {:<12} {}",
+                    v.name, v.driver, v.mountpoint
+                );
+            }
+        }
+        VolumeCommands::Create { name, driver } => {
+            let opts = CreateVolumeOptions {
+                name: name.as_str(),
+                driver: driver.as_str(),
+                ..Default::default()
+            };
+            let v = docker
+                .create_volume(opts)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("Created volume '{}'", v.name);
+        }
+        VolumeCommands::Inspect { name } => {
+            let v = docker
+                .inspect_volume(&name)
+                .await
+                .map_err(|e| e.to_string())?;
+            let json = serde_json::to_string_pretty(&v)
+                .map_err(|e| e.to_string())?;
+            println!("{}", json);
+        }
+        VolumeCommands::Remove { name } => {
+            docker
+                .remove_volume(&name, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("Removed volume '{}'", name);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
