@@ -635,6 +635,14 @@ pub struct VmInfoDto {
     disk_gb: u64,
     rosetta_enabled: bool,
     mounts: Vec<SharedDirectoryDto>,
+    port_forwards: Vec<PortForwardDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PortForwardDto {
+    host_port: u16,
+    guest_port: u16,
+    protocol: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -700,6 +708,15 @@ async fn vm_list(state: State<'_, AppState>) -> Result<Vec<VmInfoDto>, String> {
                     .into_iter()
                     .map(SharedDirectoryDto::from)
                     .collect(),
+                port_forwards: vm
+                    .port_forwards
+                    .into_iter()
+                    .map(|pf| PortForwardDto {
+                        host_port: pf.host_port as u16,
+                        guest_port: pf.guest_port as u16,
+                        protocol: pf.protocol,
+                    })
+                    .collect(),
             })
             .collect());
     }
@@ -719,6 +736,15 @@ async fn vm_list(state: State<'_, AppState>) -> Result<Vec<VmInfoDto>, String> {
                 .shared_dirs
                 .into_iter()
                 .map(SharedDirectoryDto::from)
+                .collect(),
+            port_forwards: vm
+                .port_forwards
+                .into_iter()
+                .map(|pf| PortForwardDto {
+                    host_port: pf.host_port,
+                    guest_port: pf.guest_port,
+                    protocol: pf.protocol,
+                })
                 .collect(),
         })
         .collect())
@@ -757,6 +783,7 @@ async fn vm_create(
         disk_gb,
         rosetta,
         shared_dirs: vec![],
+        port_forwards: vec![],
     };
     state.hv.create_vm(config).map_err(|e| e.to_string())
 }
@@ -894,6 +921,103 @@ async fn vm_mount_list(
         .list_virtiofs_mounts(&vm)
         .map_err(|e| e.to_string())?;
     Ok(mounts.into_iter().map(SharedDirectoryDto::from).collect())
+}
+
+#[tauri::command]
+async fn vm_port_forward_add(
+    state: State<'_, AppState>,
+    vm_id: String,
+    host_port: u16,
+    guest_port: u16,
+    protocol: String,
+) -> Result<(), String> {
+    let proto_str = if protocol.is_empty() {
+        "tcp".to_string()
+    } else {
+        protocol.clone()
+    };
+
+    if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
+        client
+            .add_port_forward(proto::AddPortForwardRequest {
+                vm_id,
+                host_port: host_port as u32,
+                guest_port: guest_port as u32,
+                protocol: proto_str,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let pf = cargobay_core::hypervisor::PortForward {
+        host_port,
+        guest_port,
+        protocol: proto_str,
+    };
+    state
+        .hv
+        .add_port_forward(&vm_id, &pf)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn vm_port_forward_remove(
+    state: State<'_, AppState>,
+    vm_id: String,
+    host_port: u16,
+) -> Result<(), String> {
+    if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
+        client
+            .remove_port_forward(proto::RemovePortForwardRequest {
+                vm_id,
+                host_port: host_port as u32,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    state
+        .hv
+        .remove_port_forward(&vm_id, host_port)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn vm_port_forward_list(
+    state: State<'_, AppState>,
+    vm_id: String,
+) -> Result<Vec<PortForwardDto>, String> {
+    if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
+        let resp = client
+            .list_port_forwards(proto::ListPortForwardsRequest { vm_id })
+            .await
+            .map_err(|e| e.to_string())?
+            .into_inner();
+        return Ok(resp
+            .forwards
+            .into_iter()
+            .map(|pf| PortForwardDto {
+                host_port: pf.host_port as u16,
+                guest_port: pf.guest_port as u16,
+                protocol: pf.protocol,
+            })
+            .collect());
+    }
+
+    let forwards = state
+        .hv
+        .list_port_forwards(&vm_id)
+        .map_err(|e| e.to_string())?;
+    Ok(forwards
+        .into_iter()
+        .map(|pf| PortForwardDto {
+            host_port: pf.host_port,
+            guest_port: pf.guest_port,
+            protocol: pf.protocol,
+        })
+        .collect())
 }
 
 async fn docker_pull_image(docker: &Docker, reference: &str) -> Result<(), String> {
@@ -1391,7 +1515,10 @@ pub fn run() {
             vm_login_cmd,
             vm_mount_add,
             vm_mount_remove,
-            vm_mount_list
+            vm_mount_list,
+            vm_port_forward_add,
+            vm_port_forward_remove,
+            vm_port_forward_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

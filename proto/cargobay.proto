@@ -11,6 +11,9 @@ service VMService {
   rpc MountVirtioFS(MountVirtioFSRequest) returns (MountVirtioFSResponse);
   rpc UnmountVirtioFS(UnmountVirtioFSRequest) returns (UnmountVirtioFSResponse);
   rpc ListVirtioFSMounts(ListVirtioFSMountsRequest) returns (ListVirtioFSMountsResponse);
+  rpc AddPortForward(AddPortForwardRequest) returns (AddPortForwardResponse);
+  rpc RemovePortForward(RemovePortForwardRequest) returns (RemovePortForwardResponse);
+  rpc ListPortForwards(ListPortForwardsRequest) returns (ListPortForwardsResponse);
 }
 
 message CreateVMRequest {
@@ -60,6 +63,7 @@ message GetVMStatusResponse {
   bool rosetta_enabled = 3;
   repeated SharedDirectory shared_dirs = 4;
   uint64 disk_gb = 5;
+  repeated PortForwardEntry port_forwards = 6;
 }
 
 message VMInfo {
@@ -71,6 +75,13 @@ message VMInfo {
   bool rosetta_enabled = 6;
   repeated SharedDirectory shared_dirs = 7;
   uint64 disk_gb = 8;
+  repeated PortForwardEntry port_forwards = 9;
+}
+
+message PortForwardEntry {
+  uint32 host_port = 1;
+  uint32 guest_port = 2;
+  string protocol = 3;
 }
 
 message SharedDirectory {
@@ -100,4 +111,28 @@ message ListVirtioFSMountsRequest {
 
 message ListVirtioFSMountsResponse {
   repeated SharedDirectory mounts = 1;
+}
+
+message AddPortForwardRequest {
+  string vm_id = 1;
+  uint32 host_port = 2;
+  uint32 guest_port = 3;
+  string protocol = 4;
+}
+
+message AddPortForwardResponse {}
+
+message RemovePortForwardRequest {
+  string vm_id = 1;
+  uint32 host_port = 2;
+}
+
+message RemovePortForwardResponse {}
+
+message ListPortForwardsRequest {
+  string vm_id = 1;
+}
+
+message ListPortForwardsResponse {
+  repeated PortForwardEntry forwards = 1;
 }

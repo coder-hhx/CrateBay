@@ -88,6 +88,45 @@ enum VmCommands {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Port forwarding management
+    Port {
+        #[command(subcommand)]
+        command: PortCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum PortCommands {
+    /// Add a port forward from host to VM guest
+    Add {
+        /// VM name or ID
+        #[arg(long)]
+        vm: String,
+        /// Host port to listen on
+        #[arg(long)]
+        host: u16,
+        /// Guest port to forward to
+        #[arg(long)]
+        guest: u16,
+        /// Protocol: tcp or udp
+        #[arg(long, default_value = "tcp")]
+        protocol: String,
+    },
+    /// List port forwards for a VM
+    List {
+        /// VM name or ID
+        #[arg(long)]
+        vm: String,
+    },
+    /// Remove a port forward
+    Remove {
+        /// VM name or ID
+        #[arg(long)]
+        vm: String,
+        /// Host port to stop forwarding
+        #[arg(long)]
+        host: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -512,6 +551,7 @@ async fn handle_vm(cmd: VmCommands) {
                     disk_gb: disk,
                     rosetta,
                     shared_dirs: vec![],
+                    port_forwards: vec![],
                 };
                 match hv.create_vm(config) {
                     Ok(id) => {
@@ -708,6 +748,170 @@ async fn handle_vm(cmd: VmCommands) {
             };
             println!("ssh {}@{} -p {}", user, host, port);
             println!("# VM: {}", name);
+        }
+        VmCommands::Port { command } => {
+            handle_port(command, client.as_mut(), hv.as_deref()).await;
+        }
+    }
+}
+
+async fn handle_port(
+    cmd: PortCommands,
+    client: Option<&mut VmServiceClient<Channel>>,
+    hv: Option<&dyn cargobay_core::hypervisor::Hypervisor>,
+) {
+    match cmd {
+        PortCommands::Add {
+            vm,
+            host,
+            guest,
+            protocol,
+        } => {
+            if let Some(client) = client {
+                let vm_id = match resolve_vm_id_grpc(client, &vm).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = client
+                    .add_port_forward(proto::AddPortForwardRequest {
+                        vm_id,
+                        host_port: host as u32,
+                        guest_port: guest as u32,
+                        protocol: protocol.clone(),
+                    })
+                    .await
+                {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+                println!(
+                    "Added port forward: host {} -> guest {} ({})",
+                    host, guest, protocol
+                );
+            } else {
+                let hv = hv.unwrap();
+                let vm_id = match resolve_vm_id_local(hv, &vm) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                let pf = cargobay_core::hypervisor::PortForward {
+                    host_port: host,
+                    guest_port: guest,
+                    protocol: protocol.clone(),
+                };
+                match hv.add_port_forward(&vm_id, &pf) {
+                    Ok(()) => {
+                        println!(
+                            "Added port forward: host {} -> guest {} ({})",
+                            host, guest, protocol
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        PortCommands::List { vm } => {
+            if let Some(client) = client {
+                let vm_id = match resolve_vm_id_grpc(client, &vm).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                match client
+                    .list_port_forwards(proto::ListPortForwardsRequest { vm_id })
+                    .await
+                {
+                    Ok(resp) => {
+                        let forwards = resp.into_inner().forwards;
+                        if forwards.is_empty() {
+                            println!("No port forwards configured.");
+                            return;
+                        }
+                        println!("{:<12} {:<12} {}", "HOST PORT", "GUEST PORT", "PROTOCOL");
+                        for pf in forwards {
+                            println!("{:<12} {:<12} {}", pf.host_port, pf.guest_port, pf.protocol);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let hv = hv.unwrap();
+                let vm_id = match resolve_vm_id_local(hv, &vm) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                match hv.list_port_forwards(&vm_id) {
+                    Ok(forwards) => {
+                        if forwards.is_empty() {
+                            println!("No port forwards configured.");
+                            return;
+                        }
+                        println!("{:<12} {:<12} {}", "HOST PORT", "GUEST PORT", "PROTOCOL");
+                        for pf in forwards {
+                            println!("{:<12} {:<12} {}", pf.host_port, pf.guest_port, pf.protocol);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        PortCommands::Remove { vm, host } => {
+            if let Some(client) = client {
+                let vm_id = match resolve_vm_id_grpc(client, &vm).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = client
+                    .remove_port_forward(proto::RemovePortForwardRequest {
+                        vm_id,
+                        host_port: host as u32,
+                    })
+                    .await
+                {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+                println!("Removed port forward on host port {}", host);
+            } else {
+                let hv = hv.unwrap();
+                let vm_id = match resolve_vm_id_local(hv, &vm) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                match hv.remove_port_forward(&vm_id, host) {
+                    Ok(()) => println!("Removed port forward on host port {}", host),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
         }
     }
 }

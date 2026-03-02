@@ -7,7 +7,9 @@
 // Rosetta: Not available on Linux (Apple-only technology). x86_64 containers
 // on ARM Linux would use QEMU user-mode emulation instead.
 
-use crate::hypervisor::{Hypervisor, HypervisorError, SharedDirectory, VmConfig, VmInfo, VmState};
+use crate::hypervisor::{
+    Hypervisor, HypervisorError, PortForward, SharedDirectory, VmConfig, VmInfo, VmState,
+};
 use crate::store::{next_id_for_prefix, VmStore};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -135,6 +137,7 @@ impl Hypervisor for LinuxHypervisor {
             disk_gb: config.disk_gb,
             rosetta_enabled: false,
             shared_dirs: config.shared_dirs,
+            port_forwards: config.port_forwards,
         };
 
         let entry = VmEntry {
@@ -316,5 +319,57 @@ impl Hypervisor for LinuxHypervisor {
             .get(vm_id)
             .ok_or(HypervisorError::NotFound(vm_id.into()))?;
         Ok(entry.info.shared_dirs.clone())
+    }
+
+    fn add_port_forward(&self, vm_id: &str, pf: &PortForward) -> Result<(), HypervisorError> {
+        {
+            let mut vms = self.vms.lock().unwrap();
+            let entry = vms
+                .get_mut(vm_id)
+                .ok_or(HypervisorError::NotFound(vm_id.into()))?;
+            if entry.info.port_forwards.iter().any(|p| p.host_port == pf.host_port) {
+                return Err(HypervisorError::CreateFailed(format!(
+                    "Host port already forwarded: {}",
+                    pf.host_port
+                )));
+            }
+            entry.info.port_forwards.push(pf.clone());
+        }
+        if let Err(e) = self.persist() {
+            let mut vms = self.vms.lock().unwrap();
+            if let Some(entry) = vms.get_mut(vm_id) {
+                entry.info.port_forwards.retain(|p| p.host_port != pf.host_port);
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn remove_port_forward(&self, vm_id: &str, host_port: u16) -> Result<(), HypervisorError> {
+        let previous = {
+            let mut vms = self.vms.lock().unwrap();
+            let entry = vms
+                .get_mut(vm_id)
+                .ok_or(HypervisorError::NotFound(vm_id.into()))?;
+            let prev = entry.info.port_forwards.clone();
+            entry.info.port_forwards.retain(|p| p.host_port != host_port);
+            prev
+        };
+        if let Err(e) = self.persist() {
+            let mut vms = self.vms.lock().unwrap();
+            if let Some(entry) = vms.get_mut(vm_id) {
+                entry.info.port_forwards = previous;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn list_port_forwards(&self, vm_id: &str) -> Result<Vec<PortForward>, HypervisorError> {
+        let vms = self.vms.lock().unwrap();
+        let entry = vms
+            .get(vm_id)
+            .ok_or(HypervisorError::NotFound(vm_id.into()))?;
+        Ok(entry.info.port_forwards.clone())
     }
 }

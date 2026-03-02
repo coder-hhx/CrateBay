@@ -30,6 +30,12 @@ export interface SharedDirectoryDto {
   read_only: boolean
 }
 
+export interface PortForwardDto {
+  host_port: number
+  guest_port: number
+  protocol: string
+}
+
 export interface VmInfoDto {
   id: string
   name: string
@@ -39,6 +45,7 @@ export interface VmInfoDto {
   disk_gb: number
   rosetta_enabled: boolean
   mounts: SharedDirectoryDto[]
+  port_forwards: PortForwardDto[]
 }
 
 export type NavPage = "dashboard" | "containers" | "vms" | "images" | "settings"

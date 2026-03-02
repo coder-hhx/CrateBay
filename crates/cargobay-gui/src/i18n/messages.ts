@@ -120,6 +120,13 @@ export const messages: Record<string, Record<string, string>> = {
     guestPath: "Guest path",
     readOnly: "Read-only",
     addMount: "Add mount",
+    // Port forwarding
+    portForwarding: "Port Forwarding",
+    hostPort: "Host port",
+    guestPort: "Guest port",
+    protocol: "Protocol",
+    addPortForward: "Add port forward",
+    portForwardHint: "Forward a host port to a guest port inside the VM",
     // Settings
     language: "Language",
     languageDesc: "English, 中文",
@@ -250,6 +257,13 @@ export const messages: Record<string, Record<string, string>> = {
     guestPath: "访客路径",
     readOnly: "只读",
     addMount: "添加挂载",
+    // Port forwarding
+    portForwarding: "端口转发",
+    hostPort: "主机端口",
+    guestPort: "客户端口",
+    protocol: "协议",
+    addPortForward: "添加端口转发",
+    portForwardHint: "将主机端口转发到虚拟机内的客户端口",
     language: "语言",
     languageDesc: "English, 中文",
     theme: "主题",

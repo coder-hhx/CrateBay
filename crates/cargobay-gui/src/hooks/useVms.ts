@@ -22,6 +22,12 @@ export function useVms() {
   const [mountGuestPath, setMountGuestPath] = useState("/mnt/host")
   const [mountReadonly, setMountReadonly] = useState(false)
 
+  // Port forward form state
+  const [pfVmId, setPfVmId] = useState("")
+  const [pfHostPort, setPfHostPort] = useState<number | "">(8080)
+  const [pfGuestPort, setPfGuestPort] = useState<number | "">(80)
+  const [pfProtocol, setPfProtocol] = useState("tcp")
+
   const fetchVms = useCallback(async () => {
     setVmLoading(true)
     try {
@@ -126,6 +132,38 @@ export function useVms() {
     }
   }, [fetchVms])
 
+  const addPortForward = useCallback(async () => {
+    if (!pfVmId || pfHostPort === "" || pfGuestPort === "") return
+    setVmError("")
+    try {
+      await invoke("vm_port_forward_add", {
+        vm_id: pfVmId,
+        host_port: pfHostPort,
+        guest_port: pfGuestPort,
+        protocol: pfProtocol || "tcp",
+      })
+      setPfHostPort(8080)
+      setPfGuestPort(80)
+      await fetchVms()
+      return true
+    } catch (e) {
+      setVmError(String(e))
+      return false
+    }
+  }, [pfVmId, pfHostPort, pfGuestPort, pfProtocol, fetchVms])
+
+  const removePortForward = useCallback(async (vmId: string, hostPort: number) => {
+    setVmError("")
+    try {
+      await invoke("vm_port_forward_remove", { vm_id: vmId, host_port: hostPort })
+      await fetchVms()
+      return true
+    } catch (e) {
+      setVmError(String(e))
+      return false
+    }
+  }, [fetchVms])
+
   const running = vms.filter(v => v.state === "running")
 
   return {
@@ -141,7 +179,12 @@ export function useVms() {
     mountHostPath, setMountHostPath,
     mountGuestPath, setMountGuestPath,
     mountReadonly, setMountReadonly,
+    pfVmId, setPfVmId,
+    pfHostPort, setPfHostPort,
+    pfGuestPort, setPfGuestPort,
+    pfProtocol, setPfProtocol,
     fetchVms, vmAction, createVm,
     getLoginCmd, addMount, removeMount,
+    addPortForward, removePortForward,
   }
 }

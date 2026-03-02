@@ -1,4 +1,7 @@
-use cargobay_core::hypervisor::{Hypervisor, HypervisorError, SharedDirectory, VmConfig, VmState};
+use cargobay_core::hypervisor::{
+    Hypervisor, HypervisorError, PortForward, SharedDirectory, VmConfig, VmState,
+};
+use cargobay_core::portfwd::PortForwardManager;
 use cargobay_core::proto;
 use cargobay_core::proto::vm_service_server::VmService;
 use std::sync::Arc;
@@ -7,11 +10,15 @@ use tonic::{Request, Response, Status};
 #[derive(Clone)]
 pub struct VmServiceImpl {
     hv: Arc<dyn Hypervisor>,
+    port_fwd: PortForwardManager,
 }
 
 impl VmServiceImpl {
     pub fn new(hv: Arc<dyn Hypervisor>) -> Self {
-        Self { hv }
+        Self {
+            hv,
+            port_fwd: PortForwardManager::new(),
+        }
     }
 
     fn status_from_error(op: &'static str, err: HypervisorError) -> Status {
@@ -58,6 +65,23 @@ impl VmServiceImpl {
         }
     }
 
+    fn proto_port_forward(pf: PortForward) -> proto::PortForwardEntry {
+        proto::PortForwardEntry {
+            host_port: pf.host_port as u32,
+            guest_port: pf.guest_port as u32,
+            protocol: pf.protocol,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn core_port_forward(pf: proto::PortForwardEntry) -> PortForward {
+        PortForward {
+            host_port: pf.host_port as u16,
+            guest_port: pf.guest_port as u16,
+            protocol: pf.protocol,
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     fn resolve_vm_id(&self, selector: &str) -> Result<String, Status> {
         let vms = self
@@ -97,6 +121,7 @@ impl VmService for VmServiceImpl {
             disk_gb: req.disk_gb,
             rosetta: req.rosetta,
             shared_dirs,
+            port_forwards: vec![],
         };
 
         let vm_id = self
@@ -165,6 +190,11 @@ impl VmService for VmServiceImpl {
                     .map(Self::proto_shared_dir)
                     .collect(),
                 disk_gb: vm.disk_gb,
+                port_forwards: vm
+                    .port_forwards
+                    .into_iter()
+                    .map(Self::proto_port_forward)
+                    .collect(),
             })
             .collect::<Vec<_>>();
 
@@ -197,6 +227,11 @@ impl VmService for VmServiceImpl {
                 .map(Self::proto_shared_dir)
                 .collect(),
             disk_gb: vm.disk_gb,
+            port_forwards: vm
+                .port_forwards
+                .into_iter()
+                .map(Self::proto_port_forward)
+                .collect(),
         }))
     }
 
@@ -241,5 +276,83 @@ impl VmService for VmServiceImpl {
         Ok(Response::new(proto::ListVirtioFsMountsResponse {
             mounts: mounts.into_iter().map(Self::proto_shared_dir).collect(),
         }))
+    }
+
+    async fn add_port_forward(
+        &self,
+        request: Request<proto::AddPortForwardRequest>,
+    ) -> Result<Response<proto::AddPortForwardResponse>, Status> {
+        let req = request.into_inner();
+        let vm_id = self.resolve_vm_id(&req.vm_id)?;
+        let host_port = req.host_port as u16;
+        let guest_port = req.guest_port as u16;
+        let protocol = if req.protocol.is_empty() {
+            "tcp".to_string()
+        } else {
+            req.protocol.clone()
+        };
+
+        let pf = PortForward {
+            host_port,
+            guest_port,
+            protocol: protocol.clone(),
+        };
+
+        // Persist the forward in the hypervisor store first.
+        self.hv
+            .add_port_forward(&vm_id, &pf)
+            .map_err(|e| Self::status_from_error("add_port_forward", e))?;
+
+        // Start the TCP proxy listener.
+        // Use 127.0.0.1 as the VM guest address for now (real VM IP will come later).
+        let guest_addr = "127.0.0.1";
+        if let Err(e) = self
+            .port_fwd
+            .add(&vm_id, host_port, guest_addr, guest_port, &protocol)
+            .await
+        {
+            // Rollback the persisted forward on proxy failure.
+            let _ = self.hv.remove_port_forward(&vm_id, host_port);
+            return Err(Status::internal(e));
+        }
+
+        Ok(Response::new(proto::AddPortForwardResponse {}))
+    }
+
+    async fn remove_port_forward(
+        &self,
+        request: Request<proto::RemovePortForwardRequest>,
+    ) -> Result<Response<proto::RemovePortForwardResponse>, Status> {
+        let req = request.into_inner();
+        let vm_id = self.resolve_vm_id(&req.vm_id)?;
+        let host_port = req.host_port as u16;
+
+        // Stop the TCP proxy listener (best-effort -- it may not be running).
+        let _ = self.port_fwd.remove(&vm_id, host_port).await;
+
+        // Remove from the persisted store.
+        self.hv
+            .remove_port_forward(&vm_id, host_port)
+            .map_err(|e| Self::status_from_error("remove_port_forward", e))?;
+
+        Ok(Response::new(proto::RemovePortForwardResponse {}))
+    }
+
+    async fn list_port_forwards(
+        &self,
+        request: Request<proto::ListPortForwardsRequest>,
+    ) -> Result<Response<proto::ListPortForwardsResponse>, Status> {
+        let req = request.into_inner();
+        let vm_id = self.resolve_vm_id(&req.vm_id)?;
+
+        let forwards = self
+            .hv
+            .list_port_forwards(&vm_id)
+            .map_err(|e| Self::status_from_error("list_port_forwards", e))?
+            .into_iter()
+            .map(Self::proto_port_forward)
+            .collect();
+
+        Ok(Response::new(proto::ListPortForwardsResponse { forwards }))
     }
 }

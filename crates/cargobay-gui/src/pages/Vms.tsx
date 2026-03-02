@@ -35,12 +35,22 @@ interface VmsProps {
   setMountGuestPath: (v: string) => void
   mountReadonly: boolean
   setMountReadonly: (v: boolean) => void
+  pfVmId: string
+  setPfVmId: (v: string) => void
+  pfHostPort: number | ""
+  setPfHostPort: (v: number | "") => void
+  pfGuestPort: number | ""
+  setPfGuestPort: (v: number | "") => void
+  pfProtocol: string
+  setPfProtocol: (v: string) => void
   onFetchVms: () => void
   onVmAction: (cmd: string, id: string) => void
   onCreateVm: () => void
   onLoginCmd: (vm: VmInfoDto) => void
   onAddMount: () => void
   onRemoveMount: (vmId: string, tag: string) => void
+  onAddPortForward: () => void
+  onRemovePortForward: (vmId: string, hostPort: number) => void
   t: (key: string) => string
 }
 
@@ -57,12 +67,17 @@ export function Vms({
   mountHostPath, setMountHostPath,
   mountGuestPath, setMountGuestPath,
   mountReadonly, setMountReadonly,
+  setPfVmId,
+  pfHostPort, setPfHostPort,
+  pfGuestPort, setPfGuestPort,
+  pfProtocol, setPfProtocol,
   onFetchVms, onVmAction, onCreateVm,
-  onLoginCmd, onAddMount, onRemoveMount, t,
+  onLoginCmd, onAddMount, onRemoveMount,
+  onAddPortForward, onRemovePortForward, t,
 }: VmsProps) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedVmId, setExpandedVmId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"info" | "ssh" | "mounts">("info")
+  const [activeTab, setActiveTab] = useState<"info" | "ssh" | "mounts" | "ports">("info")
 
   const handleCreate = () => {
     onCreateVm()
@@ -134,6 +149,7 @@ export function Vms({
                       <button className={`vm-tab ${activeTab === "info" ? "active" : ""}`} onClick={() => setActiveTab("info")}>{t("status")}</button>
                       <button className={`vm-tab ${activeTab === "ssh" ? "active" : ""}`} onClick={() => setActiveTab("ssh")}>{t("loginCommand")}</button>
                       <button className={`vm-tab ${activeTab === "mounts" ? "active" : ""}`} onClick={() => setActiveTab("mounts")}>{t("virtiofs")}</button>
+                      <button className={`vm-tab ${activeTab === "ports" ? "active" : ""}`} onClick={() => setActiveTab("ports")}>{t("portForwarding")}</button>
                     </div>
 
                     {activeTab === "info" && (
@@ -227,6 +243,44 @@ export function Vms({
                           <button className="btn" onClick={() => { setMountVmId(vm.id); onAddMount() }} disabled={!mountTag.trim() || !mountHostPath.trim()}>
                             <span className="icon">{I.plus}</span>{t("addMount")}
                           </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTab === "ports" && (
+                      <div className="vm-detail-content">
+                        {vm.port_forwards?.length > 0 && (
+                          <div className="vm-mount-list">
+                            {vm.port_forwards.map(pf => (
+                              <div className="vm-mount-item" key={`${vm.id}-pf-${pf.host_port}`}>
+                                <span className="vm-mount-tag">{pf.host_port}</span>
+                                <span className="vm-mount-path">{pf.host_port} → {pf.guest_port}</span>
+                                <span className="vm-mount-mode">{pf.protocol.toUpperCase()}</span>
+                                <button className="btn tiny" onClick={() => onRemovePortForward(vm.id, pf.host_port)}>{t("remove")}</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="vm-detail-form" style={{ marginTop: vm.port_forwards?.length > 0 ? 12 : 0 }}>
+                          <div className="vm-form-row">
+                            <label>{t("hostPort")}</label>
+                            <input className="input" type="number" min={1} max={65535} value={pfHostPort} onChange={e => { setPfVmId(vm.id); setPfHostPort(e.target.value === "" ? "" : Number(e.target.value)) }} placeholder="8080" />
+                          </div>
+                          <div className="vm-form-row">
+                            <label>{t("guestPort")}</label>
+                            <input className="input" type="number" min={1} max={65535} value={pfGuestPort} onChange={e => { setPfVmId(vm.id); setPfGuestPort(e.target.value === "" ? "" : Number(e.target.value)) }} placeholder="80" />
+                          </div>
+                          <div className="vm-form-row">
+                            <label>{t("protocol")}</label>
+                            <select className="input" value={pfProtocol} onChange={e => { setPfVmId(vm.id); setPfProtocol(e.target.value) }}>
+                              <option value="tcp">TCP</option>
+                              <option value="udp">UDP</option>
+                            </select>
+                          </div>
+                          <button className="btn" onClick={() => { setPfVmId(vm.id); onAddPortForward() }} disabled={pfHostPort === "" || pfGuestPort === ""}>
+                            <span className="icon">{I.plus}</span>{t("addPortForward")}
+                          </button>
+                          <div className="hint">{t("portForwardHint")}</div>
                         </div>
                       </div>
                     )}
