@@ -53,7 +53,7 @@ OrbStack is great, but it's **closed-source and macOS-only**. Docker Desktop is 
 | **Linux** | Planned | ❌ | ✅ | ✅ | ✅ |
 | **Docker management** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Linux VMs** | In Progress | ✅ | ❌ | ❌ | Indirect |
-| **Kubernetes** | Planned | ✅ | ✅ | ✅ | ✅ (K3s) |
+| **Kubernetes** | ✅ (K3s + Dashboard) | ✅ | ✅ | ✅ | ✅ (K3s) |
 | **Auto port forwarding** | Planned | ✅ | ✅ | ❌ | ✅ |
 | **VirtioFS file sharing** | In Progress | ✅ | ✅ | ❌ | ✅ |
 | **Tech stack** | Rust | Swift | Go + Electron | Electron + TS | Go |
@@ -63,16 +63,27 @@ OrbStack is great, but it's **closed-source and macOS-only**. Docker Desktop is 
 | Feature | macOS | Linux | Windows | Status |
 |---------|-------|-------|---------|--------|
 | Docker container management | ✅ | ✅ | ✅ | Working |
+| Container log streaming | ✅ | ✅ | ✅ | Working |
+| Container exec / terminal | ✅ | ✅ | ✅ | Working |
+| Container env variable viewer | ✅ | ✅ | ✅ | Working |
 | Dashboard & GUI | ✅ | ✅ | ✅ | Working |
 | Image search (Docker Hub / Quay) | ✅ | ✅ | ✅ | Working |
+| Local image management (list/remove/tag/inspect) | ✅ | ✅ | ✅ | Working |
 | Import / Push images (docker load/push) | ✅ | ✅ | ✅ | Working |
 | Package image from container (docker commit) | ✅ | ✅ | ✅ | Working |
+| Docker volume management | ✅ | ✅ | ✅ | Working |
 | Lightweight Linux VMs | ✅ Virtualization.framework | ✅ KVM | ✅ Hyper-V | In Progress |
+| VM console (serial output) | ✅ | ✅ | ✅ | Working |
+| VM port forwarding | ✅ | ✅ | ✅ | Working |
+| VM resource monitoring | ✅ | ✅ | ✅ | Working |
+| OS image download & management | ✅ | ✅ | ✅ | Working |
 | Rosetta x86_64 translation | ✅ Apple Silicon | — | — | In Progress |
 | VirtioFS file sharing | ✅ | ✅ virtiofsd | ✅ Plan 9/SMB | In Progress |
-| CLI (VM + Docker + Mount) | ✅ | ✅ | ✅ | Working |
+| K3s cluster management | ✅ | ✅ | 📋 | Working (Linux) |
+| Kubernetes dashboard (pods/services/deployments) | ✅ | ✅ | ✅ | Working |
+| Auto-update checker | ✅ | ✅ | ✅ | Working |
+| CLI (VM + Docker + K3s + Mount) | ✅ | ✅ | ✅ | Working |
 | Dark/Light theme + i18n | ✅ | ✅ | ✅ | Working |
-| Kubernetes (K3s) | 📋 | 📋 | 📋 | Planned |
 
 ## Platform Compatibility
 
@@ -87,9 +98,10 @@ OrbStack is great, but it's **closed-source and macOS-only**. Docker Desktop is 
 - **VM Engine**: Virtualization.framework (macOS) / KVM (Linux) / Hyper-V (Windows)
 - **File Sharing**: VirtioFS (macOS/Linux) / Plan 9 (Windows)
 - **x86 Emulation**: Rosetta 2 (macOS Apple Silicon)
-- **Containers**: Docker API via Bollard
+- **Containers**: Docker API via Bollard (direct socket connection)
+- **Kubernetes**: K3s (on-demand download) + kubectl
 - **CLI**: Rust (clap)
-- **IPC**: gRPC (tonic + prost)
+- **IPC**: gRPC (tonic + prost) — VM operations only; containers use direct Docker socket
 
 ## Quick Start
 
@@ -120,20 +132,11 @@ See [Tutorial](docs/TUTORIAL.md) for detailed instructions.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design.
 
-```
-┌──────────────────────────────────────────────┐
-│   GUI (Tauri + React)    CLI (Rust/clap)     │
-├──────────────────────────────────────────────┤
-│               gRPC (tonic)                   │
-├──────────────────────────────────────────────┤
-│              Daemon (Rust)                   │
-├──────────────┬──────────────┬────────────────┤
-│    macOS     │    Linux     │    Windows     │
-│    Vz.fw     │    KVM       │    Hyper-V     │
-│   +Rosetta   │  +virtiofsd  │  +Plan 9/SMB  │
-│   +VirtioFS  │              │               │
-└──────────────┴──────────────┴────────────────┘
-```
+<p align="center">
+  <img src="assets/architecture.svg" alt="CargoBay Architecture" width="900" />
+</p>
+
+**Key**: Containers talk directly to Docker (lowest latency). VMs go through the CargoBay daemon (needs privileged lifecycle management). K8s queries use kubectl directly.
 
 ## Contributing
 

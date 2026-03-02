@@ -135,10 +135,35 @@ cargo build --release --bin cargobay
 | **Start** | 启动已停止容器 |
 | **Stop** | 优雅停止（10 秒超时） |
 | **Delete** | 强制停止并删除容器 |
+| **Logs** | 查看容器日志（支持实时跟踪/流式） |
+| **Env** | 查看容器环境变量 |
 | **Login command** | 显示该容器的 `docker exec -it ...` 登录命令 |
 | **Package as image** | 基于容器生成新镜像（`docker commit`） |
 
 容器列表每 3 秒自动刷新；右上角会显示连接状态。
+
+### Kubernetes
+
+Kubernetes 页面提供：
+
+- **K3s 集群管理** — 安装、启动、停止、卸载 K3s
+- **集群状态** — 版本、节点数、kubeconfig 路径
+- **Pods 标签页** — 查看所有命名空间的 Pod 及其状态、就绪数、重启次数、运行时间
+- **Services 标签页** — 查看集群 Service（类型、集群 IP、端口）
+- **Deployments 标签页** — 查看 Deployment 副本状态
+- **命名空间选择器** — 按命名空间筛选或查看全部
+- **Pod 日志** — 点击查看任意 Pod 的日志
+
+> 注意：K3s 仅支持 Linux。macOS/Windows 上将在后续版本中通过 CargoBay Linux VM 运行。
+
+### Volumes（存储卷）
+
+Docker 存储卷管理：
+
+- **列出存储卷** — 查看所有 Docker 存储卷（驱动、挂载点）
+- **创建存储卷** — 创建命名存储卷
+- **查看存储卷** — 查看详细信息（标签、选项、范围）
+- **删除存储卷** — 删除未使用的存储卷
 
 ### Virtual Machines（虚拟机）
 
@@ -288,6 +313,43 @@ cargobay mount list --vm myvm
 cargobay mount remove --vm myvm --tag code
 ```
 
+### 存储卷命令
+
+```bash
+# 列出所有 Docker 存储卷
+cargobay volume list
+
+# 创建存储卷
+cargobay volume create mydata
+
+# 查看存储卷详情
+cargobay volume inspect mydata
+
+# 删除存储卷
+cargobay volume remove mydata
+```
+
+### K3s 命令
+
+```bash
+# 查看 K3s 集群状态
+cargobay k3s status
+
+# 安装 K3s（仅 Linux；从 GitHub releases 下载）
+cargobay k3s install
+
+# 启动 K3s 集群
+cargobay k3s start
+
+# 停止 K3s 集群
+cargobay k3s stop
+
+# 卸载 K3s（删除二进制和数据）
+cargobay k3s uninstall
+```
+
+> 注意：K3s 仅支持 Linux。macOS/Windows 上将在后续版本中通过 CargoBay Linux VM 运行。
+
 ---
 
 ## 5. Docker Socket 自动识别
@@ -349,12 +411,11 @@ VM 元数据文件位于 `<config>/vms.json`。
 
 | 版本 | 重点 | 关键功能 |
 |---------|-------|-------------|
-| **v0.1**（当前） | 基础可用 | Docker 管理、GUI、CLI、i18n（中/英） |
-| **v0.2** | 虚拟机 | VM 生命周期、VirtioFS、自动端口转发 |
-| **v0.3** | 开发者体验 | 容器日志/终端、镜像管理、自动 DNS |
-| **v0.4** | 跨平台 | Windows（Hyper-V）+ Linux（KVM） |
-| **v0.5** | Kubernetes | K3s 集成、K8s 仪表盘 |
-| **v1.0** | 生产就绪 | 稳定性、自动更新、安全审计 |
+| **v0.1** | 基础可用 | Docker 管理、GUI、CLI、i18n（中/英） |
+| **v0.2** | VM & 网络 | VM 生命周期、VirtioFS、端口转发、资源监控 |
+| **v0.3** | 开发者体验 | 容器日志/终端、镜像管理、存储卷、环境变量 |
+| **v0.4** | Kubernetes | K3s 集成、K8s 仪表盘、自动更新 |
+| **v1.0**（当前） | 生产就绪 | 真实 VM 执行、跨平台、测试、安全审计 |
 
 ---
 

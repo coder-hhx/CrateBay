@@ -135,10 +135,35 @@ Full container management page:
 | **Start** | Start a stopped container |
 | **Stop** | Gracefully stop (10s timeout) |
 | **Delete** | Force stop + remove container |
+| **Logs** | View container logs with follow/streaming mode |
+| **Env** | View container environment variables |
 | **Login command** | Show a `docker exec -it ...` command for the container |
 | **Package as image** | Create a new image from the container (`docker commit`) |
 
 The container list auto-refreshes every 3 seconds. Connection status is shown in the top-right pill.
+
+### Kubernetes
+
+The Kubernetes page provides:
+
+- **K3s Cluster Management** — Install, start, stop, and uninstall K3s directly from the GUI
+- **Cluster Status** — Version, node count, kubeconfig path
+- **Pods Tab** — View all pods across namespaces, with status, ready count, restarts, and age
+- **Services Tab** — View cluster services with type, cluster IP, and ports
+- **Deployments Tab** — View deployments with replica status
+- **Namespace Selector** — Filter by namespace or view all
+- **Pod Logs** — Click to view logs for any pod
+
+> Note: K3s is Linux-only. On macOS/Windows, K3s will run inside a CargoBay Linux VM in a future release.
+
+### Volumes
+
+Docker volume management:
+
+- **List volumes** — See all Docker volumes with driver and mountpoint
+- **Create volume** — Create a new named volume
+- **Inspect volume** — View volume details (labels, options, scope)
+- **Delete volume** — Remove unused volumes
 
 ### Virtual Machines (虚拟机)
 
@@ -288,6 +313,43 @@ cargobay mount list --vm myvm
 cargobay mount remove --vm myvm --tag code
 ```
 
+### Volume Commands
+
+```bash
+# List all Docker volumes
+cargobay volume list
+
+# Create a volume
+cargobay volume create mydata
+
+# Inspect a volume
+cargobay volume inspect mydata
+
+# Remove a volume
+cargobay volume remove mydata
+```
+
+### K3s Commands
+
+```bash
+# Check K3s cluster status
+cargobay k3s status
+
+# Install K3s (Linux only; downloads from GitHub releases)
+cargobay k3s install
+
+# Start the K3s cluster
+cargobay k3s start
+
+# Stop the K3s cluster
+cargobay k3s stop
+
+# Uninstall K3s (removes binary and data)
+cargobay k3s uninstall
+```
+
+> Note: K3s is Linux-only. On macOS/Windows, K3s will run inside a CargoBay Linux VM in a future release.
+
 ---
 
 ## 5. Docker Socket Detection
@@ -349,12 +411,11 @@ Error logs are written to the Logs directory as `cargobay-error.log.YYYY-MM-DD` 
 
 | Version | Focus | Key Features |
 |---------|-------|-------------|
-| **v0.1** (current) | Foundation | Docker management, GUI, CLI, i18n |
-| **v0.2** | Virtual Machines | VM lifecycle, VirtioFS, auto port forwarding |
-| **v0.3** | Developer Experience | Container logs/terminal, image management, auto DNS |
-| **v0.4** | Cross-platform | Windows (Hyper-V) + Linux (KVM) support |
-| **v0.5** | Kubernetes | K3s integration, K8s dashboard |
-| **v1.0** | Production Ready | Stability, auto-update, security audit |
+| **v0.1** | Foundation | Docker management, GUI, CLI, i18n |
+| **v0.2** | VM & Networking | VM lifecycle, VirtioFS, port forwarding, resource monitoring |
+| **v0.3** | Developer Experience | Container logs/terminal, image management, volumes, env vars |
+| **v0.4** | Kubernetes | K3s integration, K8s dashboard, auto-update |
+| **v1.0** (current) | Production Ready | Real VM execution, cross-platform, testing, security audit |
 
 ---
 
