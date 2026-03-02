@@ -88,6 +88,18 @@ pub struct VmConfig {
     pub rosetta: bool,
     /// Directories to share via VirtioFS.
     pub shared_dirs: Vec<SharedDirectory>,
+    /// OS image id from the image catalog (e.g. "alpine-3.19").
+    #[serde(default)]
+    pub os_image: Option<String>,
+    /// Explicit path to the kernel file (set automatically from os_image).
+    #[serde(default)]
+    pub kernel_path: Option<String>,
+    /// Explicit path to the initrd file (set automatically from os_image).
+    #[serde(default)]
+    pub initrd_path: Option<String>,
+    /// Explicit path to the disk/rootfs file (set automatically from os_image).
+    #[serde(default)]
+    pub disk_path: Option<String>,
 }
 
 impl Default for VmConfig {
@@ -99,6 +111,10 @@ impl Default for VmConfig {
             disk_gb: 20,
             rosetta: false,
             shared_dirs: vec![],
+            os_image: None,
+            kernel_path: None,
+            initrd_path: None,
+            disk_path: None,
         }
     }
 }

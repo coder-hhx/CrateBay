@@ -1,6 +1,7 @@
 pub mod hypervisor;
+pub mod images;
 pub mod logging;
-mod store;
+pub mod store;
 pub mod vm;
 
 #[cfg(target_os = "linux")]

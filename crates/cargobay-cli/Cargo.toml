@@ -9,7 +9,7 @@ name = "cargobay"
 path = "src/main.rs"
 
 [dependencies]
-cargobay-core = { path = "../cargobay-core" }
+cargobay-core = { path = "../cargobay-core", features = ["download"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"

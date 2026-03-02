@@ -560,10 +560,13 @@ dependencies = [
 name = "cargobay-core"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "libc",
  "prost",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tonic",

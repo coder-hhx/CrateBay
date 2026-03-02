@@ -97,6 +97,10 @@ impl VmService for VmServiceImpl {
             disk_gb: req.disk_gb,
             rosetta: req.rosetta,
             shared_dirs,
+            os_image: None,
+            kernel_path: None,
+            initrd_path: None,
+            disk_path: None,
         };
 
         let vm_id = self

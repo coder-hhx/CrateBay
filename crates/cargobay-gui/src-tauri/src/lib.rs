@@ -625,6 +625,81 @@ async fn image_pack_container(container: String, tag: String) -> Result<String, 
     .map_err(|e| e.to_string())?
 }
 
+// ---------------------------------------------------------------------------
+// OS Image management commands
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct OsImageDto {
+    id: String,
+    name: String,
+    version: String,
+    arch: String,
+    size_bytes: u64,
+    status: String,
+    default_cmdline: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OsImageDownloadProgressDto {
+    image_id: String,
+    current_file: String,
+    bytes_downloaded: u64,
+    bytes_total: u64,
+    done: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn image_catalog() -> Vec<OsImageDto> {
+    cargobay_core::images::list_available_images()
+        .into_iter()
+        .map(|e| OsImageDto {
+            id: e.id,
+            name: e.name,
+            version: e.version,
+            arch: e.arch,
+            size_bytes: e.size_bytes,
+            status: match e.status {
+                cargobay_core::images::ImageStatus::NotDownloaded => "not_downloaded".into(),
+                cargobay_core::images::ImageStatus::Downloading => "downloading".into(),
+                cargobay_core::images::ImageStatus::Ready => "ready".into(),
+            },
+            default_cmdline: e.default_cmdline,
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn image_download_os(image_id: String) -> Result<(), String> {
+    cargobay_core::images::download_image(&image_id, |_file, _downloaded, _total| {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn image_download_status(image_id: String) -> OsImageDownloadProgressDto {
+    let p = cargobay_core::images::read_download_progress(&image_id);
+    OsImageDownloadProgressDto {
+        image_id: p.image_id,
+        current_file: p.current_file,
+        bytes_downloaded: p.bytes_downloaded,
+        bytes_total: p.bytes_total,
+        done: p.done,
+        error: p.error,
+    }
+}
+
+#[tauri::command]
+fn image_delete_os(image_id: String) -> Result<(), String> {
+    cargobay_core::images::delete_image(&image_id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// VM DTOs and commands
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize)]
 pub struct VmInfoDto {
     id: String,
@@ -732,7 +807,23 @@ async fn vm_create(
     memory_mb: u64,
     disk_gb: u64,
     rosetta: bool,
+    os_image: Option<String>,
 ) -> Result<String, String> {
+    // Resolve image paths from the selected OS image.
+    let (kernel_path, initrd_path, disk_path) = if let Some(ref img_id) = os_image {
+        if !cargobay_core::images::is_image_ready(img_id) {
+            return Err(format!("OS image '{}' is not downloaded yet", img_id));
+        }
+        let paths = cargobay_core::images::image_paths(img_id);
+        (
+            Some(paths.kernel_path.to_string_lossy().into_owned()),
+            Some(paths.initrd_path.to_string_lossy().into_owned()),
+            Some(paths.rootfs_path.to_string_lossy().into_owned()),
+        )
+    } else {
+        (None, None, None)
+    };
+
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         let resp = client
             .create_vm(proto::CreateVmRequest {
@@ -757,6 +848,10 @@ async fn vm_create(
         disk_gb,
         rosetta,
         shared_dirs: vec![],
+        os_image,
+        kernel_path,
+        initrd_path,
+        disk_path,
     };
     state.hv.create_vm(config).map_err(|e| e.to_string())
 }
@@ -1409,6 +1504,10 @@ pub fn run() {
             image_load,
             image_push,
             image_pack_container,
+            image_catalog,
+            image_download_os,
+            image_download_status,
+            image_delete_os,
             vm_list,
             vm_create,
             vm_start,

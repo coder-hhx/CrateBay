@@ -41,6 +41,25 @@ export interface VmInfoDto {
   mounts: SharedDirectoryDto[]
 }
 
+export interface OsImageDto {
+  id: string
+  name: string
+  version: string
+  arch: string
+  size_bytes: number
+  status: "not_downloaded" | "downloading" | "ready"
+  default_cmdline: string
+}
+
+export interface OsImageDownloadProgressDto {
+  image_id: string
+  current_file: string
+  bytes_downloaded: number
+  bytes_total: number
+  done: boolean
+  error: string | null
+}
+
 export type NavPage = "dashboard" | "containers" | "vms" | "images" | "settings"
 export type Theme = "dark" | "light"
 export type ModalKind = "" | "text" | "package"

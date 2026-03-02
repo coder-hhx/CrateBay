@@ -68,6 +68,9 @@ enum VmCommands {
         /// Enable Rosetta x86_64 translation (macOS Apple Silicon only)
         #[arg(long)]
         rosetta: bool,
+        /// OS image to use (e.g. "alpine-3.19"). See `cargobay image list-os`
+        #[arg(long)]
+        os_image: Option<String>,
     },
     /// Start a VM
     Start { name: String },
@@ -158,6 +161,18 @@ enum ImageCommands {
     Push { reference: String },
     /// Package an image from an existing container (same as `docker commit`)
     PackContainer { container: String, tag: String },
+    /// List available Linux OS images for VM booting
+    ListOs,
+    /// Download a Linux OS image (kernel + initrd + rootfs) for VM booting
+    DownloadOs {
+        /// Image id, e.g. "alpine-3.19", "ubuntu-24.04", "debian-12"
+        name: String,
+    },
+    /// Delete a downloaded Linux OS image
+    DeleteOs {
+        /// Image id, e.g. "alpine-3.19"
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -477,7 +492,24 @@ async fn handle_vm(cmd: VmCommands) {
             memory,
             disk,
             rosetta,
+            os_image,
         } => {
+            // Resolve image paths if an OS image was specified.
+            let (kernel_path, initrd_path, disk_path) = if let Some(ref img_id) = os_image {
+                if !cargobay_core::images::is_image_ready(img_id) {
+                    eprintln!("Error: OS image '{}' is not downloaded yet. Run: cargobay image download-os {}", img_id, img_id);
+                    std::process::exit(1);
+                }
+                let paths = cargobay_core::images::image_paths(img_id);
+                (
+                    Some(paths.kernel_path.to_string_lossy().into_owned()),
+                    Some(paths.initrd_path.to_string_lossy().into_owned()),
+                    Some(paths.rootfs_path.to_string_lossy().into_owned()),
+                )
+            } else {
+                (None, None, None)
+            };
+
             if let Some(client) = client.as_mut() {
                 let resp = client
                     .create_vm(proto::CreateVmRequest {
@@ -496,6 +528,9 @@ async fn handle_vm(cmd: VmCommands) {
                         if rosetta {
                             println!("  Rosetta x86_64 translation: enabled");
                         }
+                        if let Some(ref img) = os_image {
+                            println!("  OS image: {}", img);
+                        }
                     }
                     Err(e) => {
                         eprintln!("Error: {}", e);
@@ -512,12 +547,19 @@ async fn handle_vm(cmd: VmCommands) {
                     disk_gb: disk,
                     rosetta,
                     shared_dirs: vec![],
+                    os_image: os_image.clone(),
+                    kernel_path,
+                    initrd_path,
+                    disk_path,
                 };
                 match hv.create_vm(config) {
                     Ok(id) => {
                         println!("Created VM '{}' (id: {})", name, id);
                         if rosetta {
                             println!("  Rosetta x86_64 translation: enabled");
+                        }
+                        if let Some(ref img) = os_image {
+                            println!("  OS image: {}", img);
                         }
                     }
                     Err(e) => {
@@ -1035,6 +1077,65 @@ async fn handle_image(cmd: ImageCommands) -> Result<(), String> {
             }
             Ok(())
         }
+        ImageCommands::ListOs => {
+            let images = cargobay_core::images::list_available_images();
+            if images.is_empty() {
+                println!("No OS images in catalog.");
+                return Ok(());
+            }
+            println!(
+                "{:<16} {:<28} {:<10} {:<10} STATUS",
+                "ID", "NAME", "VERSION", "SIZE"
+            );
+            for img in images {
+                let size_str = format_bytes(img.size_bytes);
+                let status = match img.status {
+                    cargobay_core::images::ImageStatus::NotDownloaded => "not downloaded",
+                    cargobay_core::images::ImageStatus::Downloading => "downloading...",
+                    cargobay_core::images::ImageStatus::Ready => "ready",
+                };
+                println!(
+                    "{:<16} {:<28} {:<10} {:<10} {}",
+                    img.id, img.name, img.version, size_str, status
+                );
+            }
+            Ok(())
+        }
+        ImageCommands::DownloadOs { name } => {
+            let entry = cargobay_core::images::find_image(&name);
+            if entry.is_none() {
+                return Err(format!("Unknown OS image: '{}'. Run 'cargobay image list-os' to see available images.", name));
+            }
+
+            println!("Downloading OS image '{}'...", name);
+            cargobay_core::images::download_image(&name, move |file, downloaded, total| {
+                if total > 0 {
+                    let pct = (downloaded as f64 / total as f64 * 100.0).min(100.0);
+                    eprint!(
+                        "\r  [{}] {}/{} ({:.1}%)    ",
+                        file,
+                        format_bytes(downloaded),
+                        format_bytes(total),
+                        pct
+                    );
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+            eprintln!();
+            println!("OS image '{}' downloaded successfully.", name);
+            let paths = cargobay_core::images::image_paths(&name);
+            println!("  Kernel:  {}", paths.kernel_path.display());
+            println!("  Initrd:  {}", paths.initrd_path.display());
+            println!("  Rootfs:  {}", paths.rootfs_path.display());
+            Ok(())
+        }
+        ImageCommands::DeleteOs { name } => {
+            cargobay_core::images::delete_image(&name).map_err(|e| e.to_string())?;
+            println!("Deleted OS image '{}'.", name);
+            Ok(())
+        }
     }
 }
 
@@ -1177,8 +1278,23 @@ fn truncate_str(s: &str, max: usize) -> String {
         }
         out.push(ch);
     }
-    out.push('…');
+    out.push('\u{2026}');
     out
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn parse_registry_reference(reference: &str) -> Option<(String, String)> {

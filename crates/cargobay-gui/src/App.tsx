@@ -161,6 +161,19 @@ function App() {
             }}
             onAddMount={vmHook.addMount}
             onRemoveMount={vmHook.removeMount}
+            osImages={vmHook.osImages}
+            selectedOsImage={vmHook.selectedOsImage}
+            setSelectedOsImage={vmHook.setSelectedOsImage}
+            downloadingImage={vmHook.downloadingImage}
+            downloadProgress={vmHook.downloadProgress}
+            onDownloadOsImage={async (imageId) => {
+              const ok = await vmHook.downloadOsImage(imageId)
+              if (ok) showToast(t("osImageDownloaded"))
+            }}
+            onDeleteOsImage={async (imageId) => {
+              const ok = await vmHook.deleteOsImage(imageId)
+              if (ok) showToast(t("osImageDeleted"))
+            }}
             t={t}
           />
         )

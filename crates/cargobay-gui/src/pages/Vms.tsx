@@ -2,7 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { I } from "../icons"
 import { ErrorInline } from "../components/ErrorDisplay"
-import type { VmInfoDto } from "../types"
+import type { VmInfoDto, OsImageDto, OsImageDownloadProgressDto } from "../types"
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
 
 interface VmsProps {
   vms: VmInfoDto[]
@@ -42,6 +49,14 @@ interface VmsProps {
   onLoginCmd: (vm: VmInfoDto) => void
   onAddMount: () => void
   onRemoveMount: (vmId: string, tag: string) => void
+  // OS image props
+  osImages: OsImageDto[]
+  selectedOsImage: string
+  setSelectedOsImage: (v: string) => void
+  downloadingImage: string
+  downloadProgress: OsImageDownloadProgressDto | null
+  onDownloadOsImage: (imageId: string) => void
+  onDeleteOsImage: (imageId: string) => void
   t: (key: string) => string
 }
 
@@ -59,7 +74,11 @@ export function Vms({
   mountGuestPath, setMountGuestPath,
   mountReadonly, setMountReadonly,
   onFetchVms, onVmAction, onCreateVm,
-  onLoginCmd, onAddMount, onRemoveMount, t,
+  onLoginCmd, onAddMount, onRemoveMount,
+  osImages, selectedOsImage, setSelectedOsImage,
+  downloadingImage, downloadProgress,
+  onDownloadOsImage, onDeleteOsImage,
+  t,
 }: VmsProps) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedVmId, setExpandedVmId] = useState<string | null>(null)
@@ -289,7 +308,7 @@ export function Vms({
                             {vm.mounts.map(m => (
                               <div className="vm-mount-item" key={`${vm.id}-${m.tag}`}>
                                 <span className="vm-mount-tag">{m.tag}</span>
-                                <span className="vm-mount-path">{m.host_path} → {m.guest_path}</span>
+                                <span className="vm-mount-path">{m.host_path} &rarr; {m.guest_path}</span>
                                 <span className="vm-mount-mode">{m.read_only ? "RO" : "RW"}</span>
                                 <button className="btn tiny" onClick={() => onRemoveMount(vm.id, m.tag)}>{t("remove")}</button>
                               </div>
@@ -341,11 +360,11 @@ export function Vms({
       {/* Create VM Modal */}
       {showCreateModal && (
         <div className="modal-backdrop" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
             <div className="modal-head">
               <div className="modal-title">{t("createVm")}</div>
               <div className="modal-actions">
-                <button className="icon-btn" onClick={() => setShowCreateModal(false)} title={t("close")}>×</button>
+                <button className="icon-btn" onClick={() => setShowCreateModal(false)} title={t("close")}>&times;</button>
               </div>
             </div>
             <div className="modal-body">
@@ -354,6 +373,94 @@ export function Vms({
                   <label>{t("name")}</label>
                   <input className="input" value={vmName} onChange={e => setVmName(e.target.value)} placeholder="myvm" autoFocus />
                 </div>
+
+                {/* OS Image selector */}
+                <div className="row">
+                  <label>{t("osImage")}</label>
+                  <select
+                    className="input"
+                    value={selectedOsImage}
+                    onChange={e => setSelectedOsImage(e.target.value)}
+                  >
+                    <option value="">{t("osImageNone")}</option>
+                    {osImages.map(img => (
+                      <option key={img.id} value={img.id} disabled={img.status !== "ready"}>
+                        {img.name} ({formatBytes(img.size_bytes)})
+                        {img.status === "ready" ? ` - ${t("osImageReady")}` : ""}
+                        {img.status === "downloading" ? ` - ${t("osImageDownloading")}` : ""}
+                        {img.status === "not_downloaded" ? ` - ${t("osImageNotDownloaded")}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* OS Image list with download/delete actions */}
+                <div className="os-image-list" style={{ margin: "8px 0" }}>
+                  {osImages.map(img => {
+                    const isDownloading = downloadingImage === img.id
+                    const progressPct = downloadProgress && downloadProgress.image_id === img.id && downloadProgress.bytes_total > 0
+                      ? Math.min(100, (downloadProgress.bytes_downloaded / downloadProgress.bytes_total) * 100)
+                      : 0
+                    return (
+                      <div key={img.id} className="os-image-item" style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "6px 0", borderBottom: "1px solid var(--border, #333)"
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 500, fontSize: 13 }}>{img.name}</div>
+                          <div style={{ fontSize: 11, opacity: 0.7 }}>
+                            {img.arch} &middot; {t("osImageVersion")} {img.version} &middot; {formatBytes(img.size_bytes)}
+                          </div>
+                          {isDownloading && (
+                            <div style={{ marginTop: 4 }}>
+                              <div style={{
+                                height: 4, borderRadius: 2,
+                                background: "var(--border, #444)", overflow: "hidden"
+                              }}>
+                                <div style={{
+                                  height: "100%", width: `${progressPct}%`,
+                                  background: "var(--accent, #4ea6f5)",
+                                  transition: "width 0.3s ease"
+                                }} />
+                              </div>
+                              <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
+                                {t("osImageProgress")}: {progressPct.toFixed(1)}%
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          {img.status === "not_downloaded" && (
+                            <button
+                              className="btn tiny"
+                              disabled={!!downloadingImage}
+                              onClick={() => onDownloadOsImage(img.id)}
+                            >
+                              {t("osImageDownload")}
+                            </button>
+                          )}
+                          {img.status === "downloading" && (
+                            <span style={{ fontSize: 11, opacity: 0.7 }}>{t("osImageDownloading")}</span>
+                          )}
+                          {img.status === "ready" && (
+                            <>
+                              <span style={{ fontSize: 11, color: "var(--green, #4caf50)", fontWeight: 500 }}>
+                                {t("osImageReady")}
+                              </span>
+                              <button
+                                className="btn tiny"
+                                onClick={() => onDeleteOsImage(img.id)}
+                              >
+                                {t("osImageDelete")}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
                 <div className="row two">
                   <div>
                     <label>{t("cpus")}</label>

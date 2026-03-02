@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import type { VmInfoDto } from "../types"
+import type { VmInfoDto, OsImageDto, OsImageDownloadProgressDto } from "../types"
 
 export function useVms() {
   const [vms, setVms] = useState<VmInfoDto[]>([])
@@ -22,6 +22,12 @@ export function useVms() {
   const [mountGuestPath, setMountGuestPath] = useState("/mnt/host")
   const [mountReadonly, setMountReadonly] = useState(false)
 
+  // OS Image state
+  const [osImages, setOsImages] = useState<OsImageDto[]>([])
+  const [selectedOsImage, setSelectedOsImage] = useState("")
+  const [downloadingImage, setDownloadingImage] = useState("")
+  const [downloadProgress, setDownloadProgress] = useState<OsImageDownloadProgressDto | null>(null)
+
   const fetchVms = useCallback(async () => {
     setVmLoading(true)
     try {
@@ -35,11 +41,43 @@ export function useVms() {
     }
   }, [])
 
+  const fetchOsImages = useCallback(async () => {
+    try {
+      const result = await invoke<OsImageDto[]>("image_catalog")
+      setOsImages(result)
+    } catch (e) {
+      // Silently fail — catalog is best-effort.
+      console.error("Failed to fetch OS image catalog:", e)
+    }
+  }, [])
+
   useEffect(() => {
     fetchVms()
+    fetchOsImages()
     const iv = setInterval(fetchVms, 3000)
     return () => clearInterval(iv)
-  }, [fetchVms])
+  }, [fetchVms, fetchOsImages])
+
+  // Poll download progress when a download is active.
+  useEffect(() => {
+    if (!downloadingImage) return
+    const iv = setInterval(async () => {
+      try {
+        const progress = await invoke<OsImageDownloadProgressDto>("image_download_status", {
+          image_id: downloadingImage,
+        })
+        setDownloadProgress(progress)
+        if (progress.done || progress.error) {
+          setDownloadingImage("")
+          setDownloadProgress(null)
+          await fetchOsImages()
+        }
+      } catch {
+        // Ignore polling errors.
+      }
+    }, 500)
+    return () => clearInterval(iv)
+  }, [downloadingImage, fetchOsImages])
 
   const vmAction = useCallback(async (cmd: string, id: string) => {
     setVmActing(id)
@@ -65,6 +103,7 @@ export function useVms() {
         memory_mb: vmMem,
         disk_gb: vmDisk,
         rosetta: vmRosetta,
+        os_image: selectedOsImage || null,
       })
       setVmName("")
       await fetchVms()
@@ -75,7 +114,7 @@ export function useVms() {
     } finally {
       setVmActing("")
     }
-  }, [vmName, vmCpus, vmMem, vmDisk, vmRosetta, fetchVms])
+  }, [vmName, vmCpus, vmMem, vmDisk, vmRosetta, selectedOsImage, fetchVms])
 
   const getLoginCmd = useCallback(async (vm: VmInfoDto) => {
     setVmError("")
@@ -126,6 +165,38 @@ export function useVms() {
     }
   }, [fetchVms])
 
+  const downloadOsImage = useCallback(async (imageId: string) => {
+    setDownloadingImage(imageId)
+    setDownloadProgress(null)
+    setVmError("")
+    try {
+      await invoke("image_download_os", { image_id: imageId })
+      await fetchOsImages()
+      return true
+    } catch (e) {
+      setVmError(String(e))
+      return false
+    } finally {
+      setDownloadingImage("")
+      setDownloadProgress(null)
+    }
+  }, [fetchOsImages])
+
+  const deleteOsImage = useCallback(async (imageId: string) => {
+    setVmError("")
+    try {
+      await invoke("image_delete_os", { image_id: imageId })
+      await fetchOsImages()
+      if (selectedOsImage === imageId) {
+        setSelectedOsImage("")
+      }
+      return true
+    } catch (e) {
+      setVmError(String(e))
+      return false
+    }
+  }, [fetchOsImages, selectedOsImage])
+
   const running = vms.filter(v => v.state === "running")
 
   return {
@@ -143,5 +214,9 @@ export function useVms() {
     mountReadonly, setMountReadonly,
     fetchVms, vmAction, createVm,
     getLoginCmd, addMount, removeMount,
+    // OS images
+    osImages, selectedOsImage, setSelectedOsImage,
+    downloadingImage, downloadProgress,
+    downloadOsImage, deleteOsImage, fetchOsImages,
   }
 }
