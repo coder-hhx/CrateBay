@@ -396,10 +396,28 @@ public func vz_destroy_vm(
     _ handle: UnsafeMutableRawPointer?,
     _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 ) -> Int32 {
-    guard lookupVM(handle) != nil else {
+    guard let instance = lookupVM(handle) else {
         setError(outError, "Invalid VM handle")
         return -1
     }
+
+    // If the VM is still running, attempt to stop it before deallocating.
+    let semaphore = DispatchSemaphore(value: 0)
+
+    instance.queue.async {
+        let state = instance.vm.state
+        if state == .running || state == .paused || state == .starting {
+            instance.vm.stop { _ in
+                semaphore.signal()
+            }
+        } else {
+            semaphore.signal()
+        }
+    }
+
+    // Wait up to 5 seconds for the VM to stop.
+    let _ = semaphore.wait(timeout: .now() + 5.0)
+
     unregisterVM(handle)
     return 0
 }
