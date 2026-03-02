@@ -213,6 +213,21 @@ impl MacOSHypervisor {
             cmd.arg("--initrd").arg(initrd);
         }
 
+        // Pass Rosetta flag if enabled.
+        if vm.rosetta_enabled {
+            cmd.arg("--rosetta");
+        }
+
+        // Pass shared directories.
+        for share in &vm.shared_dirs {
+            let spec = if share.read_only {
+                format!("{}:{}:ro", share.tag, share.host_path)
+            } else {
+                format!("{}:{}", share.tag, share.host_path)
+            };
+            cmd.arg("--share").arg(spec);
+        }
+
         cmd.stdin(Stdio::null())
             .stdout(Stdio::from(console_file))
             .stderr(Stdio::from(console_err));
