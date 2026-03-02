@@ -25,6 +25,7 @@ use tracing::{error, info, warn};
 
 use cargobay_core::proto;
 use cargobay_core::proto::vm_service_client::VmServiceClient;
+use cargobay_core::validation;
 
 pub struct AppState {
     hv: Box<dyn cargobay_core::hypervisor::Hypervisor>,
@@ -394,6 +395,13 @@ async fn docker_run(
     pull: bool,
     env: Option<Vec<String>>,
 ) -> Result<RunContainerResult, String> {
+    validation::validate_image_reference(&image)
+        .map_err(|e| format!("Invalid image reference '{}': {}", image, e))?;
+    if let Some(ref n) = name {
+        validation::validate_container_name(n)
+            .map_err(|e| format!("Invalid container name '{}': {}", n, e))?;
+    }
+
     let docker = connect_docker()?;
 
     if pull {
@@ -932,6 +940,7 @@ pub struct VmInfoDto {
     rosetta_enabled: bool,
     mounts: Vec<SharedDirectoryDto>,
     port_forwards: Vec<PortForwardDto>,
+    os_image: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1013,6 +1022,7 @@ async fn vm_list(state: State<'_, AppState>) -> Result<Vec<VmInfoDto>, String> {
                         protocol: pf.protocol,
                     })
                     .collect(),
+                os_image: None, // gRPC path does not expose os_image yet
             })
             .collect());
     }
@@ -1020,28 +1030,32 @@ async fn vm_list(state: State<'_, AppState>) -> Result<Vec<VmInfoDto>, String> {
     let vms = state.hv.list_vms().map_err(|e| e.to_string())?;
     Ok(vms
         .into_iter()
-        .map(|vm| VmInfoDto {
-            id: vm.id,
-            name: vm.name,
-            state: vm_state_to_string(vm.state),
-            cpus: vm.cpus,
-            memory_mb: vm.memory_mb,
-            disk_gb: vm.disk_gb,
-            rosetta_enabled: vm.rosetta_enabled,
-            mounts: vm
-                .shared_dirs
-                .into_iter()
-                .map(SharedDirectoryDto::from)
-                .collect(),
-            port_forwards: vm
-                .port_forwards
-                .into_iter()
-                .map(|pf| PortForwardDto {
-                    host_port: pf.host_port,
-                    guest_port: pf.guest_port,
-                    protocol: pf.protocol,
-                })
-                .collect(),
+        .map(|vm| {
+            let os_img = vm.os_image.clone();
+            VmInfoDto {
+                id: vm.id,
+                name: vm.name,
+                state: vm_state_to_string(vm.state),
+                cpus: vm.cpus,
+                memory_mb: vm.memory_mb,
+                disk_gb: vm.disk_gb,
+                rosetta_enabled: vm.rosetta_enabled,
+                mounts: vm
+                    .shared_dirs
+                    .into_iter()
+                    .map(SharedDirectoryDto::from)
+                    .collect(),
+                port_forwards: vm
+                    .port_forwards
+                    .into_iter()
+                    .map(|pf| PortForwardDto {
+                        host_port: pf.host_port,
+                        guest_port: pf.guest_port,
+                        protocol: pf.protocol,
+                    })
+                    .collect(),
+                os_image: os_img,
+            }
         })
         .collect())
 }
@@ -1056,6 +1070,9 @@ async fn vm_create(
     rosetta: bool,
     os_image: Option<String>,
 ) -> Result<String, String> {
+    validation::validate_vm_name(&name)
+        .map_err(|e| format!("Invalid VM name '{}': {}", name, e))?;
+
     // Resolve image paths from the selected OS image.
     let (kernel_path, initrd_path, disk_path) = if let Some(ref img_id) = os_image {
         if !cargobay_core::images::is_image_ready(img_id) {
@@ -1191,6 +1208,11 @@ async fn vm_mount_add(
     guest_path: String,
     readonly: bool,
 ) -> Result<(), String> {
+    validation::validate_mount_path(&host_path)
+        .map_err(|e| format!("Invalid host path '{}': {}", host_path, e))?;
+    validation::validate_mount_path(&guest_path)
+        .map_err(|e| format!("Invalid guest path '{}': {}", guest_path, e))?;
+
     if let Ok(mut client) = connect_vm_service(&state.grpc_addr).await {
         client
             .mount_virtio_fs(proto::MountVirtioFsRequest {

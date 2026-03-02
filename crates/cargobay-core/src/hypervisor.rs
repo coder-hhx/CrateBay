@@ -175,6 +175,9 @@ pub struct VmInfo {
     /// Active port forwards.
     #[serde(default)]
     pub port_forwards: Vec<PortForward>,
+    /// OS image id from the catalog (e.g. "alpine-3.19"), persisted for restart.
+    #[serde(default)]
+    pub os_image: Option<String>,
 }
 
 fn default_disk_gb() -> u64 {
@@ -323,12 +326,14 @@ mod tests {
             rosetta_enabled: false,
             shared_dirs: vec![],
             port_forwards: vec![],
+            os_image: Some("alpine-3.19".into()),
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: VmInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "stub-1");
         assert_eq!(deserialized.name, "my-vm");
         assert_eq!(deserialized.state, VmState::Running);
+        assert_eq!(deserialized.os_image.as_deref(), Some("alpine-3.19"));
     }
 
     #[test]

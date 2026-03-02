@@ -260,6 +260,7 @@ export function Vms({
                     <div className="vm-item-meta">
                       {vm.cpus} vCPU · {vm.memory_mb} MB · {vm.disk_gb} GB
                       {vm.rosetta_enabled && " · Rosetta"}
+                      {vm.os_image && ` · ${vm.os_image}`}
                     </div>
                     {isRunning && stats && (
                       <div className="vm-item-stats">
@@ -322,6 +323,12 @@ export function Vms({
                             <div className="vm-stat-label">Rosetta</div>
                             <div className="vm-stat-value">{vm.rosetta_enabled ? "ON" : "OFF"}</div>
                           </div>
+                          {vm.os_image && (
+                            <div className="vm-stat-card">
+                              <div className="vm-stat-label">{t("osImage")}</div>
+                              <div className="vm-stat-value">{vm.os_image}</div>
+                            </div>
+                          )}
                           <div className="vm-stat-card">
                             <div className="vm-stat-label">{t("state")}</div>
                             <div className="vm-stat-value">
@@ -358,6 +365,11 @@ export function Vms({
 
                     {activeTab === "mounts" && (
                       <div className="vm-detail-content">
+                        {isRunning && (
+                          <div className="hint" style={{ marginBottom: 8, color: "var(--yellow, #f0c040)" }}>
+                            {t("virtiofsRestartNotice")}
+                          </div>
+                        )}
                         {vm.mounts?.length > 0 && (
                           <div className="vm-mount-list">
                             {vm.mounts.map(m => (
@@ -377,7 +389,7 @@ export function Vms({
                           </div>
                           <div className="vm-form-row">
                             <label>{t("hostPath")}</label>
-                            <input className="input" value={mountHostPath} onChange={e => { setMountVmId(vm.id); setMountHostPath(e.target.value) }} placeholder="~/code" />
+                            <input className="input" value={mountHostPath} onChange={e => { setMountVmId(vm.id); setMountHostPath(e.target.value) }} placeholder="/Users/me/code" />
                           </div>
                           <div className="vm-form-row">
                             <label>{t("guestPath")}</label>
@@ -390,6 +402,8 @@ export function Vms({
                           <button className="btn" onClick={() => { setMountVmId(vm.id); onAddMount() }} disabled={!mountTag.trim() || !mountHostPath.trim()}>
                             <span className="icon">{I.plus}</span>{t("addMount")}
                           </button>
+                          <div className="hint">{t("virtiofsHint")}</div>
+                          <div className="hint" style={{ marginTop: 4, fontFamily: "monospace", fontSize: 11 }}>{t("virtiofsGuestHint")}</div>
                         </div>
                       </div>
                     )}

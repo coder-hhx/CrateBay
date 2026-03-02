@@ -187,6 +187,7 @@ impl Hypervisor for WindowsHypervisor {
             rosetta_enabled: false,
             shared_dirs: config.shared_dirs,
             port_forwards: config.port_forwards,
+            os_image: config.os_image,
         };
 
         let entry = VmEntry {

@@ -91,6 +91,7 @@ impl Hypervisor for StubHypervisor {
             rosetta_enabled: config.rosetta,
             shared_dirs: config.shared_dirs,
             port_forwards: config.port_forwards,
+            os_image: config.os_image,
         };
         self.vms.lock().unwrap().insert(id.clone(), info);
         if let Err(e) = self.persist() {

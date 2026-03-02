@@ -10,6 +10,7 @@
 use crate::hypervisor::{
     Hypervisor, HypervisorError, PortForward, SharedDirectory, VmConfig, VmInfo, VmState,
 };
+use crate::images;
 use crate::store::{data_dir, next_id_for_prefix, VmStore};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,8 @@ struct VmEntry {
     /// Paths to kernel/initrd/disk configured at create time.
     kernel_path: Option<String>,
     initrd_path: Option<String>,
+    /// Kernel command line (from os_image catalog or env var).
+    cmdline: Option<String>,
 }
 
 fn vm_dir(id: &str) -> PathBuf {
@@ -109,6 +112,20 @@ impl MacOSHypervisor {
                 vm.state = VmState::Stopped;
             }
 
+            // Re-derive kernel/initrd paths and cmdline from persisted os_image.
+            let (kernel_path, initrd_path, cmdline) = if let Some(ref img_id) = vm.os_image {
+                let paths = images::image_paths(img_id);
+                let entry = images::find_image(img_id);
+                let cl = entry.map(|e| e.default_cmdline);
+                (
+                    Some(paths.kernel_path.to_string_lossy().into_owned()),
+                    Some(paths.initrd_path.to_string_lossy().into_owned()),
+                    cl,
+                )
+            } else {
+                (None, None, None)
+            };
+
             map.insert(
                 vm.id.clone(),
                 VmEntry {
@@ -116,8 +133,9 @@ impl MacOSHypervisor {
                     _rosetta_mounted: false,
                     runner_pid,
                     runner: None,
-                    kernel_path: None,
-                    initrd_path: None,
+                    kernel_path,
+                    initrd_path,
+                    cmdline,
                 },
             );
         }
@@ -179,6 +197,7 @@ impl MacOSHypervisor {
         vm: &VmInfo,
         kernel_path: Option<&str>,
         initrd_path: Option<&str>,
+        vm_cmdline: Option<&str>,
     ) -> Result<Child, HypervisorError> {
         // Use explicitly configured kernel path, then env var as fallback.
         let kernel = kernel_path
@@ -195,8 +214,11 @@ impl MacOSHypervisor {
             .map(|s| s.to_string())
             .or_else(|| std::env::var("CARGOBAY_VZ_INITRD").ok());
 
-        let cmdline =
-            std::env::var("CARGOBAY_VZ_CMDLINE").unwrap_or_else(|_| "console=hvc0".into());
+        // Use VM-specific cmdline (from OS image catalog), then env var, then default.
+        let cmdline = vm_cmdline
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("CARGOBAY_VZ_CMDLINE").ok())
+            .unwrap_or_else(|| "console=hvc0".into());
 
         let disk = vm_disk_path(&vm.id);
         if !disk.exists() {
@@ -300,10 +322,30 @@ impl Hypervisor for MacOSHypervisor {
             .disk_gb
             .checked_mul(1024 * 1024 * 1024)
             .ok_or_else(|| HypervisorError::CreateFailed("disk size overflow".into()))?;
-        {
+
+        // If an OS image is specified and its rootfs exists, use it as the disk base.
+        // Otherwise create a blank sparse raw disk.
+        if let Some(ref img_id) = config.os_image {
+            if images::is_image_ready(img_id) {
+                images::create_disk_from_image(img_id, &disk_path, disk_bytes).map_err(|e| {
+                    HypervisorError::CreateFailed(format!("disk from image: {}", e))
+                })?;
+            } else {
+                // Image not downloaded; create blank disk as fallback.
+                let file = std::fs::File::create(&disk_path)?;
+                file.set_len(disk_bytes)?;
+            }
+        } else {
             let file = std::fs::File::create(&disk_path)?;
             file.set_len(disk_bytes)?;
         }
+
+        // Look up the image's default cmdline for later use.
+        let cmdline = config
+            .os_image
+            .as_deref()
+            .and_then(images::find_image)
+            .map(|e| e.default_cmdline);
 
         let info = VmInfo {
             id: id.clone(),
@@ -315,6 +357,7 @@ impl Hypervisor for MacOSHypervisor {
             rosetta_enabled: config.rosetta,
             shared_dirs: config.shared_dirs,
             port_forwards: config.port_forwards,
+            os_image: config.os_image,
         };
 
         let entry = VmEntry {
@@ -324,6 +367,7 @@ impl Hypervisor for MacOSHypervisor {
             runner: None,
             kernel_path: config.kernel_path.clone(),
             initrd_path: config.initrd_path.clone(),
+            cmdline,
         };
 
         self.vms.lock().unwrap().insert(id.clone(), entry);
@@ -342,7 +386,7 @@ impl Hypervisor for MacOSHypervisor {
     }
 
     fn start_vm(&self, id: &str) -> Result<(), HypervisorError> {
-        let (already_running, need_persist, vm_info, kernel_path, initrd_path) = {
+        let (already_running, need_persist, vm_info, kernel_path, initrd_path, cmdline) = {
             let mut vms = self.vms.lock().unwrap();
             let entry = vms
                 .get_mut(id)
@@ -375,6 +419,7 @@ impl Hypervisor for MacOSHypervisor {
                 entry.info.clone(),
                 entry.kernel_path.clone(),
                 entry.initrd_path.clone(),
+                entry.cmdline.clone(),
             )
         };
 
@@ -385,8 +430,12 @@ impl Hypervisor for MacOSHypervisor {
             return Ok(());
         }
 
-        let mut child =
-            self.spawn_vz_runner(&vm_info, kernel_path.as_deref(), initrd_path.as_deref())?;
+        let mut child = self.spawn_vz_runner(
+            &vm_info,
+            kernel_path.as_deref(),
+            initrd_path.as_deref(),
+            cmdline.as_deref(),
+        )?;
 
         let ready_file = vm_runner_ready_path(&vm_info.id);
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -589,28 +638,62 @@ impl Hypervisor for MacOSHypervisor {
     }
 
     fn mount_virtiofs(&self, vm_id: &str, share: &SharedDirectory) -> Result<(), HypervisorError> {
+        // Validate tag: must be non-empty, no slashes, no colons, reasonable length.
+        if share.tag.is_empty() {
+            return Err(HypervisorError::VirtioFsError(
+                "Mount tag must not be empty".into(),
+            ));
+        }
+        if share.tag.len() > 255 {
+            return Err(HypervisorError::VirtioFsError(
+                "Mount tag must not exceed 255 characters".into(),
+            ));
+        }
+        if share.tag.contains('/') || share.tag.contains(':') || share.tag.contains('\0') {
+            return Err(HypervisorError::VirtioFsError(format!(
+                "Mount tag contains invalid characters: {}",
+                share.tag
+            )));
+        }
+        // "rosetta" is reserved for Rosetta directory share.
+        if share.tag == "rosetta" {
+            return Err(HypervisorError::VirtioFsError(
+                "Mount tag 'rosetta' is reserved for Rosetta support".into(),
+            ));
+        }
+
         if !std::path::Path::new(&share.host_path).exists() {
             return Err(HypervisorError::VirtioFsError(format!(
                 "Host path does not exist: {}",
                 share.host_path
             )));
         }
-
-        let mut vms = self.vms.lock().unwrap();
-        let entry = vms
-            .get_mut(vm_id)
-            .ok_or(HypervisorError::NotFound(vm_id.into()))?;
-
-        // Check for duplicate tag
-        if entry.info.shared_dirs.iter().any(|d| d.tag == share.tag) {
+        if !std::path::Path::new(&share.host_path).is_dir() {
             return Err(HypervisorError::VirtioFsError(format!(
-                "Mount tag already exists: {}",
-                share.tag
+                "Host path is not a directory: {}",
+                share.host_path
             )));
         }
 
-        entry.info.shared_dirs.push(share.clone());
-        drop(vms);
+        let is_running;
+        {
+            let mut vms = self.vms.lock().unwrap();
+            let entry = vms
+                .get_mut(vm_id)
+                .ok_or(HypervisorError::NotFound(vm_id.into()))?;
+
+            // Check for duplicate tag
+            if entry.info.shared_dirs.iter().any(|d| d.tag == share.tag) {
+                return Err(HypervisorError::VirtioFsError(format!(
+                    "Mount tag already exists: {}",
+                    share.tag
+                )));
+            }
+
+            is_running = entry.info.state == VmState::Running;
+            entry.info.shared_dirs.push(share.clone());
+        }
+
         if let Err(e) = self.persist() {
             let mut vms = self.vms.lock().unwrap();
             if let Some(entry) = vms.get_mut(vm_id) {
@@ -619,26 +702,44 @@ impl Hypervisor for MacOSHypervisor {
             return Err(e);
         }
 
-        // TODO: Real implementation using Virtualization.framework:
-        // 1. Create VZSharedDirectory(url: hostPath, readOnly: readOnly)
-        // 2. Create VZSingleDirectoryShare(directory: sharedDir)
-        // 3. Create VZVirtioFileSystemDeviceConfiguration(tag: tag)
-        // 4. Attach to running VM
-        // 5. mount -t virtiofs <tag> <guest_path> inside VM via agent
+        if is_running {
+            // VirtioFS devices are configured at VM creation time in VZBridge.swift
+            // and cannot be hot-attached to a running VM. The mount is persisted and
+            // will take effect on the next VM restart.
+            info!(
+                "VirtioFS mount '{}' added to running VM {} — will take effect after restart",
+                share.tag, vm_id
+            );
+        } else {
+            info!(
+                "VirtioFS mount '{}' added to VM {} — will be active on next start",
+                share.tag, vm_id
+            );
+        }
 
         Ok(())
     }
 
     fn unmount_virtiofs(&self, vm_id: &str, tag: &str) -> Result<(), HypervisorError> {
-        let previous = {
+        let (previous, is_running, found) = {
             let mut vms = self.vms.lock().unwrap();
             let entry = vms
                 .get_mut(vm_id)
                 .ok_or(HypervisorError::NotFound(vm_id.into()))?;
+            let found = entry.info.shared_dirs.iter().any(|d| d.tag == tag);
             let prev = entry.info.shared_dirs.clone();
+            let is_running = entry.info.state == VmState::Running;
             entry.info.shared_dirs.retain(|d| d.tag != tag);
-            prev
+            (prev, is_running, found)
         };
+
+        if !found {
+            return Err(HypervisorError::VirtioFsError(format!(
+                "Mount tag not found: {}",
+                tag
+            )));
+        }
+
         if let Err(e) = self.persist() {
             let mut vms = self.vms.lock().unwrap();
             if let Some(entry) = vms.get_mut(vm_id) {
@@ -647,7 +748,17 @@ impl Hypervisor for MacOSHypervisor {
             return Err(e);
         }
 
-        // TODO: umount <guest_path> inside VM, detach VZ device
+        if is_running {
+            // VirtioFS devices cannot be hot-detached from a running VM.
+            // The mount is removed from the persisted config and will not be
+            // present on the next VM restart.
+            info!(
+                "VirtioFS mount '{}' removed from running VM {} — removal takes effect after restart",
+                tag, vm_id
+            );
+        } else {
+            info!("VirtioFS mount '{}' removed from VM {}", tag, vm_id);
+        }
 
         Ok(())
     }

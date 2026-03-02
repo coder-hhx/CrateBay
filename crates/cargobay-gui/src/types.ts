@@ -51,6 +51,7 @@ export interface VmInfoDto {
   rosetta_enabled: boolean
   mounts: SharedDirectoryDto[]
   port_forwards: PortForwardDto[]
+  os_image: string | null
 }
 
 export interface OsImageDto {
