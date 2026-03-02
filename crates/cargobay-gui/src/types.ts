@@ -101,7 +101,7 @@ export interface ImageInspectInfo {
   layers: number
 }
 
-export type NavPage = "dashboard" | "containers" | "vms" | "images" | "volumes" | "settings"
+export type NavPage = "dashboard" | "containers" | "vms" | "images" | "volumes" | "kubernetes" | "settings"
 export type Theme = "dark" | "light"
 export type ModalKind = "" | "text" | "package"
 
@@ -125,4 +125,38 @@ export interface VmStats {
   cpu_percent: number
   memory_usage_mb: number
   disk_usage_gb: number
+}
+
+export interface K3sStatusDto {
+  installed: boolean
+  running: boolean
+  version: string
+  node_count: number
+  kubeconfig_path: string
+}
+
+export interface K8sPod {
+  name: string
+  namespace: string
+  status: string
+  ready: string
+  restarts: number
+  age: string
+}
+
+export interface K8sService {
+  name: string
+  namespace: string
+  service_type: string
+  cluster_ip: string
+  ports: string
+}
+
+export interface K8sDeployment {
+  name: string
+  namespace: string
+  ready: string
+  up_to_date: number
+  available: number
+  age: string
 }

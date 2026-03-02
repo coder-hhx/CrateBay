@@ -9,12 +9,14 @@ import { useToast } from "./hooks/useToast"
 import { useModal } from "./hooks/useModal"
 import { AppModal } from "./components/AppModal"
 import { EmptyState } from "./components/EmptyState"
+import { UpdateChecker } from "./components/UpdateChecker"
 import { Dashboard } from "./pages/Dashboard"
 import { Containers } from "./pages/Containers"
 import { Images } from "./pages/Images"
 import { Vms } from "./pages/VMs"
 import { Volumes } from "./pages/Volumes"
 import { Settings } from "./pages/Settings"
+import { Kubernetes } from "./pages/Kubernetes"
 import type { NavPage, Theme } from "./types"
 import "./App.css"
 
@@ -47,11 +49,13 @@ function App() {
     { page: "images", icon: I.layers },
     { page: "volumes", icon: I.hardDrive, count: volumeHook.volumes.length },
     { page: "vms", icon: I.server, count: vmHook.vms.length },
+    { page: "kubernetes", icon: I.kubernetes },
   ]
 
   const pageNames: Record<NavPage, string> = {
     dashboard: t("dashboard"), containers: t("containers"),
-    vms: t("vms"), images: t("images"), volumes: t("volumes"), settings: t("settings"),
+    vms: t("vms"), images: t("images"), volumes: t("volumes"),
+    kubernetes: t("kubernetes"), settings: t("settings"),
   }
 
   const renderPage = () => {
@@ -206,6 +210,8 @@ function App() {
             t={t}
           />
         )
+      case "kubernetes":
+        return <Kubernetes t={t} />
       case "settings":
         return (
           <Settings
@@ -239,6 +245,7 @@ function App() {
         t={t}
       />
       {toast && <div className="toast">{toast}</div>}
+      <UpdateChecker t={t} />
       <div className="sidebar">
         <div className="sidebar-header">
           <img src="/logo.png" alt={t("appName")} />

@@ -18,7 +18,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, State, WindowEvent};
+use tauri::{Emitter, Manager, State, WindowEvent};
+use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
@@ -29,6 +30,7 @@ pub struct AppState {
     hv: Box<dyn cargobay_core::hypervisor::Hypervisor>,
     grpc_addr: String,
     daemon: Mutex<Option<Child>>,
+    log_stream_handles: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
 impl Drop for AppState {
@@ -475,7 +477,67 @@ async fn container_logs(
 }
 
 #[tauri::command]
-async fn container_exec(container_id: String, command: String) -> Result<String, String> {
+async fn container_logs_stream(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    timestamps: bool,
+) -> Result<(), String> {
+    // Stop any existing stream for this container
+    if let Ok(mut handles) = state.log_stream_handles.lock() {
+        if let Some(handle) = handles.remove(&id) {
+            handle.abort();
+        }
+    }
+
+    let docker = connect_docker()?;
+    let container_id = id.clone();
+
+    let opts = LogsOptions::<String> {
+        follow: true,
+        stdout: true,
+        stderr: true,
+        timestamps,
+        tail: "100".to_string(),
+        ..Default::default()
+    };
+
+    let mut stream = docker.logs(&container_id, Some(opts));
+    let emit_id = id.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        while let Some(chunk) = stream.try_next().await.unwrap_or(None) {
+            let payload = serde_json::json!({
+                "container_id": emit_id,
+                "data": chunk.to_string()
+            });
+            if app.emit("container-log", payload).is_err() {
+                break;
+            }
+        }
+        let _ = app.emit("container-log-end", &emit_id);
+    });
+
+    if let Ok(mut handles) = state.log_stream_handles.lock() {
+        handles.insert(id, handle);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn container_logs_stream_stop(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    if let Ok(mut handles) = state.log_stream_handles.lock() {
+        if let Some(handle) = handles.remove(&id) {
+            handle.abort();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
     let docker = connect_docker()?;
 
     let cmd_parts: Vec<&str> = command.split_whitespace().collect();
@@ -1514,6 +1576,362 @@ async fn image_inspect(id: String) -> Result<ImageInspectInfo, String> {
     })
 }
 
+// ── K3s cluster management commands ──────────────────────────────────
+
+#[derive(Serialize)]
+pub struct K3sStatusDto {
+    installed: bool,
+    running: bool,
+    version: String,
+    node_count: u32,
+    kubeconfig_path: String,
+}
+
+#[tauri::command]
+async fn k3s_status() -> Result<K3sStatusDto, String> {
+    let status = cargobay_core::k3s::K3sManager::cluster_status()
+        .map_err(|e| e.to_string())?;
+    let kubeconfig = cargobay_core::k3s::K3sManager::kubeconfig_path()
+        .to_string_lossy()
+        .to_string();
+    Ok(K3sStatusDto {
+        installed: status.installed,
+        running: status.running,
+        version: status.version,
+        node_count: status.node_count,
+        kubeconfig_path: kubeconfig,
+    })
+}
+
+#[tauri::command]
+async fn k3s_install() -> Result<(), String> {
+    cargobay_core::k3s::K3sManager::install(None)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn k3s_start() -> Result<(), String> {
+    let config = cargobay_core::k3s::K3sConfig::default();
+    cargobay_core::k3s::K3sManager::start_cluster(&config)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn k3s_stop() -> Result<(), String> {
+    cargobay_core::k3s::K3sManager::stop_cluster()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn k3s_uninstall() -> Result<(), String> {
+    cargobay_core::k3s::K3sManager::uninstall()
+        .map_err(|e| e.to_string())
+}
+
+// ── Kubernetes dashboard commands ────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct K8sPod {
+    name: String,
+    namespace: String,
+    status: String,
+    ready: String,
+    restarts: u32,
+    age: String,
+}
+
+#[derive(Serialize)]
+pub struct K8sService {
+    name: String,
+    namespace: String,
+    service_type: String,
+    cluster_ip: String,
+    ports: String,
+}
+
+#[derive(Serialize)]
+pub struct K8sDeployment {
+    name: String,
+    namespace: String,
+    ready: String,
+    up_to_date: u32,
+    available: u32,
+    age: String,
+}
+
+fn k3s_kubeconfig_path() -> String {
+    if let Ok(p) = std::env::var("KUBECONFIG") {
+        return p;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    // K3s default kubeconfig location
+    let k3s_path = format!("{}/.kube/k3s.yaml", home);
+    if Path::new(&k3s_path).exists() {
+        return k3s_path;
+    }
+    // Fallback to default kubeconfig
+    format!("{}/.kube/config", home)
+}
+
+fn run_kubectl(args: &[&str]) -> Result<String, String> {
+    let kubeconfig = k3s_kubeconfig_path();
+    let mut cmd = Command::new("kubectl");
+    cmd.arg("--kubeconfig").arg(&kubeconfig);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.arg("-o").arg("json");
+    let out = cmd
+        .output()
+        .map_err(|e| format!("kubectl failed: {}", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn k8s_age_from_timestamp(ts: &str) -> String {
+    let Ok(created) = chrono::DateTime::parse_from_rfc3339(ts) else {
+        return ts.to_string();
+    };
+    let now = chrono::Utc::now();
+    let dur = now.signed_duration_since(created);
+    if dur.num_days() > 0 {
+        format!("{}d", dur.num_days())
+    } else if dur.num_hours() > 0 {
+        format!("{}h", dur.num_hours())
+    } else if dur.num_minutes() > 0 {
+        format!("{}m", dur.num_minutes())
+    } else {
+        format!("{}s", dur.num_seconds().max(0))
+    }
+}
+
+#[tauri::command]
+async fn k8s_list_namespaces() -> Result<Vec<String>, String> {
+    let raw = run_kubectl(&["get", "namespaces"])?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("JSON parse error: {}", e))?;
+    let items = json["items"].as_array().ok_or("No items in response")?;
+    let mut ns: Vec<String> = items
+        .iter()
+        .filter_map(|item| item["metadata"]["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    ns.sort();
+    Ok(ns)
+}
+
+#[tauri::command]
+async fn k8s_list_pods(namespace: Option<String>) -> Result<Vec<K8sPod>, String> {
+    let mut args = vec!["get", "pods"];
+    let ns_flag;
+    match &namespace {
+        Some(ns) if !ns.is_empty() => {
+            args.push("-n");
+            ns_flag = ns.clone();
+            args.push(&ns_flag);
+        }
+        _ => {
+            args.push("--all-namespaces");
+        }
+    }
+    let raw = run_kubectl(&args)?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("JSON parse error: {}", e))?;
+    let items = json["items"].as_array().ok_or("No items in response")?;
+
+    let pods: Vec<K8sPod> = items
+        .iter()
+        .map(|item| {
+            let name = item["metadata"]["name"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let namespace = item["metadata"]["namespace"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let phase = item["status"]["phase"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string();
+            let containers = item["status"]["containerStatuses"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let total = containers.len();
+            let ready_count = containers
+                .iter()
+                .filter(|c| c["ready"].as_bool().unwrap_or(false))
+                .count();
+            let ready = format!("{}/{}", ready_count, total);
+            let restarts: u32 = containers
+                .iter()
+                .map(|c| c["restartCount"].as_u64().unwrap_or(0) as u32)
+                .sum();
+            let creation = item["metadata"]["creationTimestamp"]
+                .as_str()
+                .unwrap_or("");
+            let age = k8s_age_from_timestamp(creation);
+
+            K8sPod {
+                name,
+                namespace,
+                status: phase,
+                ready,
+                restarts,
+                age,
+            }
+        })
+        .collect();
+    Ok(pods)
+}
+
+#[tauri::command]
+async fn k8s_list_services(namespace: Option<String>) -> Result<Vec<K8sService>, String> {
+    let mut args = vec!["get", "services"];
+    let ns_flag;
+    match &namespace {
+        Some(ns) if !ns.is_empty() => {
+            args.push("-n");
+            ns_flag = ns.clone();
+            args.push(&ns_flag);
+        }
+        _ => {
+            args.push("--all-namespaces");
+        }
+    }
+    let raw = run_kubectl(&args)?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("JSON parse error: {}", e))?;
+    let items = json["items"].as_array().ok_or("No items in response")?;
+
+    let services: Vec<K8sService> = items
+        .iter()
+        .map(|item| {
+            let name = item["metadata"]["name"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let namespace = item["metadata"]["namespace"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let service_type = item["spec"]["type"]
+                .as_str()
+                .unwrap_or("ClusterIP")
+                .to_string();
+            let cluster_ip = item["spec"]["clusterIP"]
+                .as_str()
+                .unwrap_or("None")
+                .to_string();
+            let ports_arr = item["spec"]["ports"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let ports = ports_arr
+                .iter()
+                .map(|p| {
+                    let port = p["port"].as_u64().unwrap_or(0);
+                    let proto = p["protocol"].as_str().unwrap_or("TCP");
+                    let node_port = p["nodePort"].as_u64();
+                    if let Some(np) = node_port {
+                        format!("{}:{}/{}", port, np, proto)
+                    } else {
+                        format!("{}/{}", port, proto)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            K8sService {
+                name,
+                namespace,
+                service_type,
+                cluster_ip,
+                ports,
+            }
+        })
+        .collect();
+    Ok(services)
+}
+
+#[tauri::command]
+async fn k8s_list_deployments(namespace: Option<String>) -> Result<Vec<K8sDeployment>, String> {
+    let mut args = vec!["get", "deployments"];
+    let ns_flag;
+    match &namespace {
+        Some(ns) if !ns.is_empty() => {
+            args.push("-n");
+            ns_flag = ns.clone();
+            args.push(&ns_flag);
+        }
+        _ => {
+            args.push("--all-namespaces");
+        }
+    }
+    let raw = run_kubectl(&args)?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("JSON parse error: {}", e))?;
+    let items = json["items"].as_array().ok_or("No items in response")?;
+
+    let deployments: Vec<K8sDeployment> = items
+        .iter()
+        .map(|item| {
+            let name = item["metadata"]["name"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let namespace = item["metadata"]["namespace"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let replicas = item["status"]["replicas"].as_u64().unwrap_or(0);
+            let ready_replicas = item["status"]["readyReplicas"].as_u64().unwrap_or(0);
+            let ready = format!("{}/{}", ready_replicas, replicas);
+            let up_to_date = item["status"]["updatedReplicas"].as_u64().unwrap_or(0) as u32;
+            let available = item["status"]["availableReplicas"].as_u64().unwrap_or(0) as u32;
+            let creation = item["metadata"]["creationTimestamp"]
+                .as_str()
+                .unwrap_or("");
+            let age = k8s_age_from_timestamp(creation);
+
+            K8sDeployment {
+                name,
+                namespace,
+                ready,
+                up_to_date,
+                available,
+                age,
+            }
+        })
+        .collect();
+    Ok(deployments)
+}
+
+#[tauri::command]
+async fn k8s_pod_logs(name: String, namespace: String, tail: Option<u32>) -> Result<String, String> {
+    let tail_str = tail.unwrap_or(200).to_string();
+    let kubeconfig = k3s_kubeconfig_path();
+    let mut cmd = Command::new("kubectl");
+    cmd.arg("--kubeconfig")
+        .arg(&kubeconfig)
+        .arg("logs")
+        .arg(&name)
+        .arg("-n")
+        .arg(&namespace)
+        .arg("--tail")
+        .arg(&tail_str);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("kubectl logs failed: {}", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 async fn docker_pull_image(docker: &Docker, reference: &str) -> Result<(), String> {
     let (from_image, tag) = split_image_reference(reference);
     let opts = CreateImageOptions {
@@ -1900,14 +2318,82 @@ fn refresh_tray_menu(app: &tauri::AppHandle) {
     });
 }
 
+// ── Auto-update ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct UpdateInfo {
+    available: bool,
+    current_version: String,
+    latest_version: String,
+    release_notes: String,
+    download_url: String,
+}
+
+#[tauri::command]
+async fn check_update() -> Result<UpdateInfo, String> {
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let resp = client
+        .get("https://api.github.com/repos/coder-hhx/CargoBay/releases/latest")
+        .header("User-Agent", format!("CargoBay/{}", current_version))
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch release info: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned status {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse release info: {}", e))?;
+
+    let tag = body["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+
+    let release_notes = body["body"].as_str().unwrap_or("").to_string();
+    let html_url = body["html_url"].as_str().unwrap_or("").to_string();
+
+    let available = !tag.is_empty() && tag != current_version;
+
+    Ok(UpdateInfo {
+        available,
+        current_version: current_version.to_string(),
+        latest_version: if tag.is_empty() {
+            current_version.to_string()
+        } else {
+            tag
+        },
+        release_notes,
+        download_url: html_url,
+    })
+}
+
+#[tauri::command]
+async fn open_release_page(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
+}
+
 pub fn run() {
     cargobay_core::logging::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             hv: cargobay_core::create_hypervisor(),
             grpc_addr: grpc_addr(),
             daemon: Mutex::new(None),
+            log_stream_handles: Mutex::new(HashMap::new()),
         })
         .setup(|app| {
             // ── Daemon startup ──────────────────────────────────────────
@@ -1994,6 +2480,8 @@ pub fn run() {
             docker_run,
             container_login_cmd,
             container_logs,
+            container_logs_stream,
+            container_logs_stream_stop,
             container_exec,
             container_exec_interactive_cmd,
             container_env,
@@ -2028,7 +2516,19 @@ pub fn run() {
             image_list,
             image_remove,
             image_tag,
-            image_inspect
+            image_inspect,
+            k3s_status,
+            k3s_install,
+            k3s_start,
+            k3s_stop,
+            k3s_uninstall,
+            k8s_list_namespaces,
+            k8s_list_pods,
+            k8s_list_services,
+            k8s_list_deployments,
+            k8s_pod_logs,
+            check_update,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
