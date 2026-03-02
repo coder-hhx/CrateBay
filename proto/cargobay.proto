@@ -11,6 +11,7 @@ service VMService {
   rpc MountVirtioFS(MountVirtioFSRequest) returns (MountVirtioFSResponse);
   rpc UnmountVirtioFS(UnmountVirtioFSRequest) returns (UnmountVirtioFSResponse);
   rpc ListVirtioFSMounts(ListVirtioFSMountsRequest) returns (ListVirtioFSMountsResponse);
+  rpc GetVMStats(GetVMStatsRequest) returns (GetVMStatsResponse);
 }
 
 message CreateVMRequest {
@@ -100,4 +101,15 @@ message ListVirtioFSMountsRequest {
 
 message ListVirtioFSMountsResponse {
   repeated SharedDirectory mounts = 1;
+}
+
+message GetVMStatsRequest {
+  string vm_id = 1;
+}
+
+message GetVMStatsResponse {
+  string vm_id = 1;
+  double cpu_percent = 2;
+  uint64 memory_usage_mb = 3;
+  uint64 disk_usage_gb = 4;
 }

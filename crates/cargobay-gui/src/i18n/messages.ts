@@ -135,6 +135,14 @@ export const messages: Record<string, Record<string, string>> = {
     commandPlaceholder: "Enter command (e.g. ls -la)",
     copyExecCmd: "Copy docker exec command",
     execError: "Exec failed",
+    // Resource monitoring
+    cpuUsage: "CPU",
+    memoryUsage: "Memory",
+    diskUsage: "Disk",
+    networkRx: "Net RX",
+    networkTx: "Net TX",
+    stats: "Stats",
+    totalResources: "Total Resources",
   },
   zh: {
     appName: "CargoBay",
@@ -264,6 +272,14 @@ export const messages: Record<string, Record<string, string>> = {
     commandPlaceholder: "输入命令（如 ls -la）",
     copyExecCmd: "复制 docker exec 命令",
     execError: "执行失败",
+    // Resource monitoring
+    cpuUsage: "CPU",
+    memoryUsage: "内存",
+    diskUsage: "磁盘",
+    networkRx: "网络接收",
+    networkTx: "网络发送",
+    stats: "资源监控",
+    totalResources: "总资源使用",
   },
 }
 
