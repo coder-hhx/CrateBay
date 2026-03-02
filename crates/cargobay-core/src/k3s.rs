@@ -248,9 +248,9 @@ impl K3sManager {
 
         #[cfg(not(unix))]
         {
-            return Err(K3sError::UnsupportedPlatform(
+            Err(K3sError::UnsupportedPlatform(
                 "Stopping K3s on this platform is not yet supported.".into(),
-            ));
+            ))
         }
 
         #[cfg(unix)]
