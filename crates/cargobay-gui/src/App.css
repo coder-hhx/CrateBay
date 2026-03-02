@@ -1643,6 +1643,100 @@
   color: #1e293b;
 }
 
+/* === Container exec terminal === */
+.exec-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+
+.exec-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+
+.exec-toolbar .input {
+  flex: 1;
+  font-family: 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--cyan);
+  border-color: var(--border);
+}
+
+.exec-toolbar .input:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px var(--purple-dim);
+}
+
+.exec-output {
+  background: #0a0c14;
+  color: #c8d0e0;
+  font-family: 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 14px;
+  min-height: 200px;
+  max-height: 360px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.app.light .exec-output {
+  background: #f0f2f6;
+  color: #1e293b;
+}
+
+.exec-entry {
+  margin-bottom: 8px;
+}
+
+.exec-prompt {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.exec-result {
+  color: #c8d0e0;
+  margin-top: 2px;
+}
+
+.app.light .exec-result {
+  color: #334155;
+}
+
+.exec-error-text {
+  color: var(--red);
+  margin-top: 2px;
+}
+
+.exec-copy-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface2);
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.exec-copy-bar code {
+  flex: 1;
+  font-family: 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* === Responsive === */
 @media (max-width: 900px) {
   .grid3 { grid-template-columns: 1fr; }

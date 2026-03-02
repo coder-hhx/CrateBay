@@ -128,6 +128,13 @@ export const messages: Record<string, Record<string, string>> = {
     dark: "Dark",
     light: "Light",
     connectionError: "Connection Error",
+    // Container exec / terminal
+    execCommand: "Execute Command",
+    terminal: "Terminal",
+    runCommand: "Run",
+    commandPlaceholder: "Enter command (e.g. ls -la)",
+    copyExecCmd: "Copy docker exec command",
+    execError: "Exec failed",
   },
   zh: {
     appName: "CargoBay",
@@ -250,6 +257,13 @@ export const messages: Record<string, Record<string, string>> = {
     dark: "深色",
     light: "浅色",
     connectionError: "连接错误",
+    // Container exec / terminal
+    execCommand: "执行命令",
+    terminal: "终端",
+    runCommand: "执行",
+    commandPlaceholder: "输入命令（如 ls -la）",
+    copyExecCmd: "复制 docker exec 命令",
+    execError: "执行失败",
   },
 }
 

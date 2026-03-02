@@ -2,6 +2,7 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::service::HostConfig;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -421,6 +422,53 @@ async fn container_logs(
     }
 
     Ok(output)
+}
+
+#[tauri::command]
+async fn container_exec(container_id: String, command: String) -> Result<String, String> {
+    let docker = connect_docker()?;
+
+    let cmd_parts: Vec<&str> = command.split_whitespace().collect();
+    if cmd_parts.is_empty() {
+        return Err("Empty command".into());
+    }
+
+    let exec = docker
+        .create_exec(
+            &container_id,
+            CreateExecOptions {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(cmd_parts.into_iter().map(String::from).collect()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| format!("Failed to create exec: {}", e))?;
+
+    let output = docker
+        .start_exec(&exec.id, None)
+        .await
+        .map_err(|e| format!("Failed to start exec: {}", e))?;
+
+    let mut result = String::new();
+    if let StartExecResults::Attached { mut output, .. } = output {
+        while let Some(chunk) = output.try_next().await.map_err(|e| e.to_string())? {
+            result.push_str(&chunk.to_string());
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn container_exec_interactive_cmd(container_id: String) -> String {
+    let docker_host = docker_host_for_cli();
+    if let Some(host) = docker_host {
+        format!("DOCKER_HOST={} docker exec -it {} /bin/sh", host, container_id)
+    } else {
+        format!("docker exec -it {} /bin/sh", container_id)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1328,6 +1376,8 @@ pub fn run() {
             docker_run,
             container_login_cmd,
             container_logs,
+            container_exec,
+            container_exec_interactive_cmd,
             image_search,
             image_tags,
             image_load,
