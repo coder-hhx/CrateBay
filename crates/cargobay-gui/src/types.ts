@@ -67,7 +67,17 @@ export interface OsImageDownloadProgressDto {
   error: string | null
 }
 
-export type NavPage = "dashboard" | "containers" | "vms" | "images" | "settings"
+export interface VolumeInfo {
+  name: string
+  driver: string
+  mountpoint: string
+  created_at: string
+  labels: Record<string, string>
+  options: Record<string, string>
+  scope: string
+}
+
+export type NavPage = "dashboard" | "containers" | "vms" | "images" | "volumes" | "settings"
 export type Theme = "dark" | "light"
 export type ModalKind = "" | "text" | "package"
 

@@ -5,6 +5,7 @@ use bollard::container::{
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::service::HostConfig;
+use bollard::volume::{CreateVolumeOptions, ListVolumesOptions};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
@@ -240,6 +241,17 @@ pub struct ContainerInfo {
     state: String,
     status: String,
     ports: String,
+}
+
+#[derive(Serialize)]
+pub struct VolumeInfo {
+    name: String,
+    driver: String,
+    mountpoint: String,
+    created_at: String,
+    labels: HashMap<String, String>,
+    options: HashMap<String, String>,
+    scope: String,
 }
 
 #[tauri::command]
@@ -1217,6 +1229,32 @@ async fn vm_port_forward_list(
         .collect())
 }
 
+#[tauri::command]
+async fn volume_list() -> Result<Vec<VolumeInfo>, String> {
+    let docker = connect_docker()?;
+    let opts = ListVolumesOptions::<String> {
+        ..Default::default()
+    };
+    let resp = docker
+        .list_volumes(Some(opts))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let volumes = resp.volumes.unwrap_or_default();
+    Ok(volumes
+        .into_iter()
+        .map(|v| VolumeInfo {
+            name: v.name,
+            driver: v.driver,
+            mountpoint: v.mountpoint,
+            created_at: v.created_at.unwrap_or_default(),
+            labels: v.labels,
+            options: v.options,
+            scope: v.scope.map(|s| format!("{:?}", s)).unwrap_or_default(),
+        })
+        .collect())
+}
+
 #[derive(Debug, Serialize)]
 pub struct VmStatsDto {
     cpu_percent: f64,
@@ -1252,6 +1290,56 @@ async fn vm_stats(state: State<'_, AppState>, id: String) -> Result<VmStatsDto, 
         memory_usage_mb: 0,
         disk_usage_gb: vm.disk_gb,
     })
+}
+
+#[tauri::command]
+async fn volume_create(name: String, driver: Option<String>) -> Result<VolumeInfo, String> {
+    let docker = connect_docker()?;
+    let opts = CreateVolumeOptions {
+        name: name.as_str(),
+        driver: driver.as_deref().unwrap_or("local"),
+        ..Default::default()
+    };
+    let v = docker
+        .create_volume(opts)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(VolumeInfo {
+        name: v.name,
+        driver: v.driver,
+        mountpoint: v.mountpoint,
+        created_at: v.created_at.unwrap_or_default(),
+        labels: v.labels,
+        options: v.options,
+        scope: v.scope.map(|s| format!("{:?}", s)).unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+async fn volume_inspect(name: String) -> Result<VolumeInfo, String> {
+    let docker = connect_docker()?;
+    let v = docker
+        .inspect_volume(&name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(VolumeInfo {
+        name: v.name,
+        driver: v.driver,
+        mountpoint: v.mountpoint,
+        created_at: v.created_at.unwrap_or_default(),
+        labels: v.labels,
+        options: v.options,
+        scope: v.scope.map(|s| format!("{:?}", s)).unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+async fn volume_remove(name: String) -> Result<(), String> {
+    let docker = connect_docker()?;
+    docker
+        .remove_volume(&name, None)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn docker_pull_image(docker: &Docker, reference: &str) -> Result<(), String> {
@@ -1759,7 +1847,11 @@ pub fn run() {
             vm_port_forward_add,
             vm_port_forward_remove,
             vm_port_forward_list,
-            vm_stats
+            vm_stats,
+            volume_list,
+            volume_create,
+            volume_inspect,
+            volume_remove
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

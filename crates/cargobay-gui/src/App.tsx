@@ -4,6 +4,7 @@ import { I } from "./icons"
 import { useContainers } from "./hooks/useContainers"
 import { useImageSearch } from "./hooks/useImageSearch"
 import { useVms } from "./hooks/useVms"
+import { useVolumes } from "./hooks/useVolumes"
 import { useToast } from "./hooks/useToast"
 import { useModal } from "./hooks/useModal"
 import { AppModal } from "./components/AppModal"
@@ -12,6 +13,7 @@ import { Dashboard } from "./pages/Dashboard"
 import { Containers } from "./pages/Containers"
 import { Images } from "./pages/Images"
 import { Vms } from "./pages/VMs"
+import { Volumes } from "./pages/Volumes"
 import { Settings } from "./pages/Settings"
 import type { NavPage, Theme } from "./types"
 import "./App.css"
@@ -32,6 +34,7 @@ function App() {
   const containers = useContainers()
   const images = useImageSearch()
   const vmHook = useVms()
+  const volumeHook = useVolumes()
 
   const copyText = async (text: string) => {
     try { await navigator.clipboard.writeText(text); showToast(t("copied")) }
@@ -42,12 +45,13 @@ function App() {
     { page: "dashboard", icon: I.dashboard },
     { page: "containers", icon: I.box, count: containers.containers.length },
     { page: "images", icon: I.layers },
+    { page: "volumes", icon: I.hardDrive, count: volumeHook.volumes.length },
     { page: "vms", icon: I.server, count: vmHook.vms.length },
   ]
 
   const pageNames: Record<NavPage, string> = {
     dashboard: t("dashboard"), containers: t("containers"),
-    vms: t("vms"), images: t("images"), settings: t("settings"),
+    vms: t("vms"), images: t("images"), volumes: t("volumes"), settings: t("settings"),
   }
 
   const renderPage = () => {
@@ -113,6 +117,20 @@ function App() {
               }
             }}
             onCopy={copyText}
+            t={t}
+          />
+        )
+      case "volumes":
+        return (
+          <Volumes
+            volumes={volumeHook.volumes}
+            loading={volumeHook.loading}
+            error={volumeHook.error}
+            onFetch={volumeHook.fetchVolumes}
+            onCreate={volumeHook.createVolume}
+            onInspect={volumeHook.inspectVolume}
+            onRemove={volumeHook.removeVolume}
+            onToast={showToast}
             t={t}
           />
         )
