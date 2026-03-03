@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { invoke } from "@tauri-apps/api/core"
 import { messages } from "./i18n/messages"
 import { I } from "./icons"
 import { useContainers } from "./hooks/useContainers"
@@ -17,7 +18,7 @@ import { Vms } from "./pages/Vms"
 import { Volumes } from "./pages/Volumes"
 import { Settings } from "./pages/Settings"
 import { Kubernetes } from "./pages/Kubernetes"
-import type { NavPage, Theme, VmInfoDto } from "./types"
+import type { NavPage, Theme, VmInfoDto, LocalImageInfo } from "./types"
 import "./App.css"
 
 function App() {
@@ -37,6 +38,21 @@ function App() {
   const images = useImageSearch()
   const vmHook = useVms()
   const volumeHook = useVolumes()
+
+  // Installed (local) Docker images count for Dashboard
+  const [installedImagesCount, setInstalledImagesCount] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const result = await invoke<LocalImageInfo[]>("image_list")
+        if (!cancelled) setInstalledImagesCount(result.length)
+      } catch { /* Docker may not be running */ }
+    }
+    poll()
+    const iv = setInterval(poll, 10000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [])
 
   const copyText = async (text: string) => {
     try { await navigator.clipboard.writeText(text); showToast(t("copied")) }
@@ -69,6 +85,7 @@ function App() {
             vmsRunningCount={vmHook.running.length}
             runningVms={vmHook.running}
             imgResultsCount={images.imgResults.length}
+            installedImagesCount={installedImagesCount}
             connected={containers.connected}
             onNavigate={setActivePage}
             t={t}

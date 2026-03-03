@@ -50,6 +50,8 @@ export const messages: Record<string, Record<string, string>> = {
     newImageTag: "New image tag",
     package: "Package",
     container: "Container",
+    removeContainer: "Remove Container",
+    confirmRemoveContainer: "Are you sure you want to remove this container?",
     // Logs
     logs: "Logs",
     viewLogs: "View Logs",
@@ -310,6 +312,8 @@ export const messages: Record<string, Record<string, string>> = {
     newImageTag: "新镜像标签",
     package: "打包",
     container: "容器",
+    removeContainer: "移除容器",
+    confirmRemoveContainer: "确定要移除此容器吗？",
     // Logs
     logs: "日志",
     viewLogs: "查看日志",

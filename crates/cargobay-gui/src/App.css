@@ -1920,6 +1920,21 @@
 }
 
 /* === Responsive === */
+
+/* Large screens — cap content width to prevent over-stretching on ultra-wide monitors */
+@media (min-width: 1600px) {
+  .content {
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+}
+
+/* Medium-large screens — reduce grid density */
+@media (max-width: 1200px) {
+  .dash-cards { grid-template-columns: repeat(3, 1fr); }
+  .grid3 { grid-template-columns: 1fr 1fr; }
+}
+
 @media (max-width: 900px) {
   .grid3 { grid-template-columns: 1fr; }
   .img-layout { grid-template-columns: 1fr; }

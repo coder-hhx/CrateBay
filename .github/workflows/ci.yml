@@ -106,7 +106,7 @@ jobs:
   # Frontend — Node / React lint & build
   # -----------------------------------------------------------
   frontend:
-    name: Frontend Lint & Build
+    name: Frontend Lint, Build & Test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -132,6 +132,9 @@ jobs:
 
       - name: Check i18n keys
         run: npm run check:i18n
+
+      - name: Unit tests
+        run: npm run test:unit
 
   # -----------------------------------------------------------
   # Release binary size check (macOS only — primary target)

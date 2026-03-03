@@ -73,6 +73,10 @@ export function Containers({
   // Container stats state
   const [containerStats, setContainerStats] = useState<Record<string, ContainerStats>>({})
 
+  // Confirm remove state
+  const [confirmRemove, setConfirmRemove] = useState("")
+  const [containerToRemoveName, setContainerToRemoveName] = useState("")
+
   // Env viewer state
   const [showEnvModal, setShowEnvModal] = useState(false)
   const [envContainerName, setEnvContainerName] = useState("")
@@ -380,7 +384,7 @@ export function Containers({
             >
               {I.layers}
             </button>
-            <button className="action-btn danger" disabled={acting === c.id} onClick={() => onContainerAction("remove_container", c.id)} title={t("delete")}>{I.trash}</button>
+            <button className="action-btn danger" disabled={acting === c.id} onClick={() => { setConfirmRemove(c.id); setContainerToRemoveName(c.name || c.id) }} title={t("delete")}>{I.trash}</button>
           </div>
         </div>
         {isRunning && stats && (
@@ -798,6 +802,30 @@ export function Containers({
                   {I.copy} {t("copy")}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Remove Container Modal */}
+      {confirmRemove && (
+        <div className="modal-backdrop" onClick={() => setConfirmRemove("")}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-head">
+              <div className="modal-title">{t("removeContainer")}</div>
+              <div className="modal-actions">
+                <button className="icon-btn" onClick={() => setConfirmRemove("")} title={t("close")}>&times;</button>
+              </div>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: 0 }}>{t("confirmRemoveContainer")}</p>
+              <p style={{ margin: "8px 0 0", fontWeight: 600, color: "var(--text)" }}>{containerToRemoveName}</p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setConfirmRemove("")}>{t("close")}</button>
+              <button className="btn primary" onClick={() => { onContainerAction("remove_container", confirmRemove); setConfirmRemove("") }} style={{ marginLeft: 8, background: "var(--red)", borderColor: "var(--red)" }}>
+                {t("remove")}
+              </button>
             </div>
           </div>
         </div>

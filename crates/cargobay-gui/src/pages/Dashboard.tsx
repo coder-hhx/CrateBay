@@ -12,7 +12,8 @@ interface DashboardProps {
   runningVms: VmInfoDto[]
   imgResultsCount: number
   connected: boolean
-  onNavigate: (page: "containers" | "vms" | "images") => void
+  installedImagesCount: number
+  onNavigate: (page: "containers" | "vms" | "images" | "settings") => void
   t: (key: string) => string
 }
 
@@ -24,7 +25,7 @@ interface TotalResources {
 
 export function Dashboard({
   containers, running, vmsCount, vmsRunningCount, runningVms,
-  imgResultsCount, connected, onNavigate, t,
+  imgResultsCount, installedImagesCount, connected, onNavigate, t,
 }: DashboardProps) {
   const [totals, setTotals] = useState<TotalResources>({
     totalCpuPercent: 0,
@@ -128,14 +129,14 @@ export function Dashboard({
         <div className="dash-card" onClick={() => onNavigate("images")}>
           <div className="dash-card-icon">{I.layers}</div>
           <div className="dash-card-info">
-            <div className="dash-card-value">{imgResultsCount}</div>
+            <div className="dash-card-value">{installedImagesCount}</div>
             <div className="dash-card-label">{t("images")}</div>
           </div>
           <div className="dash-card-sub">
-            {imgResultsCount > 0 && <span className="dash-badge">{t("searchResults")}</span>}
+            {imgResultsCount > 0 && <span className="dash-badge">{imgResultsCount} {t("searchResults")}</span>}
           </div>
         </div>
-        <div className="dash-card">
+        <div className="dash-card" onClick={() => onNavigate("settings")}>
           <div className="dash-card-icon">{I.cpu}</div>
           <div className="dash-card-info">
             <div className="dash-card-value">{connected ? "OK" : "--"}</div>
