@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { type JSX, useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { I } from "../icons"
 import { ErrorInline } from "../components/ErrorDisplay"
