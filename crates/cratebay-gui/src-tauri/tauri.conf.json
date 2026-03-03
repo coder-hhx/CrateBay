@@ -10,22 +10,6 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "CrateBay",
-        "width": 960,
-        "height": 640,
-        "minWidth": 680,
-        "minHeight": 480,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "CrateBay"
-    },
     "security": {
       "csp": "default-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self' 'unsafe-inline'"
     }

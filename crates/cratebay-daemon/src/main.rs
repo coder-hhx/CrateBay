@@ -1,3 +1,9 @@
+// Prevents additional console window on Windows in release builds (e.g. when launched by GUI).
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use std::sync::Arc;
 use tracing::info;
 

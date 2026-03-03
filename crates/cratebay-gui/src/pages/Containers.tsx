@@ -316,86 +316,95 @@ export function Containers({
     const childClass = opts?.child ? " container-child" : ""
     const stats = isRunning ? containerStats[c.id] : undefined
     return (
-      <div className={`container-card${childClass}`} key={c.id}>
-        <div className="card-icon" style={{ background: isRunning ? undefined : "var(--surface2)" }}>{I.box}</div>
-        <div className="card-body">
-          <div className="card-name">{name}</div>
-          <div className="card-meta">{c.image} · {meta}</div>
-        </div>
-        {isRunning && stats && (
-          <div className="card-stats">
-            <div className="stat-item">
-              <span className="stat-icon">{I.cpu}</span>
-              <span className="stat-value">{stats.cpu_percent.toFixed(1)}%</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-icon">{I.memory}</span>
-              <span className="stat-value">{stats.memory_usage_mb.toFixed(0)}</span>
-            </div>
+      <div className={`container-card${childClass}${isRunning ? "" : " stopped"}`} key={c.id}>
+        <div className="card-main">
+          <div className={`card-icon${isRunning ? "" : " stopped"}`}>{I.box}</div>
+          <div className="card-body">
+            <div className="card-name">{name}</div>
+            <div className="card-meta">{c.image} · {meta}</div>
           </div>
-        )}
-        <div className="card-status">
-          <span className={`dot ${isRunning ? "running" : "stopped"}`} />
-          <span>{c.status}</span>
+          {isRunning && stats && (
+            <div className="card-stats">
+              <div className="stat-item">
+                <span className="stat-icon">{I.cpu}</span>
+                <span className="stat-value">{stats.cpu_percent.toFixed(1)}%</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-icon">{I.memory}</span>
+                <span className="stat-value">{stats.memory_usage_mb.toFixed(0)} MB</span>
+              </div>
+            </div>
+          )}
+          <div className="card-status">
+            <span className={`dot ${isRunning ? "running" : "stopped"}`} />
+            <span>{c.status}</span>
+          </div>
         </div>
         <div className="card-actions">
+          <div className="card-actions-group">
             <button
               className="action-btn"
               disabled={acting === c.id}
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation()
                 const target = c.name || c.id
                 const cmd = await invoke<string>("container_login_cmd", { container: target, shell: "/bin/sh" })
                 onOpenTextModal(t("loginCommand"), cmd, cmd)
               }}
               title={t("loginCommand")}
             >
-              {I.terminal}
+              {I.terminal}<span className="action-label">{t("loginCommand")}</span>
             </button>
             <button
               className="action-btn"
               disabled={acting === c.id}
-              onClick={() => openLogModal(c)}
+              onClick={(e) => { e.stopPropagation(); openLogModal(c) }}
               title={t("viewLogs")}
             >
-              {I.fileText}
+              {I.fileText}<span className="action-label">{t("logs")}</span>
             </button>
             <button
               className="action-btn"
               disabled={acting === c.id}
-              onClick={() => openEnvModal(c)}
+              onClick={(e) => { e.stopPropagation(); openEnvModal(c) }}
               title={t("viewEnvVars")}
             >
-              {I.settings}
+              {I.settings}<span className="action-label">{t("envVars")}</span>
             </button>
             {isRunning && (
               <button
                 className="action-btn"
                 disabled={acting === c.id}
-                onClick={() => openExecModal(c)}
+                onClick={(e) => { e.stopPropagation(); openExecModal(c) }}
                 title={t("execCommand")}
               >
-                {I.command}
+                {I.command}<span className="action-label">{t("execCommand")}</span>
               </button>
-            )}
-            {isRunning ? (
-              <button className="action-btn" disabled={acting === c.id} onClick={() => onContainerAction("stop_container", c.id)} title={t("stop")}>{I.stop}</button>
-            ) : (
-              <button className="action-btn" disabled={acting === c.id} onClick={() => onContainerAction("start_container", c.id)} title={t("start")}>{I.play}</button>
             )}
             <button
               className="action-btn"
               disabled={acting === c.id}
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation()
                 const target = c.name || c.id
                 const defaultTag = `${(c.image || "image").split(":")[0]}-snapshot:latest`
                 onOpenPackageModal(target, defaultTag)
               }}
               title={t("packageImage")}
             >
-              {I.layers}
+              {I.layers}<span className="action-label">{t("package")}</span>
             </button>
-            <button className="action-btn danger" disabled={acting === c.id} onClick={() => { setConfirmRemove(c.id); setContainerToRemoveName(c.name || c.id) }} title={t("delete")}>{I.trash}</button>
           </div>
+          <div className="card-actions-sep" />
+          <div className="card-actions-group">
+            {isRunning ? (
+              <button className="action-btn warn" disabled={acting === c.id} onClick={(e) => { e.stopPropagation(); onContainerAction("stop_container", c.id) }} title={t("stop")}>{I.stop}<span className="action-label">{t("stop")}</span></button>
+            ) : (
+              <button className="action-btn success" disabled={acting === c.id} onClick={(e) => { e.stopPropagation(); onContainerAction("start_container", c.id) }} title={t("start")}>{I.play}<span className="action-label">{t("start")}</span></button>
+            )}
+            <button className="action-btn danger" disabled={acting === c.id} onClick={(e) => { e.stopPropagation(); setConfirmRemove(c.id); setContainerToRemoveName(c.name || c.id) }} title={t("delete")}>{I.trash}</button>
+          </div>
+        </div>
       </div>
     )
   }
@@ -439,19 +448,21 @@ export function Containers({
                 }}
                 title={expanded ? "Collapse" : "Expand"}
               >
-                <div className="card-icon">{I.box}</div>
-                <div className="card-body">
-                  <div className="card-name">{g.key}</div>
-                  <div className="card-meta">
-                    {t("running")}: {g.runningCount} · {t("stopped")}: {g.stoppedCount}
+                <div className="card-main">
+                  <div className="card-icon">{I.box}</div>
+                  <div className="card-body">
+                    <div className="card-name">{g.key}</div>
+                    <div className="card-meta">
+                      {t("running")}: {g.runningCount} · {t("stopped")}: {g.stoppedCount}
+                    </div>
                   </div>
-                </div>
-                <div className="card-status">
-                  <span className={`dot ${hasRunning ? "running" : "stopped"}`} />
-                  <span>{hasRunning ? t("running") : t("stopped")}</span>
-                </div>
-                <div className="group-chevron" aria-hidden="true">
-                  {expanded ? I.chevronDown : I.chevronRight}
+                  <div className="card-status">
+                    <span className={`dot ${hasRunning ? "running" : "stopped"}`} />
+                    <span>{hasRunning ? t("running") : t("stopped")}</span>
+                  </div>
+                  <div className="group-chevron" aria-hidden="true">
+                    {expanded ? I.chevronDown : I.chevronRight}
+                  </div>
                 </div>
               </div>
               {expanded && (
@@ -466,89 +477,120 @@ export function Containers({
 
       {/* Run Container Modal */}
       {showRunModal && (
-        <div className="modal-backdrop" onClick={() => setShowRunModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="modal-backdrop run-modal-backdrop" onClick={() => setShowRunModal(false)}>
+          <div className="modal run-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
-              <div className="modal-title">{t("runContainer")}</div>
+              <div className="modal-title">
+                <span className="modal-title-icon">{I.play}</span>
+                {t("runContainer")}
+              </div>
               <div className="modal-actions">
                 <button className="icon-btn" onClick={() => setShowRunModal(false)} title={t("close")}>&times;</button>
               </div>
             </div>
-            <div className="modal-body">
+            <div className="modal-body run-modal-body">
               <div className="form">
-                <div className="row">
-                  <label>{t("image")}</label>
-                  <input className="input" value={runImage} onChange={e => setRunImage(e.target.value)} placeholder="nginx:latest" autoFocus />
-                </div>
-                <div className="row">
-                  <label>{t("nameOptional")}</label>
-                  <input className="input" value={runName} onChange={e => setRunName(e.target.value)} placeholder="web" />
-                </div>
-                <div className="row two">
-                  <div>
-                    <label>{t("cpus")}</label>
-                    <input className="input" type="number" min={1} value={runCpus} onChange={e => setRunCpus(e.target.value === "" ? "" : Number(e.target.value))} />
+                {/* Image & Name Section */}
+                <div className="run-section">
+                  <div className="run-section-title">
+                    <span className="run-section-icon">{I.box}</span>
+                    {t("image")}
                   </div>
-                  <div>
-                    <label>{t("memoryMb")}</label>
-                    <input className="input" type="number" min={64} value={runMem} onChange={e => setRunMem(e.target.value === "" ? "" : Number(e.target.value))} />
+                  <div className="run-field">
+                    <label>{t("image")}<span className="run-required">*</span></label>
+                    <input className="input" value={runImage} onChange={e => setRunImage(e.target.value)} placeholder="nginx:latest" autoFocus />
+                  </div>
+                  <div className="run-field">
+                    <label>{t("nameOptional")}</label>
+                    <input className="input" value={runName} onChange={e => setRunName(e.target.value)} placeholder="my-container" />
                   </div>
                 </div>
-                <div className="row inline">
-                  <input type="checkbox" checked={runPull} onChange={e => setRunPull(e.target.checked)} />
-                  <span>{t("pullBeforeRun")}</span>
-                </div>
-                <div className="row">
-                  <label>{t("envVars")}</label>
-                  <div className="hint" style={{ marginBottom: 6, fontSize: 11, color: "var(--text3)" }}>{t("envVarsHint")}</div>
-                  {runEnvVars.map((env, i) => (
-                    <div key={i} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "center" }}>
-                      <input
-                        className="input"
-                        style={{ flex: 1 }}
-                        value={env.key}
-                        onChange={e => {
-                          const updated = [...runEnvVars]
-                          updated[i] = { ...updated[i], key: e.target.value }
-                          setRunEnvVars(updated)
-                        }}
-                        placeholder={t("envKey")}
-                      />
-                      <span style={{ color: "var(--text3)" }}>=</span>
-                      <input
-                        className="input"
-                        style={{ flex: 1 }}
-                        value={env.value}
-                        onChange={e => {
-                          const updated = [...runEnvVars]
-                          updated[i] = { ...updated[i], value: e.target.value }
-                          setRunEnvVars(updated)
-                        }}
-                        placeholder={t("envValue")}
-                      />
-                      <button
-                        className="btn xs"
-                        onClick={() => setRunEnvVars(runEnvVars.filter((_, j) => j !== i))}
-                        title={t("removeEnvVar")}
-                      >
-                        {I.trash}
-                      </button>
+
+                {/* Resources Section */}
+                <div className="run-section">
+                  <div className="run-section-title">
+                    <span className="run-section-icon">{I.cpu}</span>
+                    {t("cpus")} & {t("memoryMb")}
+                  </div>
+                  <div className="run-resources-grid">
+                    <div className="run-field">
+                      <label>{t("cpus")}</label>
+                      <input className="input" type="number" min={1} value={runCpus} onChange={e => setRunCpus(e.target.value === "" ? "" : Number(e.target.value))} placeholder="—" />
                     </div>
-                  ))}
+                    <div className="run-field">
+                      <label>{t("memoryMb")}</label>
+                      <input className="input" type="number" min={64} value={runMem} onChange={e => setRunMem(e.target.value === "" ? "" : Number(e.target.value))} placeholder="—" />
+                    </div>
+                  </div>
+                  <div className="run-toggle-row">
+                    <input type="checkbox" checked={runPull} onChange={e => setRunPull(e.target.checked)} id="run-pull-toggle" />
+                    <label htmlFor="run-pull-toggle">{t("pullBeforeRun")}</label>
+                  </div>
+                </div>
+
+                {/* Environment Variables Section */}
+                <div className="run-section">
+                  <div className="run-section-title">
+                    <span className="run-section-icon">{I.settings}</span>
+                    {t("envVars")}
+                  </div>
+                  <div className="run-env-hint">{t("envVarsHint")}</div>
+                  {runEnvVars.length > 0 && (
+                    <div className="run-env-list">
+                      {runEnvVars.map((env, i) => (
+                        <div className="run-env-row" key={i}>
+                          <input
+                            className="input"
+                            value={env.key}
+                            onChange={e => {
+                              const updated = [...runEnvVars]
+                              updated[i] = { ...updated[i], key: e.target.value }
+                              setRunEnvVars(updated)
+                            }}
+                            placeholder={t("envKey")}
+                          />
+                          <span className="run-env-eq">=</span>
+                          <input
+                            className="input"
+                            value={env.value}
+                            onChange={e => {
+                              const updated = [...runEnvVars]
+                              updated[i] = { ...updated[i], value: e.target.value }
+                              setRunEnvVars(updated)
+                            }}
+                            placeholder={t("envValue")}
+                          />
+                          <button
+                            className="run-env-delete"
+                            onClick={() => setRunEnvVars(runEnvVars.filter((_, j) => j !== i))}
+                            title={t("removeEnvVar")}
+                          >
+                            {I.trash}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <button
-                    className="btn xs"
+                    className="btn xs run-env-add"
                     onClick={() => setRunEnvVars([...runEnvVars, { key: "", value: "" }])}
-                    style={{ marginTop: 4 }}
                   >
                     <span className="icon">{I.plus}</span>{t("addEnvVar")}
                   </button>
                 </div>
               </div>
-              {runError && <div className="hint" style={{ color: "var(--red)", marginTop: 8 }}>{runError}</div>}
+
+              {/* Error & Result */}
+              {runError && (
+                <div className="run-error">
+                  <span className="run-error-icon">{I.alertCircle}</span>
+                  {runError}
+                </div>
+              )}
               {runResult && (
-                <div className="result" style={{ marginTop: 14 }}>
-                  <div className="result-title">{t("loginCommand")}</div>
-                  <div className="result-code">
+                <div className="run-result">
+                  <div className="run-result-title">{I.terminal} {t("loginCommand")}</div>
+                  <div className="run-result-code">
                     <code>{runResult.login_cmd}</code>
                     <button className="icon-btn" onClick={() => {
                       navigator.clipboard.writeText(runResult.login_cmd)
@@ -559,8 +601,12 @@ export function Containers({
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setShowRunModal(false)}>{t("close")}</button>
-              <button className="btn primary" disabled={runLoading || !runImage.trim()} onClick={handleRun} style={{ marginLeft: 8 }}>
-                {runLoading ? t("creating") : t("create")}
+              <button className="btn primary" disabled={runLoading || !runImage.trim()} onClick={handleRun}>
+                {runLoading ? (
+                  <><div className="spinner spinner-sm" />{t("creating")}</>
+                ) : (
+                  <><span className="icon">{I.play}</span>{t("create")}</>
+                )}
               </button>
             </div>
           </div>
@@ -597,8 +643,8 @@ export function Containers({
                     <tbody>
                       {envVars.map((ev, i) => (
                         <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                          <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 600, wordBreak: "break-all" }}>{ev.key}</td>
-                          <td style={{ padding: "5px 10px", fontFamily: "monospace", wordBreak: "break-all" }}>{ev.value}</td>
+                          <td style={{ padding: "5px 10px", fontFamily: "'Geist Mono', ui-monospace, monospace", fontWeight: 600, wordBreak: "break-all" }}>{ev.key}</td>
+                          <td style={{ padding: "5px 10px", fontFamily: "'Geist Mono', ui-monospace, monospace", wordBreak: "break-all" }}>{ev.value}</td>
                         </tr>
                       ))}
                     </tbody>

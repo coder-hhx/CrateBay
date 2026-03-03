@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { messages } from "./i18n/messages"
 import { I } from "./icons"
 import { useContainers } from "./hooks/useContainers"
@@ -38,6 +39,23 @@ function App() {
   const images = useImageSearch()
   const vmHook = useVms()
   const volumeHook = useVolumes()
+
+  // Window controls (Windows only — macOS keeps native titlebar)
+  const isWindows = navigator.userAgent.includes("Windows")
+  const appWindow = getCurrentWindow()
+  const [maximized, setMaximized] = useState(false)
+
+  useEffect(() => {
+    if (!isWindows) return
+    const unlisten = appWindow.onResized(async () => {
+      setMaximized(await appWindow.isMaximized())
+    })
+    return () => { unlisten.then(f => f()) }
+  }, [appWindow, isWindows])
+
+  const handleMinimize = useCallback(() => appWindow.minimize(), [appWindow])
+  const handleMaximize = useCallback(() => appWindow.toggleMaximize(), [appWindow])
+  const handleClose = useCallback(() => appWindow.close(), [appWindow])
 
   // Installed (local) Docker images count for Dashboard
   const [installedImagesCount, setInstalledImagesCount] = useState(0)
@@ -251,7 +269,7 @@ function App() {
   }
 
   return (
-    <div className={`app ${theme === "light" ? "light" : ""}`}>
+    <div className={`app ${theme === "light" ? "light" : ""} ${isWindows ? "platform-windows" : ""}`}>
       <AppModal
         {...modal}
         onClose={modal.closeModal}
@@ -294,7 +312,7 @@ function App() {
       </div>
 
       <div className="main">
-        <div className="topbar">
+        <div className="topbar" data-tauri-drag-region>
           <div className="topbar-left">
             <h1>{pageNames[activePage]}</h1>
             {activePage === "containers" && containers.running.length > 0 && (
@@ -309,10 +327,19 @@ function App() {
               <span className={`dot ${containers.connected ? "on" : "off"}`} />
               {containers.connected ? t("connected") : t("disconnected")}
             </div>
+            {isWindows && (
+              <div className="window-controls">
+                <button type="button" className="win-btn" onClick={handleMinimize} aria-label="Minimize">{I.winMinimize}</button>
+                <button type="button" className="win-btn" onClick={handleMaximize} aria-label={maximized ? "Restore" : "Maximize"}>{maximized ? I.winRestore : I.winMaximize}</button>
+                <button type="button" className="win-btn win-btn-close" onClick={handleClose} aria-label="Close">{I.winClose}</button>
+              </div>
+            )}
           </div>
         </div>
         <div className="content">
-          {renderPage()}
+          <div key={activePage} className="page-transition">
+            {renderPage()}
+          </div>
         </div>
       </div>
     </div>

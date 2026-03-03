@@ -36,16 +36,16 @@
       featLabel: 'Features',
       featTitle: 'Everything you need to manage containers and beyond.',
       featDesc:
-        'CrateBay brings a unified, native-speed experience for Docker containers, Linux VMs, and Kubernetes clusters \u2014 without the overhead.',
+        'CrateBay brings a unified, native-speed experience for Docker containers, Linux VMs, and Kubernetes clusters \u2014 without the overhead. Stay productive with system tray quick actions and live running counts.',
       feat1Title: 'Docker Container Management',
       feat1Desc:
-        'Full lifecycle control \u2014 create, start, stop, restart, remove. Real-time log streaming and exec into running containers.',
+        'Full lifecycle control \u2014 create, start, stop, restart, remove. Real-time log streaming and exec into running containers. Port mappings remain consistently ordered during live refresh.',
       feat2Title: 'Linux Virtual Machines',
       feat2Desc:
         'Native VM support via Virtualization.framework (macOS), KVM (Linux), and Hyper-V (Windows). Boot in seconds.',
       feat3Title: 'Image & Volume Management',
       feat3Desc:
-        'Search and pull images from Docker Hub and private registries. Manage volumes with inspect, create, prune, and mount operations.',
+        'Search and pull images from Docker Hub and private registries. Manage volumes with inspect, create, prune, and mount operations. Volume lists remain consistently ordered during live refresh.',
       feat4Title: 'Resource Monitoring',
       feat4Desc:
         'Real-time CPU, memory, network, and disk I/O monitoring for every container and VM. Spot issues instantly.',
@@ -171,13 +171,13 @@
       statSize: '应用大小',
       featLabel: '核心功能',
       featTitle: '容器管理，一应俱全。',
-      featDesc: 'CrateBay 为 Docker 容器、Linux 虚拟机和 Kubernetes 集群提供统一、原生速度的管理体验——零额外开销。',
+      featDesc: 'CrateBay 为 Docker 容器、Linux 虚拟机和 Kubernetes 集群提供统一、原生速度的管理体验——零额外开销。系统托盘提供快捷操作，并展示实时运行数量。',
       feat1Title: 'Docker 容器管理',
-      feat1Desc: '全生命周期控制——创建、启动、停止、重启、删除。实时日志流和进入运行中容器的终端。',
+      feat1Desc: '全生命周期控制——创建、启动、停止、重启、删除。实时日志流和进入运行中容器的终端。端口映射信息在实时刷新时保持稳定显示。',
       feat2Title: 'Linux 虚拟机',
       feat2Desc: '通过 Virtualization.framework (macOS)、KVM (Linux)、Hyper-V (Windows) 原生支持虚拟机，秒级启动。',
       feat3Title: '镜像与卷管理',
-      feat3Desc: '从 Docker Hub 和私有仓库搜索和拉取镜像。管理卷的检查、创建、清理和挂载操作。',
+      feat3Desc: '从 Docker Hub 和私有仓库搜索和拉取镜像。管理卷的检查、创建、清理和挂载操作。卷列表在实时刷新时保持稳定排序。',
       feat4Title: '资源监控',
       feat4Desc: '实时监控每个容器和虚拟机的 CPU、内存、网络和磁盘 I/O。即时发现问题。',
       feat5Title: '端口转发 & VirtioFS',

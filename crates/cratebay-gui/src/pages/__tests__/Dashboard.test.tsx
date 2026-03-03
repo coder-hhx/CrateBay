@@ -182,13 +182,15 @@ describe("Dashboard", () => {
       <Dashboard {...defaultProps} containers={running} running={running} />
     )
 
-    expect(screen.getByText(t("totalResources"))).toBeInTheDocument()
+    expect(screen.getByText(t("cpuUsage"))).toBeInTheDocument()
+    expect(screen.getByText(t("memoryUsage"))).toBeInTheDocument()
   })
 
   it("does not show resource panel when nothing is running", () => {
     render(<Dashboard {...defaultProps} />)
 
-    expect(screen.queryByText(t("totalResources"))).not.toBeInTheDocument()
+    expect(screen.queryByText(t("cpuUsage"))).not.toBeInTheDocument()
+    expect(screen.queryByText(t("memoryUsage"))).not.toBeInTheDocument()
   })
 
   it("shows image results count", () => {

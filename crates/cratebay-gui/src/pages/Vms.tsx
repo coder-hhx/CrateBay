@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { type JSX, useState, useEffect, useRef, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { I } from "../icons"
 import { ErrorInline } from "../components/ErrorDisplay"
@@ -110,7 +110,6 @@ export function Vms({
   // Poll console data when modal is open
   useEffect(() => {
     if (!consoleVmId) return
-    // Initial full load
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setConsoleData("")
     let currentOffset = 0
@@ -201,29 +200,38 @@ export function Vms({
     setShowCreateModal(false)
   }
 
+  // Tab config for cleaner rendering
+  const tabConfig: { key: typeof activeTab; icon: JSX.Element; label: string }[] = [
+    { key: "info", icon: I.cpu, label: t("status") },
+    { key: "ssh", icon: I.terminal, label: t("loginCommand") },
+    { key: "mounts", icon: I.hardDrive, label: t("virtiofs") },
+    { key: "ports", icon: I.globe, label: t("portForwarding") },
+    { key: "console", icon: I.fileText, label: t("console") },
+  ]
+
   return (
     <div className="page">
       {/* Toolbar */}
       <div className="toolbar">
-        <button className="btn primary" onClick={() => setShowCreateModal(true)}>
+        <button type="button" className="btn primary" onClick={() => setShowCreateModal(true)}>
           <span className="icon">{I.plus}</span>{t("createVm")}
         </button>
-        <button className="btn" onClick={onFetchVms} disabled={vmLoading}>
+        <button type="button" className="btn" onClick={onFetchVms} disabled={vmLoading}>
           <span className="icon">{I.refresh}</span>{vmLoading ? t("loading") : t("refresh")}
         </button>
-        <div style={{ flex: 1 }} />
-        <div className="hint">{t("vmHint")}</div>
+        <div className="toolbar-spacer" />
+        <div className="hint hint-subtle">{t("vmHint")}</div>
       </div>
 
       {vmError && <ErrorInline message={vmError} onDismiss={() => setVmError("")} />}
 
       {/* VM List */}
       {vms.length === 0 ? (
-        <div className="empty-state">
+        <div className="empty-state empty-state-lg">
           <div className="empty-icon">{I.server}</div>
           <h3>{t("noVms")}</h3>
           <p>{t("createFirstVm")}</p>
-          <button className="btn primary" style={{ marginTop: 16 }} onClick={() => setShowCreateModal(true)}>
+          <button type="button" className="btn primary" onClick={() => setShowCreateModal(true)}>
             <span className="icon">{I.plus}</span>{t("createVm")}
           </button>
         </div>
@@ -233,16 +241,41 @@ export function Vms({
             const isRunning = vm.state === "running"
             const isExpanded = expandedVmId === vm.id
             const stats = isRunning ? vmStatsMap[vm.id] : undefined
+            const isActing = vmActing === vm.id
             return (
-              <div key={vm.id} className={`vm-item ${isExpanded ? "vm-item-expanded" : ""} ${isRunning ? "vm-item-running" : ""}`}>
+              <div key={vm.id} className={`vm-item${isExpanded ? " vm-item-expanded" : ""}${isRunning ? " vm-item-running" : ""}${isActing ? " vm-item-acting" : ""}`}>
+                {/* Main row */}
                 <div className="vm-item-row" onClick={() => setExpandedVmId(isExpanded ? null : vm.id)}>
-                  <div className={`vm-icon ${isRunning ? "" : "stopped"}`}>{I.server}</div>
+                  <div className={`vm-icon${isRunning ? "" : " stopped"}`}>{I.server}</div>
                   <div className="vm-item-info">
                     <div className="vm-item-name">{vm.name}</div>
-                    <div className="vm-item-meta">
-                      {vm.cpus} vCPU · {vm.memory_mb} MB · {vm.disk_gb} GB
-                      {vm.rosetta_enabled && " · Rosetta"}
-                      {vm.os_image && ` · ${vm.os_image}`}
+                    <div className="vm-item-meta vm-item-meta-rich">
+                      <span className="vm-meta-spec">
+                        <span className="vm-meta-icon">{I.cpu}</span>
+                        {vm.cpus} vCPU
+                      </span>
+                      <span className="vm-meta-sep">&middot;</span>
+                      <span className="vm-meta-spec">
+                        <span className="vm-meta-icon">{I.memory}</span>
+                        {vm.memory_mb} MB
+                      </span>
+                      <span className="vm-meta-sep">&middot;</span>
+                      <span className="vm-meta-spec">
+                        <span className="vm-meta-icon">{I.hardDrive}</span>
+                        {vm.disk_gb} GB
+                      </span>
+                      {vm.rosetta_enabled && (
+                        <>
+                          <span className="vm-meta-sep">&middot;</span>
+                          <span className="vm-meta-rosetta">Rosetta</span>
+                        </>
+                      )}
+                      {vm.os_image && (
+                        <>
+                          <span className="vm-meta-sep">&middot;</span>
+                          <span className="muted">{vm.os_image}</span>
+                        </>
+                      )}
                     </div>
                     {isRunning && stats && (
                       <div className="vm-item-stats">
@@ -254,187 +287,323 @@ export function Vms({
                       </div>
                     )}
                   </div>
-                  <div className="vm-item-status">
-                    <span className={`dot ${isRunning ? "running" : "stopped"}`} />
-                    <span>{vm.state}</span>
+
+                  {/* Status badge */}
+                  <div className={`vm-status-pill${isRunning ? " running" : " stopped"}`}>
+                    <span className={`dot${isRunning ? " running" : " stopped"}`} />
+                    <span className={`vm-status-label${isRunning ? " running" : " stopped"}`}>{vm.state}</span>
                   </div>
+
+                  {/* Actions */}
                   <div className="vm-item-actions">
                     {isRunning ? (
-                      <button className="action-btn" disabled={vmActing === vm.id} onClick={e => { e.stopPropagation(); onVmAction("vm_stop", vm.id) }} title={t("stop")}>{I.stop}</button>
+                      <button type="button" className="action-btn action-stop" disabled={isActing}
+                        onClick={e => { e.stopPropagation(); onVmAction("vm_stop", vm.id) }}
+                        title={t("stop")}>
+                        {I.stop}
+                      </button>
                     ) : (
-                      <button className="action-btn" disabled={vmActing === vm.id} onClick={e => { e.stopPropagation(); onVmAction("vm_start", vm.id) }} title={t("start")}>{I.play}</button>
+                      <button type="button" className="action-btn action-start" disabled={isActing}
+                        onClick={e => { e.stopPropagation(); onVmAction("vm_start", vm.id) }}
+                        title={t("start")}>
+                        {I.play}
+                      </button>
                     )}
-                    <button className="action-btn" disabled={vmActing === vm.id} onClick={e => { e.stopPropagation(); onLoginCmd(vm) }} title={t("loginCommand")}>{I.terminal}</button>
-                    <button className="action-btn" onClick={e => { e.stopPropagation(); openConsole(vm) }} title={t("console")}>{I.fileText}</button>
-                    <button className="action-btn danger" disabled={vmActing === vm.id} onClick={e => { e.stopPropagation(); onVmAction("vm_delete", vm.id) }} title={t("delete")}>{I.trash}</button>
+                    <button type="button" className="action-btn" disabled={isActing}
+                      onClick={e => { e.stopPropagation(); onLoginCmd(vm) }}
+                      title={t("loginCommand")}>{I.terminal}</button>
+                    <button type="button" className="action-btn"
+                      onClick={e => { e.stopPropagation(); openConsole(vm) }}
+                      title={t("console")}>{I.fileText}</button>
+                    <div className="vm-actions-sep" />
+                    <button type="button" className="action-btn danger" disabled={isActing}
+                      onClick={e => { e.stopPropagation(); onVmAction("vm_delete", vm.id) }}
+                      title={t("delete")}>{I.trash}</button>
                   </div>
+
                   <div className="vm-chevron">{isExpanded ? I.chevronDown : I.chevronRight}</div>
                 </div>
 
                 {/* Expanded detail panel */}
                 {isExpanded && (
-                  <div className="vm-detail">
-                    <div className="vm-detail-tabs">
-                      <button className={`vm-tab ${activeTab === "info" ? "active" : ""}`} onClick={() => setActiveTab("info")}>{t("status")}</button>
-                      <button className={`vm-tab ${activeTab === "ssh" ? "active" : ""}`} onClick={() => setActiveTab("ssh")}>{t("loginCommand")}</button>
-                      <button className={`vm-tab ${activeTab === "mounts" ? "active" : ""}`} onClick={() => setActiveTab("mounts")}>{t("virtiofs")}</button>
-                      <button className={`vm-tab ${activeTab === "console" ? "active" : ""}`} onClick={() => setActiveTab("console")}>{t("console")}</button>
-                      <button className={`vm-tab ${activeTab === "ports" ? "active" : ""}`} onClick={() => setActiveTab("ports")}>{t("portForwarding")}</button>
+                  <div className="vm-detail vm-detail-animated">
+                    {/* Tab navigation with icons */}
+                    <div className="vm-detail-tabs vm-detail-tabs-enhanced">
+                      {tabConfig.map(tab => (
+                        <button type="button" key={tab.key}
+                          className={`vm-tab vm-tab-icon${activeTab === tab.key ? " active" : ""}`}
+                          onClick={() => setActiveTab(tab.key)}>
+                          <span className="vm-tab-icon-svg">{tab.icon}</span>
+                          {tab.label}
+                        </button>
+                      ))}
                     </div>
 
+                    {/* === Info Tab === */}
                     {activeTab === "info" && (
-                      <div className="vm-detail-content">
-                        <div className="vm-stats-grid">
-                          <div className="vm-stat-card">
-                            <div className="vm-stat-label">ID</div>
+                      <div className="vm-detail-content vm-detail-content-padded">
+                        <div className="vm-stats-grid vm-stats-grid-enhanced">
+                          <div className="vm-stat-card vm-stat-card-enhanced">
+                            <div className="vm-stat-label vm-stat-label-icon">
+                              <span className="vm-stat-label-icon-svg">{I.server}</span>
+                              ID
+                            </div>
                             <div className="vm-stat-value mono">{vm.id}</div>
                           </div>
-                          <div className="vm-stat-card">
-                            <div className="vm-stat-label">{t("cpus")}</div>
-                            <div className="vm-stat-value">{vm.cpus} vCPU</div>
+                          <div className="vm-stat-card vm-stat-card-enhanced">
+                            <div className="vm-stat-label vm-stat-label-icon">
+                              <span className="vm-stat-label-icon-svg">{I.cpu}</span>
+                              {t("cpus")}
+                            </div>
+                            <div className="vm-stat-value vm-stat-value-lg">{vm.cpus} <span className="vm-stat-value-unit">vCPU</span></div>
                           </div>
-                          <div className="vm-stat-card">
-                            <div className="vm-stat-label">{t("memoryMb")}</div>
-                            <div className="vm-stat-value">{vm.memory_mb} MB</div>
+                          <div className="vm-stat-card vm-stat-card-enhanced">
+                            <div className="vm-stat-label vm-stat-label-icon">
+                              <span className="vm-stat-label-icon-svg">{I.memory}</span>
+                              {t("memoryMb")}
+                            </div>
+                            <div className="vm-stat-value vm-stat-value-lg">{vm.memory_mb} <span className="vm-stat-value-unit">MB</span></div>
                           </div>
-                          <div className="vm-stat-card">
-                            <div className="vm-stat-label">{t("diskGb")}</div>
-                            <div className="vm-stat-value">{vm.disk_gb} GB</div>
+                          <div className="vm-stat-card vm-stat-card-enhanced">
+                            <div className="vm-stat-label vm-stat-label-icon">
+                              <span className="vm-stat-label-icon-svg">{I.hardDrive}</span>
+                              {t("diskGb")}
+                            </div>
+                            <div className="vm-stat-value vm-stat-value-lg">{vm.disk_gb} <span className="vm-stat-value-unit">GB</span></div>
                           </div>
-                          <div className="vm-stat-card">
+                          <div className="vm-stat-card vm-stat-card-enhanced">
                             <div className="vm-stat-label">Rosetta</div>
-                            <div className="vm-stat-value">{vm.rosetta_enabled ? "ON" : "OFF"}</div>
+                            <div className="vm-stat-value">
+                              <span className={`vm-inline-pill${vm.rosetta_enabled ? " on" : " off"}`}>
+                                <span className={`dot${vm.rosetta_enabled ? " running" : " stopped"}`} />
+                                {vm.rosetta_enabled ? "ON" : "OFF"}
+                              </span>
+                            </div>
                           </div>
                           {vm.os_image && (
-                            <div className="vm-stat-card">
+                            <div className="vm-stat-card vm-stat-card-enhanced">
                               <div className="vm-stat-label">{t("osImage")}</div>
                               <div className="vm-stat-value">{vm.os_image}</div>
                             </div>
                           )}
-                          <div className="vm-stat-card">
+                          <div className="vm-stat-card vm-stat-card-enhanced">
                             <div className="vm-stat-label">{t("state")}</div>
                             <div className="vm-stat-value">
-                              <span className={`dot ${isRunning ? "running" : "stopped"}`} style={{ display: "inline-block", marginRight: 6 }} />
-                              {vm.state}
+                              <span className={`vm-state-pill${isRunning ? " running" : " stopped"}`}>
+                                <span className={`dot${isRunning ? " running" : " stopped"}`} />
+                                {vm.state}
+                              </span>
                             </div>
                           </div>
                         </div>
                       </div>
                     )}
 
+                    {/* === SSH Tab === */}
                     {activeTab === "ssh" && (
-                      <div className="vm-detail-content">
-                        <div className="vm-detail-form">
-                          <div className="vm-form-row">
-                            <label>{t("user")}</label>
-                            <input className="input" value={vmLoginUser} onChange={e => setVmLoginUser(e.target.value)} />
+                      <div className="vm-detail-content vm-detail-content-padded">
+                        <div className="vm-section-card">
+                          <div className="vm-section-card-header">
+                            <span className="vm-section-card-icon">{I.terminal}</span>
+                            <span className="vm-section-card-title">SSH {t("loginCommand")}</span>
                           </div>
-                          <div className="vm-form-row">
-                            <label>{t("host")}</label>
-                            <input className="input" value={vmLoginHost} onChange={e => setVmLoginHost(e.target.value)} />
-                          </div>
-                          <div className="vm-form-row">
-                            <label>{t("port")}</label>
-                            <input className="input" type="number" min={1} value={vmLoginPort} onChange={e => setVmLoginPort(e.target.value === "" ? "" : Number(e.target.value))} />
-                          </div>
-                          <button className="btn primary" onClick={() => onLoginCmd(vm)}>
-                            <span className="icon">{I.terminal}</span>{t("loginCommand")}
-                          </button>
-                          <div className="hint">{t("vmLoginHint")}</div>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeTab === "mounts" && (
-                      <div className="vm-detail-content">
-                        {isRunning && (
-                          <div className="hint" style={{ marginBottom: 8, color: "var(--yellow, #f0c040)" }}>
-                            {t("virtiofsRestartNotice")}
-                          </div>
-                        )}
-                        {vm.mounts?.length > 0 && (
-                          <div className="vm-mount-list">
-                            {vm.mounts.map(m => (
-                              <div className="vm-mount-item" key={`${vm.id}-${m.tag}`}>
-                                <span className="vm-mount-tag">{m.tag}</span>
-                                <span className="vm-mount-path">{m.host_path} &rarr; {m.guest_path}</span>
-                                <span className="vm-mount-mode">{m.read_only ? "RO" : "RW"}</span>
-                                <button className="btn tiny" onClick={() => onRemoveMount(vm.id, m.tag)}>{t("remove")}</button>
+                          <div className="vm-detail-form vm-detail-form-spaced">
+                            <div className="vm-form-row vm-form-row-spaced">
+                              <label htmlFor={`ssh-user-${vm.id}`}>{t("user")}</label>
+                              <input id={`ssh-user-${vm.id}`} className="input" value={vmLoginUser} onChange={e => setVmLoginUser(e.target.value)} placeholder="root" />
+                            </div>
+                            <div className="vm-form-grid-2-narrow">
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`ssh-host-${vm.id}`}>{t("host")}</label>
+                                <input id={`ssh-host-${vm.id}`} className="input input-full" value={vmLoginHost} onChange={e => setVmLoginHost(e.target.value)} placeholder="localhost" />
                               </div>
-                            ))}
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`ssh-port-${vm.id}`}>{t("port")}</label>
+                                <input id={`ssh-port-${vm.id}`} className="input input-full" type="number" min={1} value={vmLoginPort}
+                                  onChange={e => setVmLoginPort(e.target.value === "" ? "" : Number(e.target.value))}
+                                  placeholder="22" />
+                              </div>
+                            </div>
+                            <div className="vm-form-actions">
+                              <button type="button" className="btn primary" onClick={() => onLoginCmd(vm)}>
+                                <span className="icon">{I.terminal}</span>{t("loginCommand")}
+                              </button>
+                            </div>
+                            <div className="hint">{t("vmLoginHint")}</div>
                           </div>
-                        )}
-                        <div className="vm-detail-form" style={{ marginTop: vm.mounts?.length > 0 ? 12 : 0 }}>
-                          <div className="vm-form-row">
-                            <label>{t("tag")}</label>
-                            <input className="input" value={mountTag} onChange={e => { setMountVmId(vm.id); setMountTag(e.target.value) }} placeholder="code" />
-                          </div>
-                          <div className="vm-form-row">
-                            <label>{t("hostPath")}</label>
-                            <input className="input" value={mountHostPath} onChange={e => { setMountVmId(vm.id); setMountHostPath(e.target.value) }} placeholder="/Users/me/code" />
-                          </div>
-                          <div className="vm-form-row">
-                            <label>{t("guestPath")}</label>
-                            <input className="input" value={mountGuestPath} onChange={e => { setMountVmId(vm.id); setMountGuestPath(e.target.value) }} placeholder="/mnt/code" />
-                          </div>
-                          <div className="vm-form-check">
-                            <input type="checkbox" checked={mountReadonly} onChange={e => setMountReadonly(e.target.checked)} />
-                            <span>{t("readOnly")}</span>
-                          </div>
-                          <button className="btn" onClick={() => { setMountVmId(vm.id); onAddMount() }} disabled={!mountTag.trim() || !mountHostPath.trim()}>
-                            <span className="icon">{I.plus}</span>{t("addMount")}
-                          </button>
-                          <div className="hint">{t("virtiofsHint")}</div>
-                          <div className="hint" style={{ marginTop: 4, fontFamily: "monospace", fontSize: 11 }}>{t("virtiofsGuestHint")}</div>
                         </div>
                       </div>
                     )}
 
+                    {/* === Mounts Tab === */}
+                    {activeTab === "mounts" && (
+                      <div className="vm-detail-content vm-detail-content-padded">
+                        {isRunning && (
+                          <div className="vm-warning-banner">
+                            <span className="vm-warning-banner-icon">{I.alertCircle}</span>
+                            <span className="vm-warning-banner-text">{t("virtiofsRestartNotice")}</span>
+                          </div>
+                        )}
+
+                        {/* Existing mounts */}
+                        {vm.mounts?.length > 0 && (
+                          <div className="vm-list-section">
+                            <div className="vm-section-label">
+                              {t("virtiofs")} ({vm.mounts.length})
+                            </div>
+                            <div className="vm-mount-list">
+                              {vm.mounts.map(m => (
+                                <div className="vm-mount-item vm-mount-item-grid" key={`${vm.id}-${m.tag}`}>
+                                  <span className="vm-mount-tag-pill">{m.tag}</span>
+                                  <span className="vm-mount-path vm-mount-path-arrow">
+                                    <span className="path-text">{m.host_path}</span>
+                                    <span className="path-arrow">&rarr;</span>
+                                    <span className="path-text">{m.guest_path}</span>
+                                  </span>
+                                  <span className={`vm-mount-mode-badge${m.read_only ? " ro" : " rw"}`}>{m.read_only ? "RO" : "RW"}</span>
+                                  <button type="button" className="btn xs btn-remove" onClick={() => onRemoveMount(vm.id, m.tag)}>
+                                    <span className="btn-remove-icon">{I.trash}</span>
+                                    {t("remove")}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Add mount form */}
+                        <div className="vm-section-card wide">
+                          <div className="vm-section-card-header">
+                            <span className="vm-section-card-icon">{I.plus}</span>
+                            <span className="vm-section-card-title">{t("addMount")}</span>
+                          </div>
+                          <div className="vm-detail-form vm-detail-form-spaced">
+                            <div className="vm-form-row vm-form-row-spaced">
+                              <label htmlFor={`mount-tag-${vm.id}`}>{t("tag")}</label>
+                              <input id={`mount-tag-${vm.id}`} className="input" value={mountTag}
+                                onChange={e => { setMountVmId(vm.id); setMountTag(e.target.value) }}
+                                placeholder="code" />
+                            </div>
+                            <div className="vm-form-grid-2">
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`mount-host-${vm.id}`}>{t("hostPath")}</label>
+                                <input id={`mount-host-${vm.id}`} className="input input-full" value={mountHostPath}
+                                  onChange={e => { setMountVmId(vm.id); setMountHostPath(e.target.value) }}
+                                  placeholder="/Users/me/code" />
+                              </div>
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`mount-guest-${vm.id}`}>{t("guestPath")}</label>
+                                <input id={`mount-guest-${vm.id}`} className="input input-full" value={mountGuestPath}
+                                  onChange={e => { setMountVmId(vm.id); setMountGuestPath(e.target.value) }}
+                                  placeholder="/mnt/code" />
+                              </div>
+                            </div>
+                            <div className="vm-form-check">
+                              <input type="checkbox" id={`mount-ro-${vm.id}`} checked={mountReadonly} onChange={e => setMountReadonly(e.target.checked)} />
+                              <label htmlFor={`mount-ro-${vm.id}`}>{t("readOnly")}</label>
+                            </div>
+                            <div className="vm-form-actions">
+                              <button type="button" className="btn primary"
+                                onClick={() => { setMountVmId(vm.id); onAddMount() }}
+                                disabled={!mountTag.trim() || !mountHostPath.trim()}>
+                                <span className="icon">{I.plus}</span>{t("addMount")}
+                              </button>
+                            </div>
+                            <div className="hint">{t("virtiofsHint")}</div>
+                            <div className="hint vm-code-hint">{t("virtiofsGuestHint")}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* === Console Tab === */}
                     {activeTab === "console" && (
-                      <div className="vm-detail-content">
-                        <div style={{ marginBottom: 8 }}>
-                          <button className="btn sm" onClick={() => openConsole(vm)}>
+                      <div className="vm-detail-content vm-detail-content-padded">
+                        <div className="vm-console-card">
+                          <div className="vm-console-card-icon">
+                            <span className="vm-console-card-icon-svg">{I.terminal}</span>
+                          </div>
+                          <div className="vm-console-card-title">{t("vmConsole")}</div>
+                          <div className="hint vm-console-card-hint">{t("vmHint")}</div>
+                          <button type="button" className="btn primary" onClick={() => openConsole(vm)}>
                             <span className="icon">{I.terminal}</span>{t("vmConsole")}
                           </button>
                         </div>
-                        <div className="hint">{t("vmHint")}</div>
                       </div>
                     )}
 
+                    {/* === Port Forwarding Tab === */}
                     {activeTab === "ports" && (
-                      <div className="vm-detail-content">
+                      <div className="vm-detail-content vm-detail-content-padded">
+                        {/* Existing port forwards */}
                         {vm.port_forwards?.length > 0 && (
-                          <div className="vm-mount-list">
-                            {vm.port_forwards.map(pf => (
-                              <div className="vm-mount-item" key={`${vm.id}-pf-${pf.host_port}`}>
-                                <span className="vm-mount-tag">{pf.host_port}</span>
-                                <span className="vm-mount-path">{pf.host_port} → {pf.guest_port}</span>
-                                <span className="vm-mount-mode">{pf.protocol.toUpperCase()}</span>
-                                <button className="btn tiny" onClick={() => onRemovePortForward(vm.id, pf.host_port)}>{t("remove")}</button>
-                              </div>
-                            ))}
+                          <div className="vm-list-section">
+                            <div className="vm-section-label">
+                              {t("portForwarding")} ({vm.port_forwards.length})
+                            </div>
+                            <div className="vm-mount-list">
+                              {vm.port_forwards.map(pf => (
+                                <div className="vm-mount-item vm-mount-item-grid" key={`${vm.id}-pf-${pf.host_port}`}>
+                                  <span className="vm-pf-host">
+                                    <span className="vm-pf-icon">{I.globe}</span>
+                                    :{pf.host_port}
+                                  </span>
+                                  <span className="vm-pf-mapping">
+                                    <span className="pf-arrow">&rarr;</span>
+                                    <span className="pf-guest">:{pf.guest_port}</span>
+                                  </span>
+                                  <span className="vm-pf-protocol">{pf.protocol.toUpperCase()}</span>
+                                  <button type="button" className="btn xs btn-remove" onClick={() => onRemovePortForward(vm.id, pf.host_port)}>
+                                    <span className="btn-remove-icon">{I.trash}</span>
+                                    {t("remove")}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
-                        <div className="vm-detail-form" style={{ marginTop: vm.port_forwards?.length > 0 ? 12 : 0 }}>
-                          <div className="vm-form-row">
-                            <label>{t("hostPort")}</label>
-                            <input className="input" type="number" min={1} max={65535} value={pfHostPort} onChange={e => { setPfVmId(vm.id); setPfHostPort(e.target.value === "" ? "" : Number(e.target.value)) }} placeholder="8080" />
+
+                        {/* Add port forward form */}
+                        <div className="vm-section-card">
+                          <div className="vm-section-card-header">
+                            <span className="vm-section-card-icon">{I.plus}</span>
+                            <span className="vm-section-card-title">{t("addPortForward")}</span>
                           </div>
-                          <div className="vm-form-row">
-                            <label>{t("guestPort")}</label>
-                            <input className="input" type="number" min={1} max={65535} value={pfGuestPort} onChange={e => { setPfVmId(vm.id); setPfGuestPort(e.target.value === "" ? "" : Number(e.target.value)) }} placeholder="80" />
+                          <div className="vm-detail-form vm-detail-form-spaced">
+                            <div className="vm-form-grid-3">
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`pf-host-${vm.id}`}>{t("hostPort")}</label>
+                                <input id={`pf-host-${vm.id}`} className="input input-full" type="number" min={1} max={65535}
+                                  value={pfHostPort}
+                                  onChange={e => { setPfVmId(vm.id); setPfHostPort(e.target.value === "" ? "" : Number(e.target.value)) }}
+                                  placeholder="8080" />
+                              </div>
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`pf-guest-${vm.id}`}>{t("guestPort")}</label>
+                                <input id={`pf-guest-${vm.id}`} className="input input-full" type="number" min={1} max={65535}
+                                  value={pfGuestPort}
+                                  onChange={e => { setPfVmId(vm.id); setPfGuestPort(e.target.value === "" ? "" : Number(e.target.value)) }}
+                                  placeholder="80" />
+                              </div>
+                              <div className="vm-form-row vm-form-row-spaced">
+                                <label htmlFor={`pf-proto-${vm.id}`}>{t("protocol")}</label>
+                                <select id={`pf-proto-${vm.id}`} className="input input-full" title={t("protocol")}
+                                  value={pfProtocol}
+                                  onChange={e => { setPfVmId(vm.id); setPfProtocol(e.target.value) }}>
+                                  <option value="tcp">TCP</option>
+                                  <option value="udp">UDP</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="vm-form-actions">
+                              <button type="button" className="btn primary"
+                                onClick={() => { setPfVmId(vm.id); onAddPortForward() }}
+                                disabled={pfHostPort === "" || pfGuestPort === ""}>
+                                <span className="icon">{I.plus}</span>{t("addPortForward")}
+                              </button>
+                            </div>
+                            <div className="hint">{t("portForwardHint")}</div>
                           </div>
-                          <div className="vm-form-row">
-                            <label>{t("protocol")}</label>
-                            <select className="input" value={pfProtocol} onChange={e => { setPfVmId(vm.id); setPfProtocol(e.target.value) }}>
-                              <option value="tcp">TCP</option>
-                              <option value="udp">UDP</option>
-                            </select>
-                          </div>
-                          <button className="btn" onClick={() => { setPfVmId(vm.id); onAddPortForward() }} disabled={pfHostPort === "" || pfGuestPort === ""}>
-                            <span className="icon">{I.plus}</span>{t("addPortForward")}
-                          </button>
-                          <div className="hint">{t("portForwardHint")}</div>
                         </div>
                       </div>
                     )}
@@ -446,31 +615,35 @@ export function Vms({
         </div>
       )}
 
-      {/* Create VM Modal */}
+      {/* ============ Create VM Modal ============ */}
       {showCreateModal && (
         <div className="modal-backdrop" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
-            <div className="modal-head">
-              <div className="modal-title">{t("createVm")}</div>
+          <div className="modal modal-create-vm" onClick={e => e.stopPropagation()}>
+            <div className="modal-head modal-head-enhanced">
+              <div className="modal-head-left">
+                <div className="modal-head-icon purple">
+                  <span className="modal-head-icon-svg">{I.server}</span>
+                </div>
+                <div className="modal-title modal-title-lg">{t("createVm")}</div>
+              </div>
               <div className="modal-actions">
-                <button className="icon-btn" onClick={() => setShowCreateModal(false)} title={t("close")}>&times;</button>
+                <button type="button" className="icon-btn" onClick={() => setShowCreateModal(false)} title={t("close")}>&times;</button>
               </div>
             </div>
-            <div className="modal-body">
-              <div className="form">
+            <div className="modal-body modal-body-padded">
+              <div className="form form-spaced">
+                {/* VM Name */}
                 <div className="row">
-                  <label>{t("name")}</label>
-                  <input className="input" value={vmName} onChange={e => setVmName(e.target.value)} placeholder="myvm" autoFocus />
+                  <label htmlFor="vm-create-name">{t("name")}</label>
+                  <input id="vm-create-name" className="input input-lg" value={vmName} onChange={e => setVmName(e.target.value)}
+                    placeholder="myvm" autoFocus />
                 </div>
 
                 {/* OS Image selector */}
                 <div className="row">
-                  <label>{t("osImage")}</label>
-                  <select
-                    className="input"
-                    value={selectedOsImage}
-                    onChange={e => setSelectedOsImage(e.target.value)}
-                  >
+                  <label htmlFor="vm-create-os">{t("osImage")}</label>
+                  <select id="vm-create-os" className="input input-lg" title={t("osImage")} value={selectedOsImage}
+                    onChange={e => setSelectedOsImage(e.target.value)}>
                     <option value="">{t("osImageNone")}</option>
                     {osImages.map(img => (
                       <option key={img.id} value={img.id} disabled={img.status !== "ready"}>
@@ -484,135 +657,173 @@ export function Vms({
                 </div>
 
                 {/* OS Image list with download/delete actions */}
-                <div className="os-image-list" style={{ margin: "8px 0" }}>
-                  {osImages.map(img => {
-                    const isDownloading = downloadingImage === img.id
-                    const progressPct = downloadProgress && downloadProgress.image_id === img.id && downloadProgress.bytes_total > 0
-                      ? Math.min(100, (downloadProgress.bytes_downloaded / downloadProgress.bytes_total) * 100)
-                      : 0
-                    return (
-                      <div key={img.id} className="os-image-item" style={{
-                        display: "flex", alignItems: "center", gap: 8,
-                        padding: "6px 0", borderBottom: "1px solid var(--border, #333)"
-                      }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 500, fontSize: 13 }}>{img.name}</div>
-                          <div style={{ fontSize: 11, opacity: 0.7 }}>
-                            {img.arch} &middot; {t("osImageVersion")} {img.version} &middot; {formatBytes(img.size_bytes)}
+                {osImages.length > 0 && (
+                  <div className="os-image-list-container">
+                    <div className="os-image-list-header">Available Images</div>
+                    {osImages.map(img => {
+                      const isDownloading = downloadingImage === img.id
+                      const progressPct = downloadProgress && downloadProgress.image_id === img.id && downloadProgress.bytes_total > 0
+                        ? Math.min(100, (downloadProgress.bytes_downloaded / downloadProgress.bytes_total) * 100)
+                        : 0
+                      return (
+                        <div key={img.id} className="os-image-list-item">
+                          {/* Icon */}
+                          <div className={`os-image-list-icon${img.status === "ready" ? " ready" : ""}`}>
+                            <span className="os-image-list-icon-svg">{I.hardDrive}</span>
                           </div>
-                          {isDownloading && (
-                            <div style={{ marginTop: 4 }}>
-                              <div style={{
-                                height: 4, borderRadius: 2,
-                                background: "var(--border, #444)", overflow: "hidden"
-                              }}>
-                                <div style={{
-                                  height: "100%", width: `${progressPct}%`,
-                                  background: "var(--accent, #4ea6f5)",
-                                  transition: "width 0.3s ease"
-                                }} />
-                              </div>
-                              <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
-                                {t("osImageProgress")}: {progressPct.toFixed(1)}%
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                          {img.status === "not_downloaded" && (
-                            <button
-                              className="btn tiny"
-                              disabled={!!downloadingImage}
-                              onClick={() => onDownloadOsImage(img.id)}
-                            >
-                              {t("osImageDownload")}
-                            </button>
-                          )}
-                          {img.status === "downloading" && (
-                            <span style={{ fontSize: 11, opacity: 0.7 }}>{t("osImageDownloading")}</span>
-                          )}
-                          {img.status === "ready" && (
-                            <>
-                              <span style={{ fontSize: 11, color: "var(--green, #4caf50)", fontWeight: 500 }}>
-                                {t("osImageReady")}
-                              </span>
-                              <button
-                                className="btn tiny"
-                                onClick={() => onDeleteOsImage(img.id)}
-                              >
-                                {t("osImageDelete")}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
 
+                          {/* Info */}
+                          <div className="os-image-info">
+                            <div className="os-image-name">{img.name}</div>
+                            <div className="os-image-meta">
+                              <span>{img.arch}</span>
+                              <span className="vm-meta-sep">&middot;</span>
+                              <span>v{img.version}</span>
+                              <span className="vm-meta-sep">&middot;</span>
+                              <span>{formatBytes(img.size_bytes)}</span>
+                            </div>
+                            {isDownloading && (
+                              <div className="os-image-progress">
+                                <div className="os-image-progress-track">
+                                  <div className="os-image-progress-fill" style={{ width: `${progressPct}%` }} />
+                                </div>
+                                <div className="os-image-progress-text">
+                                  <span>{t("osImageProgress")}</span>
+                                  <span className="os-image-progress-pct">{progressPct.toFixed(1)}%</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Status / Actions */}
+                          <div className="os-image-actions">
+                            {img.status === "not_downloaded" && (
+                              <button type="button" className="btn xs btn-download"
+                                disabled={!!downloadingImage}
+                                onClick={() => onDownloadOsImage(img.id)}>
+                                {t("osImageDownload")}
+                              </button>
+                            )}
+                            {img.status === "downloading" && (
+                              <span className="os-image-downloading">
+                                <span className="spinner" />
+                                {t("osImageDownloading")}
+                              </span>
+                            )}
+                            {img.status === "ready" && (
+                              <>
+                                <span className="os-image-ready-badge">
+                                  <span className="dot running" />
+                                  {t("osImageReady")}
+                                </span>
+                                <button type="button" className="btn xs" onClick={() => onDeleteOsImage(img.id)}>
+                                  <span className="btn-remove-icon">{I.trash}</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Hardware specs */}
+                <div className="form-section-divider">Hardware Configuration</div>
                 <div className="row two">
                   <div>
-                    <label>{t("cpus")}</label>
-                    <input className="input" type="number" min={1} value={vmCpus} onChange={e => setVmCpus(Number(e.target.value) || 2)} />
+                    <label htmlFor="vm-create-cpus" className="form-label-icon">
+                      <span className="vm-stat-label-icon-svg">{I.cpu}</span>
+                      {t("cpus")}
+                    </label>
+                    <input id="vm-create-cpus" className="input input-lg" type="number" min={1} value={vmCpus}
+                      onChange={e => setVmCpus(Number(e.target.value) || 2)} />
                   </div>
                   <div>
-                    <label>{t("memoryMb")}</label>
-                    <input className="input" type="number" min={256} value={vmMem} onChange={e => setVmMem(Number(e.target.value) || 2048)} />
+                    <label htmlFor="vm-create-mem" className="form-label-icon">
+                      <span className="vm-stat-label-icon-svg">{I.memory}</span>
+                      {t("memoryMb")}
+                    </label>
+                    <input id="vm-create-mem" className="input input-lg" type="number" min={256} value={vmMem}
+                      onChange={e => setVmMem(Number(e.target.value) || 2048)} />
                   </div>
                 </div>
                 <div className="row">
-                  <label>{t("diskGb")}</label>
-                  <input className="input" type="number" min={10} value={vmDisk} onChange={e => setVmDisk(Number(e.target.value) || 20)} />
+                  <label htmlFor="vm-create-disk" className="form-label-icon">
+                    <span className="vm-stat-label-icon-svg">{I.hardDrive}</span>
+                    {t("diskGb")}
+                  </label>
+                  <input id="vm-create-disk" className="input input-lg" type="number" min={10} value={vmDisk}
+                    onChange={e => setVmDisk(Number(e.target.value) || 20)} />
                 </div>
                 <div className="row inline">
-                  <input type="checkbox" checked={vmRosetta} onChange={e => setVmRosetta(e.target.checked)} />
-                  <span>{t("enableRosetta")}</span>
+                  <input type="checkbox" id="vm-create-rosetta" checked={vmRosetta} onChange={e => setVmRosetta(e.target.checked)} />
+                  <label htmlFor="vm-create-rosetta">{t("enableRosetta")}</label>
                 </div>
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setShowCreateModal(false)}>{t("close")}</button>
-              <button className="btn primary" disabled={vmActing === "create" || !vmName.trim()} onClick={handleCreate} style={{ marginLeft: 8 }}>
-                {vmActing === "create" ? t("creating") : t("create")}
+            <div className="modal-footer modal-footer-padded">
+              <button type="button" className="btn" onClick={() => setShowCreateModal(false)}>{t("close")}</button>
+              <button type="button" className="btn primary"
+                disabled={vmActing === "create" || !vmName.trim()}
+                onClick={handleCreate}>
+                {vmActing === "create" ? (
+                  <><span className="spinner btn-spinner" />{t("creating")}</>
+                ) : (
+                  <><span className="icon">{I.plus}</span>{t("create")}</>
+                )}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Console Modal */}
+      {/* ============ Console Modal ============ */}
       {consoleVmId && (
         <div className="modal-backdrop" onClick={closeConsole}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 800, width: "96vw" }}>
-            <div className="modal-head">
-              <div className="modal-title">{t("vmConsole")} — {consoleVmName}</div>
+          <div className="modal modal-console" onClick={e => e.stopPropagation()}>
+            <div className="modal-head modal-head-enhanced">
+              <div className="modal-head-left">
+                <div className="modal-head-icon green">
+                  <span className="modal-head-icon-svg">{I.terminal}</span>
+                </div>
+                <div className="modal-title modal-title-lg">
+                  {t("vmConsole")}
+                  <span className="modal-title-sub">— {consoleVmName}</span>
+                </div>
+              </div>
               <div className="modal-actions">
-                <button className="icon-btn" onClick={closeConsole} title={t("close")}>×</button>
+                <button type="button" className="icon-btn" onClick={closeConsole} title={t("close")}>×</button>
               </div>
             </div>
             <div className="console-toolbar">
-              <label className="console-auto-scroll">
-                <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
+              <label className="console-auto-scroll" htmlFor="console-auto-scroll-cb">
+                <input type="checkbox" id="console-auto-scroll-cb" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
                 {t("autoScroll")}
               </label>
               <div className="console-toolbar-right">
-                <button className="btn xs" onClick={() => { setConsoleData("") }}>
+                <button type="button" className="btn xs" onClick={() => { setConsoleData("") }}>
                   {t("clear")}
                 </button>
-                <button className="btn xs" onClick={copyConsole}>
+                <button type="button" className="btn xs" onClick={copyConsole}>
                   <span className="icon">{I.copy}</span>{t("copy")}
                 </button>
               </div>
             </div>
-            <div className="console-viewer" ref={consoleContainerRef}>
-              {consoleData ? (
-                <pre className="console-content">{consoleData}<div ref={consoleEndRef} /></pre>
-              ) : (
-                <div className="console-empty">{t("noConsoleOutput")}</div>
-              )}
+            <div className="console-viewer-padded">
+              <div className="console-viewer console-viewer-lg" ref={consoleContainerRef}>
+                {consoleData ? (
+                  <pre className="console-content">{consoleData}<div ref={consoleEndRef} /></pre>
+                ) : (
+                  <div className="console-empty console-empty-enhanced">
+                    <span className="console-empty-icon">{I.terminal}</span>
+                    <span>{t("noConsoleOutput")}</span>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={closeConsole}>{t("close")}</button>
+            <div className="modal-footer modal-footer-padded">
+              <button type="button" className="btn" onClick={closeConsole}>{t("close")}</button>
             </div>
           </div>
         </div>

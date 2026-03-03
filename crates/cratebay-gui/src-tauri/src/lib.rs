@@ -298,6 +298,31 @@ pub struct ContainerInfo {
     ports: String,
 }
 
+fn format_published_ports(mut pairs: Vec<(u16, u16)>) -> String {
+    pairs.sort_unstable();
+    pairs
+        .into_iter()
+        .map(|(public, private)| format!("{}:{}", public, private))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_published_ports;
+
+    #[test]
+    fn format_published_ports_sorts_by_public_then_private() {
+        let out = format_published_ports(vec![(443, 443), (80, 8080), (80, 80), (8080, 80)]);
+        assert_eq!(out, "80:80, 80:8080, 443:443, 8080:80");
+    }
+
+    #[test]
+    fn format_published_ports_empty_is_empty() {
+        assert_eq!(format_published_ports(vec![]), "");
+    }
+}
+
 #[derive(Serialize)]
 pub struct VolumeInfo {
     name: String,
@@ -362,16 +387,13 @@ async fn list_containers() -> Result<Vec<ContainerInfo>, String> {
     Ok(containers
         .into_iter()
         .map(|c| {
-            let ports = c
+            let published = c
                 .ports
                 .unwrap_or_default()
-                .iter()
-                .filter_map(|p| {
-                    p.public_port
-                        .map(|pub_p| format!("{}:{}", pub_p, p.private_port))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+                .into_iter()
+                .filter_map(|p| p.public_port.map(|public| (public, p.private_port)))
+                .collect::<Vec<_>>();
+            let ports = format_published_ports(published);
 
             let full_id = c.id.unwrap_or_default();
             let id = full_id.chars().take(12).collect::<String>();
@@ -1460,7 +1482,7 @@ async fn volume_list() -> Result<Vec<VolumeInfo>, String> {
         .map_err(|e| e.to_string())?;
 
     let volumes = resp.volumes.unwrap_or_default();
-    Ok(volumes
+    let mut out: Vec<VolumeInfo> = volumes
         .into_iter()
         .map(|v| VolumeInfo {
             name: v.name,
@@ -1471,7 +1493,10 @@ async fn volume_list() -> Result<Vec<VolumeInfo>, String> {
             options: v.options,
             scope: v.scope.map(|s| format!("{:?}", s)).unwrap_or_default(),
         })
-        .collect())
+        .collect();
+    // Docker doesn't guarantee ordering; keep it stable to avoid UI jitter on refresh.
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 #[derive(Debug, Serialize)]

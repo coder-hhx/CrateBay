@@ -102,103 +102,140 @@ export function Dashboard({
 
   const hasRunning = running.length > 0 || runningVms.length > 0
 
+  const memPercent = totals.totalMemoryLimitMb > 0
+    ? (totals.totalMemoryUsageMb / totals.totalMemoryLimitMb) * 100
+    : 0
+  const cpuClamped = Math.min(totals.totalCpuPercent, 100)
+
   return (
     <div className="dashboard">
+      {/* Navigation overview cards */}
       <div className="dash-cards">
         <div className="dash-card" onClick={() => onNavigate("containers")}>
-          <div className="dash-card-icon">{I.box}</div>
-          <div className="dash-card-info">
+          <div className="dash-card-top">
+            <div className="dash-card-icon">{I.box}</div>
+            <div className="dash-card-sub">
+              {running.length > 0
+                ? <span className="dash-running"><span className="dot running" />{running.length} {t("runningCount")}</span>
+                : <span className="dash-idle">{t("noRunning") || "Idle"}</span>}
+            </div>
+          </div>
+          <div className="dash-card-bottom">
             <div className="dash-card-value">{containers.length}</div>
             <div className="dash-card-label">{t("containers")}</div>
           </div>
-          <div className="dash-card-sub">
-            {running.length > 0 && <span className="dash-running">{running.length} {t("runningCount")}</span>}
-          </div>
         </div>
+
         <div className="dash-card" onClick={() => onNavigate("vms")}>
-          <div className="dash-card-icon">{I.server}</div>
-          <div className="dash-card-info">
+          <div className="dash-card-top">
+            <div className="dash-card-icon icon-cyan">{I.server}</div>
+            <div className="dash-card-sub">
+              {vmsRunningCount > 0
+                ? <span className="dash-running"><span className="dot running" />{vmsRunningCount} {t("runningCount")}</span>
+                : <span className="dash-idle">{t("noRunning") || "Idle"}</span>}
+            </div>
+          </div>
+          <div className="dash-card-bottom">
             <div className="dash-card-value">{vmsCount}</div>
             <div className="dash-card-label">{t("vms")}</div>
           </div>
-          <div className="dash-card-sub">
-            {vmsCount > 0 && <span className="dash-running">{vmsRunningCount} {t("runningCount")}</span>}
-          </div>
         </div>
+
         <div className="dash-card" onClick={() => onNavigate("images")}>
-          <div className="dash-card-icon">{I.layers}</div>
-          <div className="dash-card-info">
+          <div className="dash-card-top">
+            <div className="dash-card-icon icon-green">{I.layers}</div>
+            <div className="dash-card-sub">
+              {imgResultsCount > 0 && <span className="dash-badge">{imgResultsCount} {t("searchResults")}</span>}
+            </div>
+          </div>
+          <div className="dash-card-bottom">
             <div className="dash-card-value">{installedImagesCount}</div>
             <div className="dash-card-label">{t("images")}</div>
           </div>
-          <div className="dash-card-sub">
-            {imgResultsCount > 0 && <span className="dash-badge">{imgResultsCount} {t("searchResults")}</span>}
-          </div>
         </div>
+
         <div className="dash-card" onClick={() => onNavigate("settings")}>
-          <div className="dash-card-icon">{I.settings}</div>
-          <div className="dash-card-info">
+          <div className="dash-card-top">
+            <div className="dash-card-icon icon-neutral">{I.settings}</div>
+            <div className="dash-card-sub">
+              <span className={`dash-status ${connected ? "online" : "offline"}`}>
+                <span className={`dot ${connected ? "on" : "off"}`} />
+                {connected ? "Docker " + t("connected") : t("disconnected")}
+              </span>
+            </div>
+          </div>
+          <div className="dash-card-bottom">
             <div className="dash-card-value">{connected ? "OK" : "--"}</div>
             <div className="dash-card-label">{t("system")}</div>
           </div>
-          <div className="dash-card-sub">
-            <span className={`dot ${connected ? "on" : "off"}`} />
-            <span>{connected ? "Docker " + t("connected") : t("disconnected")}</span>
-          </div>
         </div>
-
-        {hasRunning && (
-          <>
-            <div className="dash-card">
-              <div className="dash-card-icon" style={{ background: "rgba(139, 92, 246, 0.1)" }}>
-                {I.cpu}
-              </div>
-              <div className="dash-card-header">
-                <div className="dash-card-title">{t("cpuUsage")}</div>
-                <div className="dash-card-value">{totals.totalCpuPercent.toFixed(1)}%</div>
-              </div>
-            </div>
-            <div className="dash-card">
-              <div className="dash-card-icon" style={{ background: "rgba(34, 211, 238, 0.1)" }}>
-                {I.memory}
-              </div>
-              <div className="dash-card-header">
-                <div className="dash-card-title">{t("memoryUsage")}</div>
-                <div className="dash-card-value">
-                  {totals.totalMemoryUsageMb.toFixed(0)} MB
-                </div>
-              </div>
-              <div className="dash-card-footer">
-                <div className="dash-card-label">
-                  of {totals.totalMemoryLimitMb.toFixed(0)} MB
-                </div>
-              </div>
-            </div>
-          </>
-        )}
       </div>
 
-      {running.length > 0 && <>
-        <div className="section-title">{t("running")} ({running.length})</div>
-        {running.slice(0, 5).map(c => (
-          <div className="container-card" key={c.id}>
-            <div className="card-icon">{I.box}</div>
-            <div className="card-body">
-              <div className="card-name">{c.name}</div>
-              <div className="card-meta">{c.image} · {c.ports || c.id}</div>
-            </div>
-            <div className="card-status">
-              <span className="dot running" />
-              <span>{c.status}</span>
+      {/* Resource monitoring strip */}
+      {hasRunning && (
+        <div className="dash-resources">
+          <div className="dash-res-card">
+            <div className="dash-res-icon purple">{I.cpu}</div>
+            <div className="dash-res-body">
+              <div className="dash-res-header">
+                <span className="dash-res-title">{t("cpuUsage")}</span>
+                <span className="dash-res-value">{totals.totalCpuPercent.toFixed(1)}%</span>
+              </div>
+              <div className="dash-res-bar">
+                <div className="dash-res-bar-fill purple" style={{ width: `${cpuClamped}%` }} />
+              </div>
             </div>
           </div>
-        ))}
-        {running.length > 5 && (
-          <div className="view-all" onClick={() => onNavigate("containers")}>
-            {t("viewAll")} ({running.length})
+          <div className="dash-res-card">
+            <div className="dash-res-icon cyan">{I.memory}</div>
+            <div className="dash-res-body">
+              <div className="dash-res-header">
+                <span className="dash-res-title">{t("memoryUsage")}</span>
+                <span className="dash-res-value">{totals.totalMemoryUsageMb.toFixed(0)} / {totals.totalMemoryLimitMb.toFixed(0)} MB</span>
+              </div>
+              <div className="dash-res-bar">
+                <div className="dash-res-bar-fill cyan" style={{ width: `${Math.min(memPercent, 100)}%` }} />
+              </div>
+            </div>
           </div>
-        )}
-      </>}
+        </div>
+      )}
+
+      {running.length > 0 && (
+        <div className="dash-running-section">
+          <div className="dash-section-header">
+            <div className="dash-section-left">
+              <div className="dash-section-icon">{I.play}</div>
+              <span className="dash-section-title">{t("running")}</span>
+              <span className="dash-section-count">{running.length}</span>
+            </div>
+            {running.length > 5 && (
+              <div className="dash-section-action" onClick={() => onNavigate("containers")}>
+                {t("viewAll")} {I.chevronRight}
+              </div>
+            )}
+          </div>
+          <div className="dash-running-list">
+            {running.slice(0, 5).map((c, idx) => (
+              <div className="dash-running-item" key={c.id}>
+                <div className="dash-running-index">{idx + 1}</div>
+                <div className="dash-running-icon">{I.box}</div>
+                <div className="dash-running-body">
+                  <div className="dash-running-name">{c.name}</div>
+                  <div className="dash-running-meta">
+                    <span className="dash-running-image">{c.image}</span>
+                    {c.ports && <span className="dash-running-ports">{c.ports}</span>}
+                  </div>
+                </div>
+                <div className="dash-running-pill">
+                  <span className="dot running" />
+                  <span>{c.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

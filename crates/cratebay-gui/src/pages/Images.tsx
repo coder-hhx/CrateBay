@@ -202,13 +202,12 @@ export function Images({
         <>
           <div className="toolbar">
             <input
-              className="input"
-              style={{ width: 220 }}
+              className="input toolbar-search"
               placeholder={t("filterLocalImages")}
               value={localFilter}
               onChange={e => setLocalFilter(e.target.value)}
             />
-            <div style={{ flex: 1 }} />
+            <div className="toolbar-spacer" />
             <button className="btn" onClick={() => setShowImportModal(true)}>
               <span className="icon">{I.plus}</span>{t("importImage")}
             </button>
@@ -218,58 +217,77 @@ export function Images({
           </div>
 
           {localLoading ? (
-            <div className="hint">{t("loading")}</div>
+            <div className="loading"><div className="spinner" />{t("loading")}</div>
           ) : filteredImages.length === 0 ? (
-            <div className="hint" style={{ padding: "16px 0", textAlign: "center" }}>{t("noLocalImages")}</div>
+            <div className="empty-state">
+              <div className="empty-icon">{I.layers}</div>
+              <h3>{t("noLocalImages")}</h3>
+            </div>
           ) : (
-            filteredImages.map((img, idx) => (
-              <div className="container-card" key={`${img.id}-${idx}`}>
-                <div className="card-icon" style={{ background: "var(--surface2)" }}>
-                  {I.layers}
-                </div>
-                <div className="card-body">
-                  <div className="card-name">
-                    {img.repo_tags.length > 0
-                      ? img.repo_tags.join(", ")
-                      : "<none>:<none>"}
+            <div className="image-list">
+              {filteredImages.map((img, idx) => (
+                <div className="image-item" key={`${img.id}-${idx}`}>
+                  <div className="image-item-main">
+                    <div className="image-item-icon">{I.layers}</div>
+                    <div className="image-item-body">
+                      <div className="image-item-name">
+                        {img.repo_tags.length > 0
+                          ? img.repo_tags.join(", ")
+                          : "<none>:<none>"}
+                      </div>
+                      <div className="image-item-meta">
+                        <span>{t("imageId")}: {img.id.slice(0, 16)}</span>
+                        <span className="meta-sep" />
+                        <span>{img.size_human}</span>
+                        <span className="meta-sep" />
+                        <span>{formatCreated(img.created)}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="card-meta">
-                    {t("imageId")}: {img.id} · {t("imageSize")}: {img.size_human} · {t("imageCreated")}: {formatCreated(img.created)}
+                  <div className="image-item-actions">
+                    <div className="image-item-actions-group">
+                      <button
+                        className="action-btn"
+                        onClick={() => openRunWithImage(img.repo_tags[0] || img.id)}
+                        title={t("run")}
+                      >
+                        {I.play}<span className="action-label">{t("run")}</span>
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => handleInspect(img.repo_tags[0] || img.id)}
+                        title={t("inspectImage")}
+                        disabled={inspectLoading}
+                      >
+                        {I.fileText}<span className="action-label">{t("inspectImage")}</span>
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => openTagModal(img.repo_tags[0] || img.id)}
+                        title={t("tagImage")}
+                      >
+                        {I.plus}<span className="action-label">{t("tagImage")}</span>
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => onCopy(img.id)}
+                        title={t("copyId")}
+                      >
+                        {I.copy}
+                      </button>
+                    </div>
+                    <div className="image-item-actions-sep" />
+                    <button
+                      className="action-btn danger"
+                      onClick={() => setConfirmRemove(img.repo_tags[0] || img.id)}
+                      title={t("removeImage")}
+                    >
+                      {I.trash}
+                    </button>
                   </div>
                 </div>
-                <div className="card-actions">
-                  <button
-                    className="action-btn"
-                    onClick={() => onCopy(img.id)}
-                    title={t("copyId")}
-                  >
-                    {I.copy}
-                  </button>
-                  <button
-                    className="action-btn"
-                    onClick={() => handleInspect(img.repo_tags[0] || img.id)}
-                    title={t("inspectImage")}
-                    disabled={inspectLoading}
-                  >
-                    {I.fileText}
-                  </button>
-                  <button
-                    className="action-btn"
-                    onClick={() => openTagModal(img.repo_tags[0] || img.id)}
-                    title={t("tagImage")}
-                  >
-                    {I.plus}
-                  </button>
-                  <button
-                    className="action-btn danger"
-                    onClick={() => setConfirmRemove(img.repo_tags[0] || img.id)}
-                    title={t("removeImage")}
-                  >
-                    {I.trash}
-                  </button>
-                </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </>
       )}
@@ -313,7 +331,7 @@ export function Images({
           {/* Search results - card list */}
           {imgResults.length === 0 ? (
             <div className="empty-state">
-              <div className="empty-icon">{I.layers}</div>
+              <div className="empty-icon">{I.globe}</div>
               <h3>{t("searchHint")}</h3>
               <p>Docker Hub · Quay.io · GitHub Container Registry</p>
             </div>
@@ -327,7 +345,7 @@ export function Images({
                       {r.official && <span className="img-official">{t("official")}</span>}
                     </div>
                     <div className="img-card-name">{r.reference}</div>
-                    <div className="img-card-desc">{r.description || "-"}</div>
+                    {r.description && <div className="img-card-desc">{r.description}</div>}
                   </div>
                   <div className="img-card-bottom">
                     <div className="img-card-stats">
@@ -341,7 +359,9 @@ export function Images({
                       </span>
                     </div>
                     <div className="img-card-actions">
-                      <button className="btn sm" onClick={() => openRunWithImage(r.reference)}>{t("run")}</button>
+                      <button className="btn sm" onClick={() => openRunWithImage(r.reference)}>
+                        <span className="icon">{I.play}</span>{t("run")}
+                      </button>
                       <button className="btn sm" disabled={!canTags(r.reference)} onClick={() => onTags(r.reference)}>{t("tags")}</button>
                     </div>
                   </div>
