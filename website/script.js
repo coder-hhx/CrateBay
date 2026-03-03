@@ -39,7 +39,7 @@
         'CrateBay brings a unified, native-speed experience for Docker containers, Linux VMs, and Kubernetes clusters \u2014 without the overhead. Stay productive with system tray quick actions and live running counts.',
       feat1Title: 'Docker Container Management',
       feat1Desc:
-        'Full lifecycle control \u2014 create, start, stop, restart, remove. Real-time log streaming and exec into running containers.',
+        'Full lifecycle control \u2014 create, start, stop, restart, remove. Real-time log streaming and exec into running containers. Port mappings remain consistently ordered during live refresh.',
       feat2Title: 'Linux Virtual Machines',
       feat2Desc:
         'Native VM support via Virtualization.framework (macOS), KVM (Linux), and Hyper-V (Windows). Boot in seconds.',
@@ -173,7 +173,7 @@
       featTitle: '容器管理，一应俱全。',
       featDesc: 'CrateBay 为 Docker 容器、Linux 虚拟机和 Kubernetes 集群提供统一、原生速度的管理体验——零额外开销。系统托盘提供快捷操作，并展示实时运行数量。',
       feat1Title: 'Docker 容器管理',
-      feat1Desc: '全生命周期控制——创建、启动、停止、重启、删除。实时日志流和进入运行中容器的终端。',
+      feat1Desc: '全生命周期控制——创建、启动、停止、重启、删除。实时日志流和进入运行中容器的终端。端口映射信息在实时刷新时保持稳定显示。',
       feat2Title: 'Linux 虚拟机',
       feat2Desc: '通过 Virtualization.framework (macOS)、KVM (Linux)、Hyper-V (Windows) 原生支持虚拟机，秒级启动。',
       feat3Title: '镜像与卷管理',
