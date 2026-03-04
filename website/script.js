@@ -365,21 +365,23 @@
     .map(function (id) { return document.getElementById(id); })
     .filter(Boolean);
   var snapLocked = false;
+  var snapActiveIndex = 0;
   var snapWheelAccum = 0;
   var snapWheelResetTimer = null;
-  var snapThreshold = 60;
-  var snapLockMs = 760;
+  var snapThreshold = 90;
+  var snapLockMs = 860;
 
   function isDesktopSnapEnabled() {
     return window.innerWidth > 768 && snapSections.length > 1;
   }
 
   function nearestSectionIndex() {
-    var y = window.scrollY + 8;
+    var viewportCenter = window.scrollY + (window.innerHeight * 0.5);
     var nearest = 0;
     var minDistance = Number.POSITIVE_INFINITY;
     snapSections.forEach(function (section, index) {
-      var d = Math.abs(section.offsetTop - y);
+      var sectionCenter = section.offsetTop + (section.offsetHeight * 0.5);
+      var d = Math.abs(sectionCenter - viewportCenter);
       if (d < minDistance) {
         minDistance = d;
         nearest = index;
@@ -388,22 +390,34 @@
     return nearest;
   }
 
+  function syncSnapActiveIndex() {
+    snapActiveIndex = nearestSectionIndex();
+  }
+
   function scrollToSection(index) {
     if (index < 0 || index >= snapSections.length) return;
     snapLocked = true;
+    snapActiveIndex = index;
     window.scrollTo({
-      top: snapSections[index].offsetTop,
+      top: Math.max(0, snapSections[index].offsetTop),
       behavior: 'smooth',
     });
     setTimeout(function () {
       snapLocked = false;
+      syncSnapActiveIndex();
     }, snapLockMs);
   }
+
+  window.addEventListener('scroll', function () {
+    if (!snapLocked) {
+      syncSnapActiveIndex();
+    }
+  }, { passive: true });
 
   window.addEventListener('wheel', function (event) {
     if (!isDesktopSnapEnabled()) return;
     if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-    if (Math.abs(event.deltaY) < 10) return;
+    if (Math.abs(event.deltaY) < 20) return;
 
     if (snapLocked) {
       event.preventDefault();
@@ -414,7 +428,7 @@
     if (snapWheelResetTimer) clearTimeout(snapWheelResetTimer);
     snapWheelResetTimer = setTimeout(function () {
       snapWheelAccum = 0;
-    }, 120);
+    }, 140);
 
     if (Math.abs(snapWheelAccum) < snapThreshold) return;
 
@@ -422,13 +436,15 @@
 
     var direction = snapWheelAccum > 0 ? 1 : -1;
     snapWheelAccum = 0;
-    var currentIndex = nearestSectionIndex();
+    var currentIndex = snapActiveIndex;
     var targetIndex = Math.max(0, Math.min(snapSections.length - 1, currentIndex + direction));
 
     if (targetIndex !== currentIndex) {
       scrollToSection(targetIndex);
     }
   }, { passive: false });
+
+  syncSnapActiveIndex();
 
   // ----------------------------------------------------------
   // Mobile menu
@@ -457,16 +473,15 @@
   });
 
   // ----------------------------------------------------------
-  // Demo window: auto rotate + manual switch
+  // Demo window: auto rotate
   // ----------------------------------------------------------
   var demoWindow = document.querySelector('.mock-dashboard');
   if (demoWindow) {
     var demoSlides = Array.from(demoWindow.querySelectorAll('.mock-page-slide'));
-    var demoTabs = Array.from(demoWindow.querySelectorAll('.mock-demo-tab'));
     var demoNavItems = Array.from(demoWindow.querySelectorAll('.mock-sidebar-item[data-demo-nav]'));
     var demoActiveIndex = 0;
     var demoTimer = null;
-    var demoIntervalMs = 4200;
+    var demoIntervalMs = 3600;
 
     function demoFindIndex(page) {
       return demoSlides.findIndex(function (slide) {
@@ -480,9 +495,6 @@
       demoActiveIndex = nextIndex;
       demoSlides.forEach(function (slide) {
         slide.classList.toggle('active', slide.dataset.demoPage === page);
-      });
-      demoTabs.forEach(function (tab) {
-        tab.classList.toggle('active', tab.dataset.demoTarget === page);
       });
       demoNavItems.forEach(function (item) {
         item.classList.toggle('active', item.dataset.demoNav === page);
@@ -508,13 +520,6 @@
         demoTimer = null;
       }
     }
-
-    demoTabs.forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        demoSetPage(tab.dataset.demoTarget);
-        demoStartAuto();
-      });
-    });
 
     demoWindow.addEventListener('mouseenter', demoStopAuto);
     demoWindow.addEventListener('mouseleave', demoStartAuto);
@@ -582,7 +587,7 @@
     var particles = [];
     var ions = [];
     var PARTICLE_COUNT = 60;
-    var ION_COUNT = 12;
+    var ION_COUNT = 24;
     var GRID_SIZE = 60;
     var CONNECTION_DIST = 140;
 
@@ -610,9 +615,9 @@
         ions.push({
           x: Math.random() * w,
           y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.22,
-          vy: (Math.random() - 0.5) * 0.22,
-          r: Math.random() * 48 + 36,
+          vx: (Math.random() - 0.5) * 0.52,
+          vy: (Math.random() - 0.5) * 0.52,
+          r: Math.random() * 10 + 8,
           phase: Math.random() * Math.PI * 2,
           kind: i % 2 === 0 ? 'a' : 'b',
         });
@@ -685,6 +690,8 @@
     }
 
     function drawIons(colors, t) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
       for (var i = 0; i < ions.length; i++) {
         var ion = ions[i];
         ion.x += ion.vx;
@@ -694,18 +701,35 @@
         if (ion.y < -ion.r) ion.y = h + ion.r;
         if (ion.y > h + ion.r) ion.y = -ion.r;
 
-        var pulse = 0.86 + Math.sin(t * 0.0012 + ion.phase) * 0.16;
+        var pulse = 0.84 + Math.sin(t * 0.0038 + ion.phase) * 0.16;
         var radius = ion.r * pulse;
-        var glow = ctx.createRadialGradient(ion.x, ion.y, 0, ion.x, ion.y, radius);
+        var outerRadius = radius * 2.4;
+        var trailX = ion.x - (ion.vx * 26);
+        var trailY = ion.y - (ion.vy * 26);
+
+        ctx.beginPath();
+        ctx.moveTo(ion.x, ion.y);
+        ctx.lineTo(trailX, trailY);
+        ctx.strokeStyle = ion.kind === 'a' ? colors.ionA : colors.ionB;
+        ctx.lineWidth = Math.max(0.8, radius * 0.22);
+        ctx.stroke();
+
+        var glow = ctx.createRadialGradient(ion.x, ion.y, 0, ion.x, ion.y, outerRadius);
         glow.addColorStop(0, colors.ionCore);
-        glow.addColorStop(0.24, ion.kind === 'a' ? colors.ionA : colors.ionB);
+        glow.addColorStop(0.32, ion.kind === 'a' ? colors.ionA : colors.ionB);
         glow.addColorStop(1, 'rgba(0,0,0,0)');
 
         ctx.beginPath();
-        ctx.arc(ion.x, ion.y, radius, 0, Math.PI * 2);
+        ctx.arc(ion.x, ion.y, outerRadius, 0, Math.PI * 2);
         ctx.fillStyle = glow;
         ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(ion.x, ion.y, Math.max(1.2, radius * 0.28), 0, Math.PI * 2);
+        ctx.fillStyle = colors.ionCore;
+        ctx.fill();
       }
+      ctx.restore();
     }
 
     function animate() {

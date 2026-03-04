@@ -30,9 +30,9 @@
   --canvas-grid: rgba(42, 45, 69, 0.25);
   --canvas-particle: rgba(139, 92, 246, 0.5);
   --canvas-line: 139, 92, 246;
-  --ion-glow-a: rgba(139, 92, 246, 0.34);
-  --ion-glow-b: rgba(34, 211, 238, 0.3);
-  --ion-core: rgba(255, 255, 255, 0.76);
+  --ion-glow-a: rgba(139, 92, 246, 0.16);
+  --ion-glow-b: rgba(34, 211, 238, 0.14);
+  --ion-core: rgba(214, 244, 255, 0.92);
   --navbar-bg: rgba(15, 17, 26, 0.82);
   --mobile-menu-bg: rgba(15, 17, 26, 0.96);
   --card-hover-shadow: rgba(139, 92, 246, 0.08);
@@ -94,9 +94,9 @@
   --canvas-grid: rgba(226, 232, 240, 0.5);
   --canvas-particle: rgba(124, 58, 237, 0.35);
   --canvas-line: 124, 58, 237;
-  --ion-glow-a: rgba(124, 58, 237, 0.22);
-  --ion-glow-b: rgba(8, 145, 178, 0.2);
-  --ion-core: rgba(255, 255, 255, 0.85);
+  --ion-glow-a: rgba(124, 58, 237, 0.12);
+  --ion-glow-b: rgba(8, 145, 178, 0.1);
+  --ion-core: rgba(255, 255, 255, 0.9);
   --navbar-bg: rgba(248, 250, 252, 0.85);
   --mobile-menu-bg: rgba(248, 250, 252, 0.96);
   --card-hover-shadow: rgba(124, 58, 237, 0.06);
@@ -224,7 +224,7 @@ body::after {
 /* Desktop: full-page scroll snapping (one section per screen) */
 @media (min-width: 769px) {
   html {
-    scroll-snap-type: y proximity;
+    scroll-snap-type: y mandatory;
   }
   .hero,
   .features,
@@ -233,29 +233,21 @@ body::after {
   .comparison,
   .getting-started {
     scroll-snap-align: start;
+    scroll-snap-stop: always;
+    min-height: 100svh;
     display: flex;
     align-items: center;
     justify-content: center;
   }
   .hero {
-    min-height: 100svh;
+    padding: clamp(82px, 10vh, 112px) 24px clamp(18px, 3vh, 34px);
   }
   .features,
   .demo,
   .techstack,
   .comparison,
   .getting-started {
-    min-height: 92svh;
-  }
-  .hero {
-    padding: clamp(90px, 11vh, 128px) 24px clamp(26px, 4vh, 48px);
-  }
-  .features,
-  .demo,
-  .techstack,
-  .comparison,
-  .getting-started {
-    padding: clamp(10px, 1.8vh, 22px) 0;
+    padding: clamp(10px, 1.5vh, 16px) 0;
   }
   .features > .container,
   .demo > .container,
@@ -347,10 +339,10 @@ svg {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.5;
+  opacity: 0.34;
 }
 [data-theme="light"] #grid-canvas {
-  opacity: 0.26;
+  opacity: 0.22;
 }
 
 /* --- Navbar ------------------------------------------------ */
@@ -526,58 +518,6 @@ svg {
   text-align: center;
   padding: 88px 24px 48px;
   overflow: hidden;
-}
-
-/* Animated gradient orbs */
-.hero-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(120px);
-  pointer-events: none;
-  opacity: 0.14;
-}
-[data-theme="light"] .hero-glow {
-  opacity: 0.08;
-}
-.hero-glow-1 {
-  width: 600px;
-  height: 600px;
-  background: var(--purple);
-  top: -200px;
-  left: -100px;
-  animation: floatOrb1 12s ease-in-out infinite;
-}
-.hero-glow-2 {
-  width: 500px;
-  height: 500px;
-  background: var(--cyan);
-  bottom: -150px;
-  right: -100px;
-  animation: floatOrb2 15s ease-in-out infinite;
-}
-.hero-glow-3 {
-  width: 300px;
-  height: 300px;
-  background: var(--green);
-  top: 40%;
-  right: 20%;
-  animation: floatOrb3 10s ease-in-out infinite;
-  opacity: 0.09;
-}
-
-@keyframes floatOrb1 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(80px, 40px) scale(1.1); }
-  66% { transform: translate(-40px, 80px) scale(0.95); }
-}
-@keyframes floatOrb2 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-60px, -30px) scale(1.05); }
-  66% { transform: translate(40px, -60px) scale(0.9); }
-}
-@keyframes floatOrb3 {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(-30px, 30px); }
 }
 
 .hero-content {
@@ -929,25 +869,34 @@ svg {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 0;
-  min-height: 400px;
+  min-height: 392px;
 }
 .mock-sidebar {
-  background: var(--panel-surface-strong);
+  background: var(--surface);
   border-right: 1px solid var(--border);
-  padding: 16px 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .mock-sidebar-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 9px 10px;
   border-radius: 8px;
-  font-size: 0.82rem;
+  font-size: 0.81rem;
   color: var(--text2);
   font-weight: 500;
+  transition: background-color 0.18s ease, color 0.18s ease;
+  cursor: default;
+}
+.mock-sidebar-item:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+[data-theme="light"] .mock-sidebar-item:hover {
+  background: rgba(15, 23, 42, 0.04);
 }
 .mock-sidebar-item.active {
   background: var(--mock-active-bg);
@@ -966,15 +915,15 @@ svg {
 }
 
 .mock-main {
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .mock-page-track {
-  min-height: 320px;
+  min-height: 336px;
 }
 
 .mock-page-slide {
@@ -998,53 +947,30 @@ svg {
   }
 }
 
-.mock-demo-controls {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.mock-demo-tab {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text2);
-  font-size: 0.74rem;
-  font-weight: 600;
-  border-radius: 8px;
-  padding: 6px 10px;
-  cursor: pointer;
-}
-.mock-demo-tab.active {
-  color: var(--purple);
-  background: var(--mock-active-bg);
-  border-color: rgba(139, 92, 246, 0.35);
-}
-[data-theme="light"] .mock-demo-tab.active {
-  border-color: rgba(124, 58, 237, 0.28);
-}
 .mock-main-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--panel-surface-strong);
+  border-radius: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+  background: var(--surface);
 }
 .mock-main-header-left,
 .mock-main-header-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .mock-main-header h4 {
-  font-size: 0.95rem;
+  font-size: 0.87rem;
   font-weight: 600;
 }
 .mock-btn {
-  padding: 5px 12px;
+  padding: 4px 10px;
   border-radius: 6px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 600;
   background: var(--purple);
   color: #fff;
@@ -1175,7 +1101,7 @@ svg {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .tech-badge {
@@ -1202,30 +1128,6 @@ svg {
 .tech-badge svg {
   width: 20px;
   height: 20px;
-}
-
-.tech-arch {
-  background: var(--panel-surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px;
-  overflow-x: auto;
-  text-align: center;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.tech-arch picture {
-  display: block;
-}
-.tech-arch .arch-img {
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  max-height: clamp(180px, 32vh, 300px);
-  border-radius: 8px;
-  min-height: 120px;
-  background: var(--surface2);
-  object-fit: contain;
 }
 
 /* --- Comparison Table -------------------------------------- */
@@ -1581,15 +1483,6 @@ svg {
   .mock-overview-grid {
     grid-template-columns: 1fr;
   }
-  .mock-demo-controls {
-    gap: 6px;
-  }
-  .mock-demo-tab {
-    flex: 1 1 calc(33.333% - 6px);
-    text-align: center;
-    padding: 6px 8px;
-    font-size: 0.72rem;
-  }
   .comparison-table {
     min-width: 560px;
   }
@@ -1607,9 +1500,6 @@ svg {
     width: 18px;
     height: 18px;
   }
-  .tech-arch {
-    padding: 12px;
-  }
   .footer-inner {
     flex-direction: column;
     text-align: center;
@@ -1623,20 +1513,22 @@ svg {
 .mock-sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px 16px;
-  margin-bottom: 4px;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 8px;
+  margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
 .mock-sidebar-logo img {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
 }
 .mock-sidebar-brand {
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: var(--text);
+  letter-spacing: -0.02em;
 }
 .mock-sidebar-version {
   font-size: 0.65rem;
@@ -1899,12 +1791,6 @@ svg {
   }
   .mock-overview-value {
     font-size: 0.96rem;
-  }
-  .mock-demo-controls {
-    gap: 6px;
-  }
-  .mock-demo-tab {
-    flex: 1 1 calc(50% - 6px);
   }
   .mock-container-card,
   .mock-card-main-row {
