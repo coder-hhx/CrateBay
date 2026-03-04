@@ -285,18 +285,28 @@
                   </div>
                   <svg class="mock-chevron" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
                 </div>
-                <div class="mock-container-card mock-child-card">
-                  <div class="mock-card-icon"></div>
-                  <div class="mock-card-body">
-                    <div class="mock-card-name">web-frontend</div>
-                    <div class="mock-card-meta">nginx:alpine &middot; 80:80</div>
+                <div class="mock-container-card mock-child-card mock-card-expanded">
+                  <div class="mock-card-main-row">
+                    <div class="mock-card-icon"></div>
+                    <div class="mock-card-body">
+                      <div class="mock-card-name">web-frontend</div>
+                      <div class="mock-card-meta">nginx:alpine &middot; 80:80</div>
+                    </div>
+                    <div class="mock-card-stats">
+                      <span class="mock-stat">0.3%</span>
+                      <span class="mock-stat">24 MB</span>
+                    </div>
+                    <div class="mock-card-status running">
+                      <span class="dot"></span> Up 2h
+                    </div>
                   </div>
-                  <div class="mock-card-stats">
-                    <span class="mock-stat">0.3%</span>
-                    <span class="mock-stat">24 MB</span>
-                  </div>
-                  <div class="mock-card-status running">
-                    <span class="dot"></span> Up 2h
+                  <div class="mock-card-actions">
+                    <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg> Login</span>
+                    <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Logs</span>
+                    <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg> Exec</span>
+                    <span class="mock-action-sep"></span>
+                    <span class="mock-action-btn mock-action-warn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> Stop</span>
+                    <span class="mock-action-btn mock-action-danger"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg> Delete</span>
                   </div>
                 </div>
                 <div class="mock-container-card mock-child-card">

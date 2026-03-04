@@ -135,6 +135,40 @@ body {
   overflow-x: hidden;
 }
 
+/* Desktop: full-page scroll snapping (one section per screen) */
+@media (min-width: 769px) {
+  html {
+    scroll-snap-type: y mandatory;
+  }
+  .hero,
+  .features,
+  .demo,
+  .techstack,
+  .comparison,
+  .getting-started {
+    scroll-snap-align: start;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .features,
+  .demo,
+  .techstack,
+  .comparison,
+  .getting-started {
+    padding: 0;
+  }
+  .features > .container,
+  .demo > .container,
+  .techstack > .container,
+  .comparison > .container,
+  .getting-started > .container {
+    padding-top: 40px;
+    padding-bottom: 40px;
+  }
+}
+
 /* --- Full-page gradient overlay for visual continuity ------- */
 body::before {
   content: '';
@@ -406,12 +440,12 @@ svg {
 .hero {
   position: relative;
   z-index: 1;
-  min-height: 80vh;
+  min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 80px 24px 40px;
+  padding: 80px 24px 60px;
   overflow: hidden;
 }
 
@@ -1168,12 +1202,13 @@ svg {
 /* --- Scroll animations ------------------------------------- */
 .reveal {
   opacity: 0;
-  transform: translateY(32px);
-  transition: opacity 0.7s ease-out, transform 0.7s ease-out;
+  transform: translateY(48px) scale(0.97);
+  transition: opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .reveal.visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
 }
 
 /* --- Responsive -------------------------------------------- */
@@ -1431,4 +1466,57 @@ svg {
   height: 14px;
   flex-shrink: 0;
   color: var(--text3);
+}
+
+/* Mock expanded card with actions */
+.mock-card-expanded {
+  padding: 0;
+  flex-direction: column;
+  align-items: stretch;
+}
+.mock-card-expanded .mock-card-main-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 10px 42px;
+}
+.mock-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px 6px 42px;
+  border-top: 1px solid var(--table-row-border);
+  background: rgba(0, 0, 0, 0.02);
+}
+[data-theme="light"] .mock-card-actions {
+  background: rgba(0, 0, 0, 0.015);
+}
+.mock-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.mock-action-btn svg {
+  display: inline;
+  flex-shrink: 0;
+}
+.mock-action-warn {
+  color: var(--yellow);
+}
+.mock-action-danger {
+  color: var(--red);
+}
+.mock-action-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
 }
