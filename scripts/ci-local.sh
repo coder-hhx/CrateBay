@@ -32,7 +32,21 @@ if [[ "$os_name" == "Darwin" ]]; then
   fi
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: Node.js 22+ is required for frontend checks (node not found)."
+  exit 1
+fi
+
+node_major="$(node -p "process.versions.node.split('.')[0]")"
+node_version="$(node -v)"
+if (( node_major < 22 )); then
+  echo "ERROR: Node.js 22+ is required. Current: ${node_version}"
+  echo "Use: nvm install 22 && nvm use 22"
+  exit 1
+fi
+
 echo "== Local CI: Frontend checks =="
+echo "Node runtime: ${node_version}"
 pushd crates/cratebay-gui >/dev/null
 npm ci
 npm run lint

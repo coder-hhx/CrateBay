@@ -23,7 +23,7 @@
 | 工具 | 版本 | 用途 |
 |------|---------|---------|
 | **Rust** | 1.75+ | 后端、CLI、Tauri 后端 |
-| **Node.js** | 18+ | GUI 前端（React + Vite） |
+| **Node.js** | 22+（建议 22/24 LTS） | GUI 前端（React + Vite） |
 | **npm** | 9+ | JavaScript 依赖 |
 | **Docker** | 任意 | 容器运行时 |
 
@@ -44,10 +44,11 @@ source ~/.cargo/env
 
 ```bash
 # macOS
-brew install node
+brew install node@22
 
 # or via nvm
-nvm install 18
+nvm install 22
+nvm use 22
 ```
 
 ### Docker 运行时

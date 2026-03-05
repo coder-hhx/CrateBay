@@ -26,6 +26,7 @@ CrateBay/
 ```bash
 cargo check --workspace           # Quick compile check
 cargo test --workspace            # Run all tests
+./scripts/ci-local.sh             # Full local gate (Rust + frontend, Node.js 22+)
 cargo build --release             # Release build
 cargo bench -p cratebay-core      # Criterion benchmarks
 ./scripts/bench-perf.sh           # Performance validation (<20MB, <3s, <200MB RAM)
@@ -54,7 +55,8 @@ cargo bench -p cratebay-core      # Criterion benchmarks
 
 Hooks are in `.githooks/`. New devs run `scripts/setup-dev.sh` to activate them.
 
-- `pre-commit`: runs `cargo check --workspace --locked`
+- `pre-commit`: upstream sync check + docs/app i18n checks + Rust `cargo check`
+- `pre-push`: local CI gate via `scripts/ci-local.sh` (requires Node.js 22+)
 - `commit-msg`: validates Conventional Commits format
 
 ## CI/CD

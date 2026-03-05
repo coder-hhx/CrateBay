@@ -23,7 +23,7 @@
 | Tool | Version | Purpose |
 |------|---------|---------|
 | **Rust** | 1.75+ | Core backend, CLI, Tauri backend |
-| **Node.js** | 18+ | GUI frontend (React + Vite) |
+| **Node.js** | 22+ (22/24 LTS recommended) | GUI frontend (React + Vite) |
 | **npm** | 9+ | JavaScript dependencies |
 | **Docker** | Any | Container engine |
 
@@ -44,10 +44,11 @@ source ~/.cargo/env
 
 ```bash
 # macOS
-brew install node
+brew install node@22
 
 # or via nvm
-nvm install 18
+nvm install 22
+nvm use 22
 ```
 
 ### Docker Runtime

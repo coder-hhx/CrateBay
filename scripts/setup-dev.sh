@@ -7,7 +7,8 @@ set -euo pipefail
 #
 # What it does:
 #   1. Configures repo-local git user identity
-#   2. Sets core.hooksPath to .githooks so pre-commit and commit-msg hooks run
+#   2. Sets core.hooksPath to .githooks so pre-commit/pre-push/commit-msg run
+#   3. Checks local Node.js runtime (required: 22+, recommend 22/24 LTS)
 #
 # Usage:
 #   bash scripts/setup-dev.sh
@@ -32,6 +33,21 @@ echo ""
 echo "Configuring git hooks path..."
 git config --local core.hooksPath .githooks
 echo "  core.hooksPath = $(git config --local core.hooksPath)"
+
+# ── Node runtime check ────────────────────────────────────────────────────────
+echo ""
+echo "Checking Node.js runtime (required: 22+, recommend 22/24 LTS)..."
+if command -v node >/dev/null 2>&1; then
+  node_version="$(node -v)"
+  node_major="$(node -p "process.versions.node.split('.')[0]")"
+  echo "  node = ${node_version}"
+  if (( node_major < 22 )); then
+    echo "  WARNING: Node.js 22+ is required by local CI."
+    echo "  Run: nvm install 22 && nvm use 22"
+  fi
+else
+  echo "  WARNING: node not found. Install Node.js 22+."
+fi
 
 # ── Verify hooks are executable ───────────────────────────────────────────────
 echo ""

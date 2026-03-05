@@ -1483,17 +1483,17 @@ mod tests {
             assert!(result.is_err());
         }
 
-    #[test]
-    fn create_vm_rejects_rosetta() {
-        if !WindowsHypervisor::hyperv_available() {
-            return;
-        }
+        #[test]
+        fn create_vm_rejects_rosetta() {
+            if !WindowsHypervisor::hyperv_available() {
+                return;
+            }
 
-        let hv = WindowsHypervisor::new();
-        let config = VmConfig {
-            name: "test-rosetta".into(),
-            rosetta: true,
-            ..Default::default()
+            let hv = WindowsHypervisor::new();
+            let config = VmConfig {
+                name: "test-rosetta".into(),
+                rosetta: true,
+                ..Default::default()
             };
             let result = hv.create_vm(config);
             assert!(result.is_err());
