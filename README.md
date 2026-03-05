@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coder-hhx/CrateBay/releases">Download</a> ·
+  <a href="https://github.com/coder-hhx/CrateBay/releases">Releases (Preview)</a> ·
   <a href="https://github.com/coder-hhx/CrateBay/issues">Issues</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/TUTORIAL.md">Tutorial</a> ·
@@ -105,7 +105,7 @@ OrbStack is great, but it's **closed-source and macOS-only**. Docker Desktop is 
 
 ## Quick Start
 
-> CrateBay v1.0.0 is now available. Feedback and contributions are welcome!
+> CrateBay v1.0.0 GA is coming soon. Preview builds are available from source.
 
 ```bash
 # Build from source
@@ -127,6 +127,20 @@ cratebay mount add --vm myvm --tag code --host-path ~/code --guest-path /mnt/cod
 ```
 
 See [Tutorial](docs/TUTORIAL.md) for detailed instructions.
+
+## Development Setup (Contributors)
+
+```bash
+# 1) Use Node.js 22+ for frontend tooling (22/24 LTS recommended)
+nvm install 22
+nvm use 22
+
+# 2) Enable git hooks (pre-commit + pre-push gate)
+bash scripts/setup-dev.sh
+
+# 3) Run local CI before pushing
+./scripts/ci-local.sh
+```
 
 ## Architecture
 

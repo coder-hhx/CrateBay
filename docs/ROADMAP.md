@@ -36,7 +36,9 @@
 - ✅ Auto-update checker (GitHub releases)
 - ✅ Official website (GitHub Pages)
 
-## v1.0.0 — Production Ready (Done)
+## v1.0.0 — Production Ready (In Progress, GA Coming Soon)
+
+- ⚠️ Core feature scope is mostly complete, but GA release is not announced yet.
 
 - ✅ ACPI graceful shutdown (VZ bridge 3-phase: requestStop → poll → force stop)
 - ✅ CI/CD pipeline (GitHub Actions: CI + release builds)
@@ -49,6 +51,9 @@
 - ✅ Windows (Hyper-V) VM backend
 - ✅ Plugin system
 - ✅ Performance optimization (<20MB install, <200MB idle RAM, <3s startup)
+- ⬜ Final cross-platform release validation (macOS/Linux/Windows installers)
+- ⬜ Final onboarding and upgrade path verification
+- ⬜ Final docs + website consistency pass before GA announcement
 
 ## v1.1.0 — Ecosystem & Polish (Planned)
 
