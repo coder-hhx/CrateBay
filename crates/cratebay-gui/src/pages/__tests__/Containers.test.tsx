@@ -237,8 +237,8 @@ describe("Containers", () => {
     render(<Containers {...defaultProps} containers={[c1, c2]} groups={[group]} />)
 
     expect(screen.getByText("app")).toBeInTheDocument()
-    expect(screen.getByText(/Running: 1/)).toBeInTheDocument()
-    expect(screen.getByText(/Stopped: 1/)).toBeInTheDocument()
+    expect(screen.getByText(/1 Running/)).toBeInTheDocument()
+    expect(screen.getByText(/1 Stopped/)).toBeInTheDocument()
   })
 
   it("shows children containers when a group is expanded", () => {
@@ -310,8 +310,9 @@ describe("Containers", () => {
       />
     )
 
-    const header = screen.getByText("app").closest("[role='button']")!
-    await user.click(header)
+    const headerButton = screen.getByText("app").closest("button")
+    expect(headerButton).toBeTruthy()
+    await user.click(headerButton!)
     expect(onToggleGroup).toHaveBeenCalledWith("app")
   })
 
