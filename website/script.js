@@ -12,7 +12,7 @@
     en: {
       // Navbar
       navFeatures: 'Features',
-      navDemo: 'Demo',
+      navDemo: 'Interface',
       navTech: 'Tech Stack',
       navCompare: 'Compare',
       navInstall: 'Install',
@@ -120,19 +120,30 @@
       compMemory: 'Memory Usage',
       compStartup: 'Startup Time',
       compOpenSource: 'Open Source',
-      compFree: 'Free',
+      compFree: 'Free for commercial use',
+      compDDFree: '\u2717 (>250 employees)',
+      compOSFree: '\u2717',
+      compGui: 'GUI Stack',
+      compCBGui: 'Rust + Tauri',
+      compDDGui: 'Electron',
+      compOSGui: 'Swift (Native)',
+      compWindows: 'Windows Support',
+      compLinux: 'Linux Support',
+      compPortForward: 'Auto port forwarding',
+      compVirtiofs: 'VirtioFS file sharing',
       compVM: 'VM Support',
       compK8s: 'Kubernetes',
       compK8sNote: '(K3s)',
       compPlugin: 'Plugin System',
       compCross: 'Cross-platform',
+      compMacOnly: 'macOS only',
 
       compCBSize: '~18 MB',
       compDDSize: '~1.5 GB',
       compOSSize: '~200 MB',
-      compCBMem: '~50 MB idle',
-      compDDMem: '~2 GB',
-      compOSMem: '~200 MB',
+      compCBMem: '< 200 MB idle',
+      compDDMem: '3-6 GB',
+      compOSMem: '< 1 GB',
       compCBStart: '< 1s',
       compDDStart: '~10s',
       compOSStart: '~2s',
@@ -155,7 +166,7 @@
     },
     zh: {
       navFeatures: '功能',
-      navDemo: '演示',
+      navDemo: '界面',
       navTech: '技术栈',
       navCompare: '对比',
       navInstall: '安装',
@@ -239,18 +250,29 @@
       compMemory: '内存占用',
       compStartup: '启动时间',
       compOpenSource: '开源',
-      compFree: '免费',
+      compFree: '商用免费',
+      compDDFree: '\u2717（>250 人企业收费）',
+      compOSFree: '\u2717',
+      compGui: 'GUI 架构',
+      compCBGui: 'Rust + Tauri',
+      compDDGui: 'Electron',
+      compOSGui: 'Swift（原生）',
+      compWindows: 'Windows 支持',
+      compLinux: 'Linux 支持',
+      compPortForward: '自动端口转发',
+      compVirtiofs: 'VirtioFS 文件共享',
       compVM: '虚拟机支持',
       compK8s: 'Kubernetes',
       compK8sNote: '(K3s)',
       compPlugin: '插件系统',
       compCross: '跨平台',
+      compMacOnly: '仅 macOS',
       compCBSize: '~18 MB',
       compDDSize: '~1.5 GB',
       compOSSize: '~200 MB',
-      compCBMem: '~50 MB 空闲',
-      compDDMem: '~2 GB',
-      compOSMem: '~200 MB',
+      compCBMem: '< 200 MB 空闲',
+      compDDMem: '3-6 GB',
+      compOSMem: '< 1 GB',
       compCBStart: '< 1s',
       compDDStart: '~10s',
       compOSStart: '~2s',
@@ -360,7 +382,7 @@
   // ----------------------------------------------------------
   // Desktop wheel section snap (debounce + anti-misfire)
   // ----------------------------------------------------------
-  var snapSectionIds = ['hero', 'features', 'demo', 'techstack', 'comparison', 'install'];
+  var snapSectionIds = ['hero', 'features', 'interface', 'techstack', 'comparison', 'install'];
   var snapSections = snapSectionIds
     .map(function (id) { return document.getElementById(id); })
     .filter(Boolean);
@@ -586,10 +608,10 @@
     var w, h;
     var particles = [];
     var ions = [];
-    var PARTICLE_COUNT = 60;
-    var ION_COUNT = 24;
+    var PARTICLE_COUNT = 72;
+    var ION_COUNT = 36;
     var GRID_SIZE = 60;
-    var CONNECTION_DIST = 140;
+    var CONNECTION_DIST = 120;
 
     function resize() {
       w = canvas.width = window.innerWidth;
@@ -602,9 +624,9 @@
         particles.push({
           x: Math.random() * w,
           y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.3,
-          vy: (Math.random() - 0.5) * 0.3,
-          r: Math.random() * 1.5 + 0.5,
+          vx: (Math.random() - 0.5) * 0.24,
+          vy: (Math.random() - 0.5) * 0.24,
+          r: Math.random() * 0.9 + 0.25,
         });
       }
     }
@@ -615,11 +637,12 @@
         ions.push({
           x: Math.random() * w,
           y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.52,
-          vy: (Math.random() - 0.5) * 0.52,
-          r: Math.random() * 10 + 8,
+          vx: (Math.random() - 0.5) * 0.36,
+          vy: (Math.random() - 0.5) * 0.36,
+          r: Math.random() * 3.8 + 2.2,
           phase: Math.random() * Math.PI * 2,
           kind: i % 2 === 0 ? 'a' : 'b',
+          tail: Math.random() * 20 + 16,
         });
       }
     }
@@ -632,6 +655,8 @@
         line: style.getPropertyValue('--canvas-line').trim(),
         ionA: style.getPropertyValue('--ion-glow-a').trim(),
         ionB: style.getPropertyValue('--ion-glow-b').trim(),
+        ionTrailA: style.getPropertyValue('--ion-trail-a').trim(),
+        ionTrailB: style.getPropertyValue('--ion-trail-b').trim(),
         ionCore: style.getPropertyValue('--ion-core').trim(),
       };
     }
@@ -701,22 +726,30 @@
         if (ion.y < -ion.r) ion.y = h + ion.r;
         if (ion.y > h + ion.r) ion.y = -ion.r;
 
-        var pulse = 0.84 + Math.sin(t * 0.0038 + ion.phase) * 0.16;
+        var pulse = 0.86 + Math.sin(t * 0.0042 + ion.phase) * 0.18;
         var radius = ion.r * pulse;
-        var outerRadius = radius * 2.4;
-        var trailX = ion.x - (ion.vx * 26);
-        var trailY = ion.y - (ion.vy * 26);
+        var outerRadius = radius * 2.1;
+        var trailX = ion.x - (ion.vx * ion.tail);
+        var trailY = ion.y - (ion.vy * ion.tail);
+        var trackColor = ion.kind === 'a' ? colors.ionA : colors.ionB;
+        var trailColor = ion.kind === 'a' ? colors.ionTrailA : colors.ionTrailB;
+
+        var trackGrad = ctx.createLinearGradient(trailX, trailY, ion.x, ion.y);
+        trackGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        trackGrad.addColorStop(0.58, trailColor);
+        trackGrad.addColorStop(1, trackColor);
 
         ctx.beginPath();
         ctx.moveTo(ion.x, ion.y);
         ctx.lineTo(trailX, trailY);
-        ctx.strokeStyle = ion.kind === 'a' ? colors.ionA : colors.ionB;
-        ctx.lineWidth = Math.max(0.8, radius * 0.22);
+        ctx.strokeStyle = trackGrad;
+        ctx.lineWidth = Math.max(0.4, radius * 0.15);
         ctx.stroke();
 
         var glow = ctx.createRadialGradient(ion.x, ion.y, 0, ion.x, ion.y, outerRadius);
         glow.addColorStop(0, colors.ionCore);
-        glow.addColorStop(0.32, ion.kind === 'a' ? colors.ionA : colors.ionB);
+        glow.addColorStop(0.22, trackColor);
+        glow.addColorStop(0.56, trailColor);
         glow.addColorStop(1, 'rgba(0,0,0,0)');
 
         ctx.beginPath();
@@ -724,8 +757,19 @@
         ctx.fillStyle = glow;
         ctx.fill();
 
+        var speed = Math.hypot(ion.vx, ion.vy) || 1;
+        var nx = ion.vx / speed;
+        var ny = ion.vy / speed;
+        var flare = Math.max(0.8, radius * 0.9);
         ctx.beginPath();
-        ctx.arc(ion.x, ion.y, Math.max(1.2, radius * 0.28), 0, Math.PI * 2);
+        ctx.moveTo(ion.x - nx * flare, ion.y - ny * flare);
+        ctx.lineTo(ion.x + nx * flare, ion.y + ny * flare);
+        ctx.strokeStyle = trailColor;
+        ctx.lineWidth = 0.55;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(ion.x, ion.y, Math.max(0.8, radius * 0.22), 0, Math.PI * 2);
         ctx.fillStyle = colors.ionCore;
         ctx.fill();
       }

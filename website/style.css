@@ -30,9 +30,11 @@
   --canvas-grid: rgba(42, 45, 69, 0.25);
   --canvas-particle: rgba(139, 92, 246, 0.5);
   --canvas-line: 139, 92, 246;
-  --ion-glow-a: rgba(139, 92, 246, 0.16);
-  --ion-glow-b: rgba(34, 211, 238, 0.14);
-  --ion-core: rgba(214, 244, 255, 0.92);
+  --ion-glow-a: rgba(139, 92, 246, 0.11);
+  --ion-glow-b: rgba(34, 211, 238, 0.1);
+  --ion-trail-a: rgba(139, 92, 246, 0.34);
+  --ion-trail-b: rgba(34, 211, 238, 0.3);
+  --ion-core: rgba(222, 246, 255, 0.86);
   --navbar-bg: rgba(15, 17, 26, 0.82);
   --mobile-menu-bg: rgba(15, 17, 26, 0.96);
   --card-hover-shadow: rgba(139, 92, 246, 0.08);
@@ -94,9 +96,11 @@
   --canvas-grid: rgba(226, 232, 240, 0.5);
   --canvas-particle: rgba(124, 58, 237, 0.35);
   --canvas-line: 124, 58, 237;
-  --ion-glow-a: rgba(124, 58, 237, 0.12);
-  --ion-glow-b: rgba(8, 145, 178, 0.1);
-  --ion-core: rgba(255, 255, 255, 0.9);
+  --ion-glow-a: rgba(124, 58, 237, 0.09);
+  --ion-glow-b: rgba(8, 145, 178, 0.08);
+  --ion-trail-a: rgba(124, 58, 237, 0.26);
+  --ion-trail-b: rgba(8, 145, 178, 0.23);
+  --ion-core: rgba(255, 255, 255, 0.82);
   --navbar-bg: rgba(248, 250, 252, 0.85);
   --mobile-menu-bg: rgba(248, 250, 252, 0.96);
   --card-hover-shadow: rgba(124, 58, 237, 0.06);
@@ -339,10 +343,10 @@ svg {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.34;
+  opacity: 0.28;
 }
 [data-theme="light"] #grid-canvas {
-  opacity: 0.22;
+  opacity: 0.16;
 }
 
 /* --- Navbar ------------------------------------------------ */
@@ -408,27 +412,33 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 0;
-  background: var(--surface);
+  background: var(--panel-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .lang-toggle button {
   padding: 5px 12px;
   border: none;
   background: transparent;
-  color: var(--text3);
+  color: var(--text2);
   cursor: pointer;
   font-weight: 600;
   font-size: 0.8rem;
   font-family: var(--font);
   transition: background 0.2s, color 0.2s;
 }
+.lang-toggle button:hover {
+  color: var(--text);
+}
 .lang-toggle button.active {
-  background: var(--purple);
+  background: linear-gradient(135deg, var(--purple), var(--purple-hover));
   color: #fff;
 }
 
@@ -473,15 +483,20 @@ svg {
   gap: 6px;
   padding: 6px 14px;
   border: 1px solid var(--border);
+  background: var(--panel-surface);
   border-radius: 8px;
   font-size: 0.85rem;
   font-weight: 500;
-  color: var(--text2);
-  transition: border-color 0.2s, color 0.2s;
+  color: var(--text);
+  transition: border-color 0.2s, color 0.2s, background 0.2s, box-shadow 0.2s;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .nav-github:hover {
+  background: var(--panel-surface-strong);
   border-color: var(--purple);
   color: var(--text);
+  box-shadow: 0 0 0 1px var(--card-hover-glow);
 }
 .nav-github svg {
   width: 18px;
@@ -651,38 +666,6 @@ svg {
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-/* --- Section glow accents ---------------------------------- */
-.features::before,
-.techstack::before,
-.getting-started::before {
-  content: '';
-  position: absolute;
-  top: -80px;
-  left: 0;
-  right: 0;
-  height: 160px;
-  pointer-events: none;
-  z-index: 0;
-}
-.features::before {
-  background: radial-gradient(ellipse 50% 100% at 30% 100%, rgba(139, 92, 246, 0.05), transparent);
-}
-.techstack::before {
-  background: radial-gradient(ellipse 50% 100% at 70% 100%, rgba(34, 211, 238, 0.04), transparent);
-}
-.getting-started::before {
-  background: radial-gradient(ellipse 50% 100% at 50% 100%, rgba(139, 92, 246, 0.04), transparent);
-}
-[data-theme="light"] .features::before {
-  background: radial-gradient(ellipse 50% 100% at 30% 100%, rgba(124, 58, 237, 0.025), transparent);
-}
-[data-theme="light"] .techstack::before {
-  background: radial-gradient(ellipse 50% 100% at 70% 100%, rgba(8, 145, 178, 0.02), transparent);
-}
-[data-theme="light"] .getting-started::before {
-  background: radial-gradient(ellipse 50% 100% at 50% 100%, rgba(124, 58, 237, 0.02), transparent);
 }
 
 /* --- Features ---------------------------------------------- */
