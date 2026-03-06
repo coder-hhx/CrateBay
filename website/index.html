@@ -1,690 +1,82 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CrateBay — Containers, VMs & Self-hosted AI Infra Desktop</title>
-  <meta name="description" content="CrateBay is a free, open-source desktop app for managing Docker containers, Linux VMs, Kubernetes clusters — and self-hosted AI infrastructure (local models, agent sandboxes, MCP servers)." />
-  <meta name="keywords" content="Docker, containers, VM, virtual machine, Kubernetes, K3s, Ollama, MCP, agent sandbox, Rust, Tauri, open-source, container manager, Linux, macOS" />
-  <meta property="og:title" content="CrateBay — Containers, VMs & Self-hosted AI Infra Desktop" />
-  <meta property="og:description" content="Free, open-source desktop app for containers, VMs, Kubernetes — and self-hosted AI infrastructure." />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://cratebay.io/" />
-  <link rel="icon" type="image/svg+xml" href="favicon.svg?v=20260305" />
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png?v=20260305" />
-  <meta name="theme-color" content="#0f111a" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <title>CrateBay — Coming Soon</title>
+  <meta name="description" content="CrateBay — Coming Soon" />
+  <meta name="keywords" content="coming soon" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: rgba(17, 24, 39, 0.82);
+      --border: rgba(255, 255, 255, 0.1);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #67e8f9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at top, rgba(103, 232, 249, 0.18), transparent 38%),
+        linear-gradient(180deg, #020617 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(100%, 720px);
+      padding: 48px 32px;
+      text-align: center;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(16px);
+    }
+    img {
+      width: 84px;
+      height: 84px;
+      border-radius: 20px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(40px, 8vw, 64px);
+      line-height: 1;
+    }
+    p {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .badge {
+      display: inline-block;
+      margin-bottom: 18px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(103, 232, 249, 0.28);
+      background: rgba(103, 232, 249, 0.08);
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+  </style>
 </head>
 <body>
-
-  <!-- Background grid canvas -->
-  <canvas id="grid-canvas"></canvas>
-
-  <!-- ===== Navbar ===== -->
-  <nav class="navbar">
-    <div class="navbar-inner">
-      <a href="#" class="nav-logo">
-        <img src="logo.png" alt="CrateBay" width="28" height="28" />
-        CrateBay
-      </a>
-
-      <ul class="nav-links">
-        <li><a href="#features" data-i18n="navFeatures">Features</a></li>
-        <li><a href="#interface" data-i18n="navDemo">Interface</a></li>
-        <li><a href="#techstack" data-i18n="navTech">Tech Stack</a></li>
-        <li><a href="#comparison" data-i18n="navCompare">Compare</a></li>
-        <li><a href="#install" data-i18n="navInstall">Install</a></li>
-        <li>
-          <div class="lang-toggle">
-            <button data-lang="en" class="active">EN</button>
-            <button data-lang="zh">中文</button>
-          </div>
-        </li>
-        <li>
-          <button class="theme-toggle" aria-label="Toggle theme" data-i18n-title="themeToggle" title="Toggle dark/light mode">
-            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-          </button>
-        </li>
-        <li>
-          <a href="https://github.com/coder-hhx/CrateBay" target="_blank" rel="noopener" class="nav-github">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.38c.6.11.82-.26.82-.58v-2.16c-3.34.73-4.04-1.61-4.04-1.61a3.18 3.18 0 00-1.33-1.76c-1.09-.74.08-.73.08-.73a2.52 2.52 0 011.84 1.24 2.56 2.56 0 003.5 1 2.56 2.56 0 01.76-1.6c-2.67-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 011.24-3.22 4.3 4.3 0 01.12-3.18s1-.33 3.3 1.23a11.38 11.38 0 016 0c2.3-1.56 3.3-1.23 3.3-1.23a4.3 4.3 0 01.12 3.18 4.64 4.64 0 011.24 3.22c0 4.61-2.8 5.63-5.48 5.93a2.86 2.86 0 01.82 2.22v3.29c0 .32.22.7.82.58A12 12 0 0012 .3"/></svg>
-            GitHub
-          </a>
-        </li>
-      </ul>
-
-      <div class="nav-right-mobile">
-        <button class="theme-toggle theme-toggle-mobile" aria-label="Toggle theme" title="Toggle dark/light mode">
-          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-        </button>
-        <button class="mobile-menu-btn" aria-label="Toggle menu">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-      </div>
-    </div>
-  </nav>
-
-  <!-- ===== Hero ===== -->
-  <section class="hero" id="hero">
-    <div class="hero-content">
-      <div class="hero-badge">
-        <span class="dot"></span>
-        <span data-i18n="heroBadge">v1.0.0 Coming Soon</span>
-      </div>
-
-      <h1>
-        <span data-i18n="heroTitle1">Crate</span><span class="gradient-text" data-i18n="heroTitle2">Bay</span>
-      </h1>
-
-      <p class="hero-tagline" data-i18n="heroTagline">
-        The open-source desktop app for managing Docker containers, Linux VMs, and Kubernetes — blazing fast, built with Rust.
-      </p>
-
-      <div class="hero-actions">
-        <a href="https://github.com/coder-hhx/CrateBay/releases" target="_blank" rel="noopener" class="btn btn-primary">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span data-i18n="heroDownload">Preview Builds (Soon)</span>
-        </a>
-        <a href="https://github.com/coder-hhx/CrateBay" target="_blank" rel="noopener" class="btn btn-outline">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 .3a12 12 0 00-3.8 23.38c.6.11.82-.26.82-.58v-2.16c-3.34.73-4.04-1.61-4.04-1.61a3.18 3.18 0 00-1.33-1.76c-1.09-.74.08-.73.08-.73a2.52 2.52 0 011.84 1.24 2.56 2.56 0 003.5 1 2.56 2.56 0 01.76-1.6c-2.67-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 011.24-3.22 4.3 4.3 0 01.12-3.18s1-.33 3.3 1.23a11.38 11.38 0 016 0c2.3-1.56 3.3-1.23 3.3-1.23a4.3 4.3 0 01.12 3.18 4.64 4.64 0 011.24 3.22c0 4.61-2.8 5.63-5.48 5.93a2.86 2.86 0 01.82 2.22v3.29c0 .32.22.7.82.58A12 12 0 0012 .3"/></svg>
-          <span data-i18n="heroGithub">View on GitHub</span>
-        </a>
-      </div>
-
-      <div class="hero-stats">
-        <div class="hero-stat">
-          <div class="hero-stat-value">100%</div>
-          <div class="hero-stat-label" data-i18n="statLang">Pure Rust</div>
-        </div>
-        <div class="hero-stat">
-          <div class="hero-stat-value">Apache 2.0</div>
-          <div class="hero-stat-label" data-i18n="statLicense">Open Source</div>
-        </div>
-        <div class="hero-stat">
-          <div class="hero-stat-value">&lt;20 MB</div>
-          <div class="hero-stat-label" data-i18n="statSize">App Size</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Features ===== -->
-  <section class="features" id="features">
-    <div class="container">
-      <div class="reveal">
-        <div class="section-label" data-i18n="featLabel">Features</div>
-        <h2 class="section-title" data-i18n="featTitle">Everything you need to manage containers and beyond.</h2>
-        <p class="section-desc" data-i18n="featDesc">CrateBay brings a unified, native-speed experience for Docker containers, Linux VMs, and Kubernetes clusters — without the overhead.</p>
-      </div>
-
-      <div class="features-grid">
-        <!-- 1: Docker Container Management -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="7" y1="7" x2="7" y2="7.01"/><line x1="10" y1="7" x2="10" y2="7.01"/><line x1="7" y1="10" x2="7" y2="10.01"/><line x1="10" y1="10" x2="10" y2="10.01"/><line x1="13" y1="7" x2="17" y2="7"/><line x1="13" y1="10" x2="17" y2="10"/></svg>
-          </div>
-          <h3 data-i18n="feat1Title">Docker Container Management</h3>
-          <p data-i18n="feat1Desc">Full lifecycle control — create, start, stop, restart, remove. Real-time log streaming and exec into running containers.</p>
-        </div>
-
-        <!-- 2: Linux Virtual Machines -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M9 8h.01M12 8h6"/><path d="M6 12h12"/><path d="M6 16h8"/></svg>
-          </div>
-          <h3 data-i18n="feat2Title">Linux Virtual Machines</h3>
-          <p data-i18n="feat2Desc">Native VM support via Virtualization.framework (macOS), KVM (Linux), and Hyper-V (Windows). Boot in seconds.</p>
-        </div>
-
-        <!-- 3: Image & Volume Management -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>
-          </div>
-          <h3 data-i18n="feat3Title">Image & Volume Management</h3>
-          <p data-i18n="feat3Desc">Search and pull images from Docker Hub and private registries. Manage volumes with inspect, create, prune, and mount operations.</p>
-        </div>
-
-        <!-- 4: Resource Monitoring -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-          </div>
-          <h3 data-i18n="feat4Title">Resource Monitoring</h3>
-          <p data-i18n="feat4Desc">Real-time CPU, memory, network, and disk I/O monitoring for every container and VM. Spot issues instantly.</p>
-        </div>
-
-        <!-- 5: Port Forwarding & VirtioFS -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-          </div>
-          <h3 data-i18n="feat5Title">Port Forwarding & VirtioFS</h3>
-          <p data-i18n="feat5Desc">Automatic port forwarding and near-native file sharing between host and guest via VirtioFS.</p>
-        </div>
-
-        <!-- 6: Kubernetes (K3s) -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-          </div>
-          <h3 data-i18n="feat6Title">Kubernetes (K3s)</h3>
-          <p data-i18n="feat6Desc">Built-in K3s integration with pod, service, and deployment dashboards. Manage namespaces and workloads effortlessly.</p>
-        </div>
-
-        <!-- 7: AI Infrastructure Hub -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><path d="M12 4a5 5 0 015 5v1.5a3.5 3.5 0 01-2.06 3.19L14 14.1V17a2 2 0 01-2 2 2 2 0 01-2-2v-2.9l-.94-.41A3.5 3.5 0 017 10.5V9a5 5 0 015-5z"/><circle cx="9.5" cy="10.5" r="0.8"/><circle cx="14.5" cy="10.5" r="0.8"/><path d="M9.5 13.5c.8.6 1.7.9 2.5.9s1.7-.3 2.5-.9"/><path d="M12 2v2"/><path d="M5 8h2"/><path d="M17 8h2"/></svg>
-          </div>
-          <h3 data-i18n="feat7Title">AI Infrastructure Hub</h3>
-          <p data-i18n="feat7Desc">A single place for local models (Ollama-first), agent sandboxes (MVP available), MCP server management (planned), and safe execution workflows.</p>
-        </div>
-
-        <!-- 8: Agent / CLI Bridge -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
-          </div>
-          <h3 data-i18n="feat8Title">Agent / CLI Bridge</h3>
-          <p data-i18n="feat8Desc">Run Codex, Claude, Gemini, Qwen and OpenClaw workflows with allowlist, dry-run, timeout control, command audit, and tabbed AI settings.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Interface ===== -->
-  <section class="demo" id="interface">
-    <div class="container">
-      <div class="reveal">
-        <div class="section-label" data-i18n="demoLabel">Interface</div>
-        <h2 class="section-title" data-i18n="demoTitle">Built for speed and clarity.</h2>
-        <p class="section-desc" data-i18n="demoDesc">A clean, responsive GUI built with Tauri and React. Every interaction feels instant.</p>
-      </div>
-
-      <div class="demo-window reveal">
-        <div class="demo-titlebar">
-          <span class="demo-dot"></span>
-          <span class="demo-dot"></span>
-          <span class="demo-dot"></span>
-          <span class="demo-titlebar-text" data-i18n="demoTitlebar">CrateBay</span>
-        </div>
-        <div class="demo-body">
-          <div class="mock-dashboard">
-            <div class="mock-sidebar">
-              <div class="mock-sidebar-logo">
-                <img src="logo.png" alt="CrateBay" width="22" height="22" />
-                <span class="mock-sidebar-brand">CrateBay</span>
-                <span class="mock-sidebar-version">pre-v1</span>
-              </div>
-              <div class="mock-sidebar-item" data-demo-nav="dashboard">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                <span data-i18n="demoSidebar0">Dashboard</span>
-              </div>
-              <div class="mock-sidebar-item active" data-demo-nav="containers">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                <span data-i18n="demoSidebar1">Containers</span>
-              </div>
-              <div class="mock-sidebar-item" data-demo-nav="images">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                <span data-i18n="demoSidebar2">Images</span>
-              </div>
-              <div class="mock-sidebar-item">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
-                <span data-i18n="demoSidebar3">Volumes</span>
-              </div>
-              <div class="mock-sidebar-item">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M9 8h.01M12 8h6"/></svg>
-                <span data-i18n="demoSidebar4">VMs</span>
-              </div>
-              <div class="mock-sidebar-item">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-                <span data-i18n="demoSidebar5">Kubernetes</span>
-              </div>
-              <div class="mock-sidebar-item">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><path d="M12 4a5 5 0 015 5v1.5a3.5 3.5 0 01-2.06 3.19L14 14.1V17a2 2 0 01-2 2 2 2 0 01-2-2v-2.9l-.94-.41A3.5 3.5 0 017 10.5V9a5 5 0 015-5z"/><circle cx="9.5" cy="10.5" r="0.8"/><circle cx="14.5" cy="10.5" r="0.8"/><path d="M9.5 13.5c.8.6 1.7.9 2.5.9s1.7-.3 2.5-.9"/><path d="M12 2v2"/><path d="M5 8h2"/><path d="M17 8h2"/></svg>
-                <span data-i18n="demoSidebar6">AI</span>
-              </div>
-              <div style="flex:1"></div>
-              <div class="mock-sidebar-item">
-                <svg viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-                <span data-i18n="demoSidebar7">Settings</span>
-              </div>
-            </div>
-            <div class="mock-main">
-              <div class="mock-page-track">
-                <div class="mock-page-slide active" data-demo-page="containers">
-                  <div class="mock-main-header">
-                    <div class="mock-main-header-left">
-                      <h4 data-i18n="demoHeader">Containers</h4>
-                      <span class="mock-chip">3 running</span>
-                    </div>
-                    <div class="mock-main-header-right">
-                      <button class="mock-btn" data-i18n="demoBtn">+ Create Container</button>
-                      <div class="mock-status-pill">
-                        <span class="dot online"></span> Connected
-                      </div>
-                    </div>
-                  </div>
-                  <div class="mock-container-list">
-                    <div class="mock-container-card mock-group-header">
-                      <div class="mock-card-icon mock-group-icon">
-                        <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" width="14" height="14"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-                      </div>
-                      <div class="mock-card-body">
-                        <div class="mock-card-name">web-stack</div>
-                        <div class="mock-card-meta" data-i18n="demoGroupMeta">3 containers &middot; 2 running</div>
-                      </div>
-                      <div class="mock-card-stats">
-                        <span class="mock-stat">3</span>
-                      </div>
-                      <div class="mock-card-status running">
-                        <span class="dot"></span> 2 running
-                      </div>
-                      <svg class="mock-chevron" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
-                    </div>
-                    <div class="mock-container-card mock-child-card mock-card-expanded">
-                      <div class="mock-card-main-row">
-                        <div class="mock-card-icon"></div>
-                        <div class="mock-card-body">
-                          <div class="mock-card-name">web-frontend</div>
-                          <div class="mock-card-meta">nginx:alpine &middot; 80:80</div>
-                        </div>
-                        <div class="mock-card-stats">
-                          <span class="mock-stat">0.3%</span>
-                          <span class="mock-stat">24 MB</span>
-                        </div>
-                        <div class="mock-card-status running">
-                          <span class="dot"></span> Up 2h
-                        </div>
-                      </div>
-                      <div class="mock-card-actions">
-                        <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg> Login</span>
-                        <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Logs</span>
-                        <span class="mock-action-btn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg> Exec</span>
-                        <span class="mock-action-sep"></span>
-                        <span class="mock-action-btn mock-action-warn"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> Stop</span>
-                        <span class="mock-action-btn mock-action-danger"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg> Delete</span>
-                      </div>
-                    </div>
-                    <div class="mock-container-card mock-child-card">
-                      <div class="mock-card-icon"></div>
-                      <div class="mock-card-body">
-                        <div class="mock-card-name">api-server</div>
-                        <div class="mock-card-meta">node:20-slim &middot; 3000:3000</div>
-                      </div>
-                      <div class="mock-card-stats">
-                        <span class="mock-stat">1.2%</span>
-                        <span class="mock-stat">128 MB</span>
-                      </div>
-                      <div class="mock-card-status running">
-                        <span class="dot"></span> Up 5d
-                      </div>
-                    </div>
-                    <div class="mock-container-card mock-child-card">
-                      <div class="mock-card-icon muted"></div>
-                      <div class="mock-card-body">
-                        <div class="mock-card-name">db-postgres</div>
-                        <div class="mock-card-meta">postgres:16 &middot; 5432:5432</div>
-                      </div>
-                      <div class="mock-card-stats"></div>
-                      <div class="mock-card-status stopped">
-                        <span class="dot"></span> Stopped
-                      </div>
-                    </div>
-                    <div class="mock-container-card">
-                      <div class="mock-card-icon redis"></div>
-                      <div class="mock-card-body">
-                        <div class="mock-card-name">redis-cache</div>
-                        <div class="mock-card-meta">redis:7-alpine &middot; 6379:6379</div>
-                      </div>
-                      <div class="mock-card-stats">
-                        <span class="mock-stat">0.1%</span>
-                        <span class="mock-stat">8 MB</span>
-                      </div>
-                      <div class="mock-card-status running">
-                        <span class="dot"></span> Up 12h
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="mock-page-slide" data-demo-page="dashboard">
-                  <div class="mock-main-header">
-                    <div class="mock-main-header-left">
-                      <h4 data-i18n="demoSidebar0">Dashboard</h4>
-                      <span class="mock-chip">Live</span>
-                    </div>
-                    <div class="mock-main-header-right">
-                      <button class="mock-btn">Open Containers</button>
-                      <div class="mock-status-pill">
-                        <span class="dot online"></span> Connected
-                      </div>
-                    </div>
-                  </div>
-                  <div class="mock-overview-grid">
-                    <div class="mock-overview-card">
-                      <div class="mock-overview-label">Containers</div>
-                      <div class="mock-overview-value">7</div>
-                      <div class="mock-overview-meta">3 running</div>
-                    </div>
-                    <div class="mock-overview-card">
-                      <div class="mock-overview-label">Images</div>
-                      <div class="mock-overview-value">24</div>
-                      <div class="mock-overview-meta">2 pulled today</div>
-                    </div>
-                    <div class="mock-overview-card">
-                      <div class="mock-overview-label">Volumes</div>
-                      <div class="mock-overview-value">12</div>
-                      <div class="mock-overview-meta">2 dangling</div>
-                    </div>
-                    <div class="mock-overview-card">
-                      <div class="mock-overview-label">VMs</div>
-                      <div class="mock-overview-value">2</div>
-                      <div class="mock-overview-meta">1 running</div>
-                    </div>
-                  </div>
-                  <div class="mock-activity">
-                    <div class="mock-activity-row">
-                      <span>web-frontend</span>
-                      <span class="mock-activity-status running">Running</span>
-                    </div>
-                    <div class="mock-activity-row">
-                      <span>db-postgres</span>
-                      <span class="mock-activity-status stopped">Stopped</span>
-                    </div>
-                    <div class="mock-activity-row">
-                      <span>k3s cluster</span>
-                      <span class="mock-activity-status running">Healthy</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="mock-page-slide" data-demo-page="images">
-                  <div class="mock-main-header">
-                    <div class="mock-main-header-left">
-                      <h4 data-i18n="demoSidebar2">Images</h4>
-                      <span class="mock-chip">24 local</span>
-                    </div>
-                    <div class="mock-main-header-right">
-                      <button class="mock-btn">Pull Image</button>
-                      <div class="mock-status-pill">
-                        <span class="dot online"></span> Connected
-                      </div>
-                    </div>
-                  </div>
-                  <table class="mock-table mock-image-table">
-                    <thead>
-                      <tr>
-                        <th>Repository</th>
-                        <th>Tag</th>
-                        <th>Size</th>
-                        <th>Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td class="mock-name">nginx</td>
-                        <td class="mock-image">alpine</td>
-                        <td>57 MB</td>
-                        <td>2h ago</td>
-                      </tr>
-                      <tr>
-                        <td class="mock-name">postgres</td>
-                        <td class="mock-image">16</td>
-                        <td>379 MB</td>
-                        <td>1d ago</td>
-                      </tr>
-                      <tr>
-                        <td class="mock-name">node</td>
-                        <td class="mock-image">20-slim</td>
-                        <td>188 MB</td>
-                        <td>3d ago</td>
-                      </tr>
-                      <tr>
-                        <td class="mock-name">redis</td>
-                        <td class="mock-image">7-alpine</td>
-                        <td>31 MB</td>
-                        <td>6d ago</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Tech Stack ===== -->
-  <section class="techstack" id="techstack">
-    <div class="container">
-      <div class="reveal">
-        <div class="section-label" data-i18n="techLabel">Architecture</div>
-        <h2 class="section-title" data-i18n="techTitle">Built with Rust. Powered by gRPC.</h2>
-        <p class="section-desc" data-i18n="techDesc">Full-stack Rust — from the GUI backend to the daemon to the VM engine. Zero garbage collection. Maximum performance.</p>
-      </div>
-
-      <div class="tech-badges reveal">
-        <!-- Rust -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#f87171" stroke-width="1.5"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2m-3.5-7.5l-1.4 1.4M6.9 17.1l-1.4 1.4m0-13l1.4 1.4m10.2 10.2l1.4 1.4" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="4" stroke="#f87171" stroke-width="1.5"/></svg>
-          Rust
-        </div>
-        <!-- Tauri -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><circle cx="15" cy="8" r="4" stroke="#22d3ee" stroke-width="1.5"/><circle cx="9" cy="16" r="4" stroke="#22d3ee" stroke-width="1.5"/><path d="M13 5a8 8 0 014 7" stroke="#22d3ee" stroke-width="1.5" stroke-linecap="round"/><path d="M11 19a8 8 0 01-4-7" stroke="#22d3ee" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Tauri v2
-        </div>
-        <!-- React -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="2" fill="#22d3ee"/><ellipse cx="12" cy="12" rx="10" ry="4" stroke="#22d3ee" stroke-width="1.2"/><ellipse cx="12" cy="12" rx="10" ry="4" stroke="#22d3ee" stroke-width="1.2" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" stroke="#22d3ee" stroke-width="1.2" transform="rotate(120 12 12)"/></svg>
-          React + TypeScript
-        </div>
-        <!-- gRPC -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="6" r="1.5" fill="#34d399"/><circle cx="17" cy="12" r="1.5" fill="#34d399"/><circle cx="10" cy="18" r="1.5" fill="#34d399"/></svg>
-          gRPC (tonic)
-        </div>
-        <!-- Tokio -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="#facc15" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Tokio
-        </div>
-        <!-- bollard -->
-        <div class="tech-badge">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" stroke="#8b5cf6" stroke-width="1.5"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round"/></svg>
-          bollard (Docker API)
-        </div>
-      </div>
-
-    </div>
-  </section>
-
-  <!-- ===== Comparison ===== -->
-  <section class="comparison" id="comparison">
-    <div class="container">
-      <div class="reveal">
-        <div class="section-label" data-i18n="compLabel">Comparison</div>
-        <h2 class="section-title" data-i18n="compTitle">How CrateBay stacks up.</h2>
-        <p class="section-desc" data-i18n="compDesc">A quick look at how CrateBay compares to the alternatives.</p>
-      </div>
-
-      <div class="comparison-table-wrap reveal">
-        <table class="comparison-table">
-          <thead>
-            <tr>
-              <th data-i18n="compFeature">Feature</th>
-              <th class="highlight" data-i18n="compCrateBay">CrateBay</th>
-              <th data-i18n="compDocker">Docker Desktop</th>
-              <th data-i18n="compOrbStack">OrbStack</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td data-i18n="compAppSize">App Size</td>
-              <td class="highlight" data-i18n="compCBSize">~18 MB</td>
-              <td data-i18n="compDDSize">~1.5 GB</td>
-              <td data-i18n="compOSSize">~200 MB</td>
-            </tr>
-            <tr>
-              <td data-i18n="compMemory">Memory Usage</td>
-              <td class="highlight" data-i18n="compCBMem">&lt; 200 MB idle</td>
-              <td data-i18n="compDDMem">3-6 GB</td>
-              <td data-i18n="compOSMem">&lt; 1 GB</td>
-            </tr>
-            <tr>
-              <td data-i18n="compStartup">Startup Time</td>
-              <td class="highlight" data-i18n="compCBStart">&lt; 1s</td>
-              <td data-i18n="compDDStart">~10s</td>
-              <td data-i18n="compOSStart">~2s</td>
-            </tr>
-            <tr>
-              <td data-i18n="compOpenSource">Open Source</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-              <td class="cross">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compFree">Free</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="cross" data-i18n="compDDFree">&#10007; (&gt;250 employees)</td>
-              <td class="cross" data-i18n="compOSFree">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compGui">GUI Stack</td>
-              <td class="highlight" data-i18n="compCBGui">Rust + Tauri</td>
-              <td data-i18n="compDDGui">Electron</td>
-              <td data-i18n="compOSGui">Swift (Native)</td>
-            </tr>
-            <tr>
-              <td data-i18n="compWindows">Windows Support</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compLinux">Linux Support</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compPortForward">Auto Port Forwarding</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="check">&#10003;</td>
-              <td class="check">&#10003;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compVirtiofs">VirtioFS File Sharing</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="check">&#10003;</td>
-              <td class="check">&#10003;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compVM">VM Support</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-              <td class="check">&#10003;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compK8s">Kubernetes</td>
-              <td class="highlight check">&#10003; <span class="comp-note" data-i18n="compK8sNote">(K3s)</span></td>
-              <td class="check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compPlugin">Plugin System</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="cross">&#10007;</td>
-              <td class="cross">&#10007;</td>
-            </tr>
-            <tr>
-              <td data-i18n="compCross">Cross-platform</td>
-              <td class="highlight check">&#10003;</td>
-              <td class="check">&#10003;</td>
-              <td class="cross" data-i18n="compMacOnly">macOS only</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Getting Started ===== -->
-  <section class="getting-started" id="install">
-    <div class="container">
-      <div class="reveal">
-        <div class="section-label" data-i18n="installLabel">Getting Started</div>
-        <h2 class="section-title" data-i18n="installTitle">Get started today.</h2>
-        <p class="section-desc" data-i18n="installDesc">Direct binaries are coming soon. Use Homebrew or source build for now.</p>
-      </div>
-
-      <div class="install-methods reveal">
-        <!-- Homebrew -->
-        <div class="install-card">
-          <h3 data-i18n="installBrew">Homebrew</h3>
-          <p class="install-desc" data-i18n="installBrewDesc">macOS &amp; Linux</p>
-          <div class="code-block">
-            <button class="copy-btn">Copy</button>
-            <code><span class="prompt">$ </span>brew tap coder-hhx/cratebay
-<span class="prompt">$ </span>brew install cratebay</code>
-          </div>
-        </div>
-
-        <!-- Cargo -->
-        <div class="install-card">
-          <h3 data-i18n="installCargo">Cargo</h3>
-          <p class="install-desc" data-i18n="installCargoDesc">Build from source</p>
-          <div class="code-block">
-            <button class="copy-btn">Copy</button>
-            <code><span class="prompt">$ </span>cargo install cratebay</code>
-          </div>
-        </div>
-
-        <!-- Direct Download -->
-        <div class="install-card">
-          <h3 data-i18n="installDirect">Direct Download</h3>
-          <p class="install-desc" data-i18n="installDirectDesc">Coming soon</p>
-          <div class="code-block">
-            <button class="copy-btn">Copy</button>
-            <code><span class="comment"># Direct binaries are coming soon</span>
-<span class="prompt">$ </span>git clone https://github.com/coder-hhx/CrateBay.git
-<span class="prompt">$ </span>cd CrateBay &amp;&amp; cargo build --release</code>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Footer ===== -->
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-inner">
-        <div class="footer-left">
-          <div class="footer-logo">
-            <img src="logo.png" alt="CrateBay" width="22" height="22" />
-            CrateBay
-          </div>
-          <span class="footer-copy">&copy; 2026 CrateBay &middot; Apache License 2.0</span>
-        </div>
-        <div class="footer-links">
-          <a href="https://github.com/coder-hhx/CrateBay/tree/main/docs" target="_blank" rel="noopener" data-i18n="footerDocs">Documentation</a>
-          <a href="https://github.com/coder-hhx/CrateBay/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener" data-i18n="footerRoadmap">Roadmap</a>
-          <a href="https://github.com/coder-hhx/CrateBay/blob/main/LICENSE" target="_blank" rel="noopener" data-i18n="footerLicense">License</a>
-          <a href="https://github.com/coder-hhx/CrateBay" target="_blank" rel="noopener">GitHub</a>
-        </div>
-      </div>
-    </div>
-  </footer>
-
-  <script src="script.js"></script>
+  <main>
+    <div class="badge">CrateBay</div>
+    <img src="logo.png" alt="CrateBay" />
+    <h1>Coming Soon</h1>
+    <p>The public website is temporarily hidden.</p>
+    <p>CrateBay will return when the release is ready.</p>
+  </main>
 </body>
 </html>
