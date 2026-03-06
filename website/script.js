@@ -29,21 +29,21 @@
       summary3Body:
         "Keep MCP, models, containers, VMs, and Kubernetes in one control plane.",
       sectionKicker: "Why It Hits",
-      sectionTitle: "Local AI is hot. The workflow is still messy.",
+      sectionTitle: "Local AI is hot. The workflow is still broken.",
       sectionBody:
-        "Bring up a model, start a sandbox, connect tools, and iterate — without leaving your desktop GUI.",
+        "Bring up a model, start a sandbox, connect tools, and iterate — all inside one desktop GUI.",
       card1Title: "Sandbox-first GUI",
       card1Body:
         "AI sandboxes are a first-class desktop workflow.",
       card2Title: "One-click local models",
       card2Body:
-        "Make local model setup feel fast, visual, and daily-use ready.",
+        "Make local model setup fast, visual, and daily-use ready.",
       card3Title: "MCP built into the desktop",
       card3Body:
         "Bring MCP servers and assistant flows into the same desktop environment.",
       card4Title: "Your local AI stack, in one app",
       card4Body:
-        "From models to sandboxes to infra, keep the whole local AI stack in one app.",
+        "Keep models, sandboxes, and infra in one app.",
       statusKicker: "Status",
       statusTitle: "Coming soon",
       statusBody:
@@ -77,21 +77,21 @@
       summary3Body:
         "把 MCP、模型、容器、VM、Kubernetes 统一放进一个桌面控制面。",
       sectionKicker: "为什么它有吸引力",
-      sectionTitle: "本地 AI 很火，工作流还很乱。",
+      sectionTitle: "本地 AI 很火，工作流却很乱。",
       sectionBody:
-        "拉起模型、启动 sandbox、连接工具、快速迭代，而且整个过程都不必离开桌面 GUI。",
+        "拉起模型、启动 sandbox、连接工具、快速迭代，都在一个桌面 GUI 里完成。",
       card1Title: "Sandbox-first GUI",
       card1Body:
-        "本地 AI sandbox 是一等公民，不再只是 CLI 背后的专家功能。",
+        "本地 AI sandbox，不该只是 CLI 背后的专家功能。",
       card2Title: "一键本地模型",
       card2Body:
         "让本地模型部署与管理更快、更直观。",
       card3Title: "桌面内建 MCP",
       card3Body:
-        "把 MCP server 和 assistant 工作流直接放进同一个桌面环境里。",
+        "把 MCP server 和 assistant 工作流放进同一个桌面环境里。",
       card4Title: "你的本地 AI 栈，一个应用搞定",
       card4Body:
-        "从模型到 sandbox 到基础设施，把整套本地 AI 栈放进一个应用。",
+        "把模型、sandbox 和基础设施放进一个应用。",
       statusKicker: "状态",
       statusTitle: "即将推出",
       statusBody:
