@@ -77,7 +77,7 @@
       summary3Body:
         "把 MCP、模型、容器、VM、Kubernetes 统一放进一个桌面控制面。",
       sectionKicker: "为什么它有吸引力",
-      sectionTitle: "本地 AI 很火，工作流却很乱。",
+      sectionTitle: "本地 AI 很火，但真正顺手的工作流还不多。",
       sectionBody:
         "拉起模型、启动 sandbox、连接工具、快速迭代，都在一个桌面 GUI 里完成。",
       card1Title: "Sandbox-first GUI",
