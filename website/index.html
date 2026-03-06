@@ -16,69 +16,71 @@
   <main class="shell">
     <section class="hero panel">
       <div class="hero-copy">
-        <div class="eyebrow">
-          <span class="badge badge-primary">CrateBay</span>
-          <span class="badge">Coming Soon</span>
+        <div class="hero-top">
+          <div class="eyebrow">
+            <span class="badge badge-primary" data-i18n="brand">CrateBay</span>
+            <span class="badge" data-i18n="comingSoon">Coming Soon</span>
+          </div>
+          <div class="lang-switch" aria-label="Language switcher">
+            <button type="button" class="lang-btn" data-lang="en" aria-pressed="true">EN</button>
+            <button type="button" class="lang-btn" data-lang="zh" aria-pressed="false">中文</button>
+          </div>
         </div>
         <img class="hero-logo" src="logo.png" alt="CrateBay logo" />
-        <h1>The GUI for local AI sandboxes.</h1>
-        <p class="hero-lead">
-          Spin up AI sandboxes. Deploy local models in one click.
-          Manage MCP servers, containers, VMs, and Kubernetes —
-          all from one native desktop app.
+        <h1 data-i18n="heroTitle">The GUI for local AI sandboxes.</h1>
+        <p class="hero-lead" data-i18n="heroLead">
+          Spin up AI sandboxes. Deploy local models in one click. Manage MCP servers, containers, VMs, and Kubernetes — all from one native desktop app.
         </p>
-        <p class="hero-sub">
-          Local AI is moving fast.
-          CrateBay is built for AI builders who want the speed of modern agent workflows
-          without the chaos of terminals, scripts, and scattered dashboards.
+        <p class="hero-sub" data-i18n="heroSub">
+          Local AI is moving fast. CrateBay is built for AI builders who want the speed of modern agent workflows without the chaos of terminals, scripts, and scattered dashboards.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://github.com/coder-hhx/CrateBay" target="_blank" rel="noreferrer">GitHub</a>
+          <a class="btn btn-primary" href="https://github.com/coder-hhx/CrateBay" target="_blank" rel="noreferrer" data-i18n="githubCta">GitHub</a>
         </div>
       </div>
 
       <div class="hero-summary">
         <article class="summary-card">
-          <span class="summary-label">AI Sandboxes</span>
-          <strong>Create and control locally</strong>
-          <p>Run local AI sandboxes from a real desktop GUI instead of stitching together shell commands by hand.</p>
+          <span class="summary-label" data-i18n="summary1Label">AI Sandboxes</span>
+          <strong data-i18n="summary1Title">Create and control locally</strong>
+          <p data-i18n="summary1Body">Run local AI sandboxes from a real desktop GUI instead of stitching together shell commands by hand.</p>
         </article>
         <article class="summary-card">
-          <span class="summary-label">Local Models</span>
-          <strong>One-click deployment flow</strong>
-          <p>Pull, manage, and run local models from the same product surface where the rest of your stack already lives.</p>
+          <span class="summary-label" data-i18n="summary2Label">Local Models</span>
+          <strong data-i18n="summary2Title">One-click deployment flow</strong>
+          <p data-i18n="summary2Body">Pull, manage, and run local models from the same product surface where the rest of your stack already lives.</p>
         </article>
         <article class="summary-card">
-          <span class="summary-label">MCP + Infra</span>
-          <strong>One place for the whole stack</strong>
-          <p>Keep MCP servers, containers, Linux VMs, Kubernetes, and assistant-driven workflows inside one desktop control plane.</p>
+          <span class="summary-label" data-i18n="summary3Label">MCP + Infra</span>
+          <strong data-i18n="summary3Title">One place for the whole stack</strong>
+          <p data-i18n="summary3Body">Keep MCP servers, containers, Linux VMs, Kubernetes, and assistant-driven workflows inside one desktop control plane.</p>
         </article>
       </div>
     </section>
 
     <section class="section">
       <div class="section-head">
-        <span class="section-kicker">Why It Hits</span>
-        <h2>Local AI is exploding. The workflow is still messy.</h2>
-        <p>CrateBay is designed around the workflow people actually want right now: bring up a model, start a sandbox, connect tools, and iterate fast — without leaving your desktop GUI.</p>
+        <span class="section-kicker" data-i18n="sectionKicker">Why It Hits</span>
+        <h2 data-i18n="sectionTitle">Local AI is exploding. The workflow is still messy.</h2>
+        <p data-i18n="sectionBody">CrateBay is designed around the workflow people actually want right now: bring up a model, start a sandbox, connect tools, and iterate fast — without leaving your desktop GUI.</p>
       </div>
 
       <div class="grid cards-4">
         <article class="card">
-          <h3>Sandbox-first desktop UX</h3>
-          <p>Local AI sandboxes are treated as a first-class workflow, not a hidden expert-only feature behind CLI tooling.</p>
+          <h3 data-i18n="card1Title">Sandbox-first desktop UX</h3>
+          <p data-i18n="card1Body">Local AI sandboxes are treated as a first-class workflow, not a hidden expert-only feature behind CLI tooling.</p>
         </article>
         <article class="card">
-          <h3>One-click local models</h3>
-          <p>Make local model deployment and management feel fast, visual, and ready for daily AI work.</p>
+          <h3 data-i18n="card2Title">One-click local models</h3>
+          <p data-i18n="card2Body">Make local model deployment and management feel fast, visual, and ready for daily AI work.</p>
         </article>
         <article class="card">
-          <h3>MCP built into the desktop</h3>
-          <p>Bring tool servers and assistant flows into the same environment where your local infrastructure already runs.</p>
+          <h3 data-i18n="card3Title">MCP built into the desktop</h3>
+          <p data-i18n="card3Body">Bring tool servers and assistant flows into the same environment where your local infrastructure already runs.</p>
         </article>
         <article class="card">
-          <h3>Your local AI stack, in one app</h3>
-          <p>From models and sandboxes to containers and VMs, CrateBay is built to become the control surface for local AI development.</p>
+          <h3 data-i18n="card4Title">Your local AI stack, in one app</h3>
+          <p data-i18n="card4Body">From models and sandboxes to containers and VMs, CrateBay is built to become the control surface for local AI development.</p>
         </article>
       </div>
     </section>
@@ -86,16 +88,16 @@
     <section class="section compact">
       <div class="panel callout">
         <div>
-          <span class="section-kicker">Status</span>
-          <h2>Coming soon for AI builders</h2>
-          <p>If you care about local AI sandboxes, local models, MCP workflows, and desktop-first agent tooling, keep an eye on CrateBay.</p>
+          <span class="section-kicker" data-i18n="statusKicker">Status</span>
+          <h2 data-i18n="statusTitle">Coming soon for AI builders</h2>
+          <p data-i18n="statusBody">If you care about local AI sandboxes, local models, MCP workflows, and desktop-first agent tooling, keep an eye on CrateBay.</p>
         </div>
       </div>
     </section>
   </main>
 
   <footer class="footer">
-    <span>CrateBay · <span data-year></span></span>
+    <span data-i18n="footer">CrateBay · <span data-year></span></span>
   </footer>
 </body>
 </html>

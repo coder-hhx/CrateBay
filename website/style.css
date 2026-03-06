@@ -94,6 +94,51 @@ code {
   align-items: flex-start;
 }
 
+.hero-top {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.lang-btn {
+  appearance: none;
+  border: 0;
+  min-width: 52px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.lang-btn[aria-pressed="true"] {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(34, 211, 238, 0.82));
+  color: #fff;
+  box-shadow: 0 10px 26px rgba(124, 58, 237, 0.22);
+}
+
+.lang-btn:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
 .eyebrow {
   display: flex;
   flex-wrap: wrap;
@@ -328,6 +373,11 @@ h1 {
   .timeline-grid,
   .callout {
     grid-template-columns: 1fr;
+  }
+
+  .hero-top {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .hero {
