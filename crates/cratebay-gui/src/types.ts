@@ -263,6 +263,15 @@ export interface AssistantStepExecutionResult {
   output: unknown
 }
 
+export interface AiSkillExecutionResult {
+  ok: boolean
+  skill_id: string
+  executor: string
+  target: string
+  request_id: string
+  output: unknown
+}
+
 export interface AgentCliPreset {
   id: string
   name: string

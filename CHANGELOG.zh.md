@@ -15,13 +15,26 @@
 - GUI 接入 Ollama 第一阶段能力（`ollama_status`、`ollama_list_models`）：运行状态检测 + 本地模型列表。
 - 新增 AI 引导脚本 `scripts/setup-ai.sh`，用于前置检查与可选的 best-effort 安装流程。
 - 新增 `tools/opensandbox/` 本地脚手架，提供模板配置和启动说明。
+- Skills runtime 默认项补充了 Codex CLI 与 Claude Code 的直连 prompt skill。
+- Settings 的 AI 区域现在支持直接执行 skill，包括本地沙箱与 Agent bridge 条目。
+- Assistant 现已提供快捷 skills，可直接触发 Codex / Claude / 托管沙箱执行，无需先生成计划。
+- 内置 skills 在运行前已增加 schema 输入校验。
 - 新增 `docs/VISION.md` 与 `docs/VISION.zh.md`，明确 AI Hub 方向与版本策略。
+
+#### 自动化验证
+- 新增基于 Playwright 的 GUI 端到端覆盖，覆盖应用壳导航、运行时流程、AI Hub、Assistant 与安全护栏回归。
+- 本地 CI、release-readiness 与 GitHub Actions 现已接入自动化浏览器验证，并保留 Playwright 产物用于排障。
+- 新增验证矩阵与 Linux 桌面壳 smoke 脚手架，用于真实 Tauri 壳层验证。
+- 本地 CI、release-readiness 与 Linux CI 新增真实 Docker runtime smoke 与 AI runtime smoke 门禁。
+- 新增 Ollama 兼容模型链路、MCP 生命周期、Docker-backed sandbox 生命周期的后端运行时 smoke。
+- AI sandbox 在本地缺少目标镜像时会自动拉取镜像，避免首次创建失败。
 
 ### 变更
 
 - 将当前公开预览线重置为 `v0.7.0`，把 `v1.0.0` 保留给 GA。
 - 刷新官网布局，并统一 README / Roadmap / Tutorial 的 preview 口径。
 - 更新路线图，明确 AI Hub 补完与 pre-v1 验证阶段。
+- 明确 CrateBay 自有托管沙箱是主线路径，外部 sandbox 兼容性仍属实验项。
 
 ## [0.7.0] - 2026-03-02
 

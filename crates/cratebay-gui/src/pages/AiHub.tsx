@@ -662,7 +662,7 @@ export function AiHub({ t }: AiHubProps) {
               right={
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span className="rounded-md border border-border/50 bg-muted/60 px-2 py-1 font-mono">
-                    opensandbox
+                    managed
                   </span>
                   <span>{t("aiSandboxesCardHint")}</span>
                   {sandboxes.length > 0 && (

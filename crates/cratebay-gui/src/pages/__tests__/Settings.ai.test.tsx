@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { invoke } from "@tauri-apps/api/core"
 import { Settings } from "../Settings"
 import { messages } from "../../i18n/messages"
-import type { AgentCliRunResult, AiConnectionTestResult, AiSettings, Theme } from "../../types"
+import type { AgentCliRunResult, AiConnectionTestResult, AiSettings, AiSkillExecutionResult, Theme } from "../../types"
 
 const t = (key: string) => messages.en[key] || key
 
@@ -22,6 +22,58 @@ const baseAiSettings: AiSettings = {
     },
   ],
   skills: [
+    {
+      id: "managed-sandbox-list",
+      display_name: "Managed Sandbox List",
+      description: "List managed sandboxes",
+      tags: ["sandbox", "managed"],
+      executor: "assistant_step",
+      target: "sandbox_list",
+      input_schema: {
+        type: "object",
+        properties: {},
+      },
+      enabled: true,
+    },
+    {
+      id: "managed-sandbox-command",
+      display_name: "Managed Sandbox Command",
+      description: "Run a command inside a sandbox",
+      tags: ["sandbox", "managed"],
+      executor: "sandbox_action",
+      target: "sandbox_exec",
+      input_schema: {
+        type: "object",
+        properties: { id: { type: "string" }, command: { type: "string" } },
+      },
+      enabled: true,
+    },
+    {
+      id: "agent-cli-codex-prompt",
+      display_name: "Codex CLI Prompt",
+      description: "Invoke codex preset",
+      tags: ["agent-cli", "codex"],
+      executor: "agent_cli_preset",
+      target: "codex",
+      input_schema: {
+        type: "object",
+        properties: { prompt: { type: "string" } },
+      },
+      enabled: true,
+    },
+    {
+      id: "agent-cli-claude-prompt",
+      display_name: "Claude Code Prompt",
+      description: "Invoke claude preset",
+      tags: ["agent-cli", "claude"],
+      executor: "agent_cli_preset",
+      target: "claude",
+      input_schema: {
+        type: "object",
+        properties: { prompt: { type: "string" } },
+      },
+      enabled: true,
+    },
     {
       id: "agent-cli-openclaw-plan",
       display_name: "OpenClaw CLI Plan",
@@ -198,6 +250,92 @@ describe("Settings AI section", () => {
         })
       )
     )
+  })
+
+  it("executes codex skill from the skills registry", async () => {
+    const user = userEvent.setup()
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_ai_settings") return baseAiSettings
+      if (command === "agent_cli_list_presets") return []
+      if (command === "ai_secret_exists") return true
+      if (command === "ai_skill_execute") {
+        const out: AiSkillExecutionResult = {
+          ok: true,
+          skill_id: "agent-cli-codex-prompt",
+          executor: "agent_cli_preset",
+          target: "codex",
+          request_id: "skill-1",
+          output: {
+            ok: true,
+            command_line: "codex exec summarize project",
+          },
+        }
+        return out
+      }
+      return null
+    })
+
+    render(<Settings {...defaultProps} />)
+    await switchToAiTab(user)
+
+    const card = await screen.findByTestId("skill-card-agent-cli-codex-prompt")
+    await user.clear(within(card).getByTestId("skill-input-agent-cli-codex-prompt"))
+    await user.type(within(card).getByTestId("skill-input-agent-cli-codex-prompt"), "summarize project")
+    await user.click(within(card).getByRole("button", { name: t("aiSkillRun") }))
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("ai_skill_execute", {
+        skillId: "agent-cli-codex-prompt",
+        input: { prompt: "summarize project" },
+        dryRun: true,
+        confirmed: null,
+      })
+    )
+    expect(within(card).getByTestId("skill-result-agent-cli-codex-prompt")).toHaveTextContent("codex exec summarize project")
+    expect(within(card).getByTestId("skill-result-agent-cli-codex-prompt")).toHaveTextContent("request_id=skill-1")
+  })
+
+  it("executes managed sandbox command skill with json input", async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, "confirm").mockReturnValue(true)
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_ai_settings") return baseAiSettings
+      if (command === "agent_cli_list_presets") return []
+      if (command === "ai_secret_exists") return true
+      if (command === "ai_skill_execute") {
+        const out: AiSkillExecutionResult = {
+          ok: true,
+          skill_id: "managed-sandbox-command",
+          executor: "sandbox_action",
+          target: "sandbox_exec",
+          request_id: "skill-2",
+          output: { ok: true, output: "hello from sandbox" },
+        }
+        return out
+      }
+      return null
+    })
+
+    render(<Settings {...defaultProps} />)
+    await switchToAiTab(user)
+
+    const card = await screen.findByTestId("skill-card-managed-sandbox-command")
+    const input = within(card).getByTestId("skill-input-managed-sandbox-command")
+    await user.clear(input)
+    fireEvent.change(input, {
+      target: { value: '{"id":"sandbox-1","command":"echo hello from sandbox"}' },
+    })
+    await user.click(within(card).getByRole("button", { name: t("aiSkillRun") }))
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("ai_skill_execute", {
+        skillId: "managed-sandbox-command",
+        input: { id: "sandbox-1", command: "echo hello from sandbox" },
+        dryRun: null,
+        confirmed: true,
+      })
+    )
+    expect(within(card).getByTestId("skill-result-managed-sandbox-command")).toHaveTextContent("hello from sandbox")
   })
 
   it("splits general and ai settings into separate tabs", async () => {

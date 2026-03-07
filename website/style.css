@@ -139,6 +139,14 @@ code {
   transform: translateY(-1px);
 }
 
+.status-note {
+  margin-top: 12px;
+  max-width: 42rem;
+  color: var(--muted);
+  font-size: 0.98rem;
+  line-height: 1.6;
+}
+
 .eyebrow {
   display: flex;
   flex-wrap: wrap;

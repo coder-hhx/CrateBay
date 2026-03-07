@@ -433,7 +433,7 @@ fn format_published_ports(mut pairs: Vec<(u16, u16)>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_published_ports;
+    use super::{detect_vm_ssh_port, format_published_ports, vm_login_cmd, PortForwardDto};
 
     #[test]
     fn format_published_ports_sorts_by_public_then_private() {
@@ -444,6 +444,40 @@ mod tests {
     #[test]
     fn format_published_ports_empty_is_empty() {
         assert_eq!(format_published_ports(vec![]), "");
+    }
+
+    #[test]
+    fn detect_vm_ssh_port_prefers_guest_port_22_over_tcp() {
+        let port = detect_vm_ssh_port(&[
+            PortForwardDto {
+                host_port: 9090,
+                guest_port: 90,
+                protocol: "tcp".into(),
+            },
+            PortForwardDto {
+                host_port: 2228,
+                guest_port: 22,
+                protocol: "tcp".into(),
+            },
+        ]);
+        assert_eq!(port, Some(2228));
+    }
+
+    #[test]
+    fn vm_login_cmd_falls_back_to_detected_ssh_forward() {
+        let cmd = vm_login_cmd(
+            "vm-1".into(),
+            "root".into(),
+            "127.0.0.1".into(),
+            None,
+            Some(vec![PortForwardDto {
+                host_port: 2228,
+                guest_port: 22,
+                protocol: "tcp".into(),
+            }]),
+        )
+        .expect("login command");
+        assert!(cmd.contains("ssh root@127.0.0.1 -p 2228"));
     }
 }
 
@@ -1383,17 +1417,33 @@ async fn vm_delete(state: State<'_, AppState>, id: String) -> Result<(), String>
     vm_delete_inner(state.inner(), id).await
 }
 
+fn detect_vm_ssh_port(port_forwards: &[PortForwardDto]) -> Option<u16> {
+    port_forwards
+        .iter()
+        .find(|pf| pf.guest_port == 22 && pf.protocol.eq_ignore_ascii_case("tcp"))
+        .map(|pf| pf.host_port)
+}
+
 #[tauri::command]
 fn vm_login_cmd(
     name: String,
     user: String,
     host: String,
     port: Option<u16>,
+    port_forwards: Option<Vec<PortForwardDto>>,
 ) -> Result<String, String> {
-    let Some(port) = port else {
-        return Err("VM login is not available yet. Specify an SSH port.".into());
+    let detected_port = port_forwards.as_deref().and_then(detect_vm_ssh_port);
+    let Some(port) = port.or(detected_port) else {
+        return Err(
+            "VM login is not available yet. Add a guest port 22 forward or specify an SSH port."
+                .into(),
+        );
     };
-    Ok(format!("ssh {}@{} -p {}\n# VM: {}", user, host, port, name))
+    Ok(format!(
+        "ssh {}@{} -p {}
+# VM: {}",
+        user, host, port, name
+    ))
 }
 
 #[tauri::command]
@@ -2552,6 +2602,14 @@ fn refresh_tray_menu(app: &tauri::AppHandle) {
 
 const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 
+fn ollama_base_url() -> String {
+    std::env::var("CRATEBAY_OLLAMA_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OLLAMA_BASE_URL.to_string())
+}
+
 fn ollama_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_millis(900))
@@ -2625,7 +2683,8 @@ async fn ollama_check_installed() -> bool {
 
 async fn ollama_check_running() -> Result<String, String> {
     let client = ollama_http_client()?;
-    let url = format!("{}/api/version", OLLAMA_BASE_URL.trim_end_matches('/'));
+    let base_url = ollama_base_url();
+    let url = format!("{}/api/version", base_url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!(
@@ -2640,18 +2699,19 @@ async fn ollama_check_running() -> Result<String, String> {
 #[tauri::command]
 async fn ollama_status() -> Result<OllamaStatusDto, String> {
     let installed = ollama_check_installed().await;
+    let base_url = ollama_base_url();
     match ollama_check_running().await {
         Ok(version) => Ok(OllamaStatusDto {
             installed,
             running: true,
             version,
-            base_url: OLLAMA_BASE_URL.to_string(),
+            base_url,
         }),
         Err(_) => Ok(OllamaStatusDto {
             installed,
             running: false,
             version: String::new(),
-            base_url: OLLAMA_BASE_URL.to_string(),
+            base_url,
         }),
     }
 }
@@ -2659,7 +2719,8 @@ async fn ollama_status() -> Result<OllamaStatusDto, String> {
 #[tauri::command]
 async fn ollama_list_models() -> Result<Vec<OllamaModelDto>, String> {
     let client = ollama_http_client()?;
-    let url = format!("{}/api/tags", OLLAMA_BASE_URL.trim_end_matches('/'));
+    let base_url = ollama_base_url();
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("ollama tags endpoint returned {}", resp.status()));
@@ -3307,6 +3368,11 @@ async fn sandbox_create(request: SandboxCreateRequest) -> Result<SandboxCreateRe
     };
 
     let docker = connect_docker()?;
+    if docker.inspect_image(&image).await.is_err() {
+        docker_pull_image(&docker, &image)
+            .await
+            .map_err(|e| format!("Failed to pull sandbox image {}: {}", image, e))?;
+    }
     let created = docker
         .create_container(
             Some(CreateContainerOptions {
@@ -3914,6 +3980,68 @@ fn default_ai_skills() -> Vec<AiSkillDefinition> {
             }),
         ),
         ai_skill(
+            "managed-sandbox-list",
+            "Managed Sandbox List",
+            "List CrateBay-managed sandboxes and their current lifecycle state.",
+            &["sandbox", "managed", "read"],
+            "assistant_step",
+            "sandbox_list",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        ),
+        ai_skill(
+            "managed-sandbox-command",
+            "Managed Sandbox Command",
+            "Run a command inside a CrateBay-managed sandbox.",
+            &["sandbox", "managed", "command"],
+            "sandbox_action",
+            "sandbox_exec",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "command": { "type": "string", "minLength": 1 }
+                },
+                "required": ["id", "command"],
+                "additionalProperties": false
+            }),
+        ),
+        ai_skill(
+            "agent-cli-codex-prompt",
+            "Codex CLI Prompt",
+            "Invoke the Codex CLI preset directly from the skills runtime.",
+            &["agent-cli", "codex", "prompting"],
+            "agent_cli_preset",
+            "codex",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "minLength": 1 }
+                },
+                "required": ["prompt"],
+                "additionalProperties": false
+            }),
+        ),
+        ai_skill(
+            "agent-cli-claude-prompt",
+            "Claude Code Prompt",
+            "Invoke the Claude Code CLI preset directly from the skills runtime.",
+            &["agent-cli", "claude", "prompting"],
+            "agent_cli_preset",
+            "claude",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "minLength": 1 }
+                },
+                "required": ["prompt"],
+                "additionalProperties": false
+            }),
+        ),
+        ai_skill(
             "agent-cli-openclaw-plan",
             "OpenClaw CLI Plan",
             "Invoke OpenClaw CLI preset to generate multi-step task plans.",
@@ -3923,7 +4051,7 @@ fn default_ai_skills() -> Vec<AiSkillDefinition> {
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "prompt": { "type": "string" }
+                    "prompt": { "type": "string", "minLength": 1 }
                 },
                 "required": ["prompt"],
                 "additionalProperties": false
@@ -4063,14 +4191,28 @@ fn normalize_ai_settings(mut settings: AiSettings) -> AiSettings {
             skill.display_name = skill.id.clone();
         }
         if skill.description.is_empty() {
-            skill.description = "Skill scaffold entry".to_string();
+            skill.description = "Skill runtime entry".to_string();
         }
         if skill.executor.is_empty() {
             skill.executor = "assistant_step".to_string();
         }
+        if skill.input_schema.is_null() {
+            skill.input_schema = default_skill_input_schema();
+        }
     }
     if settings.skills.is_empty() {
         settings.skills = default_ai_skills();
+    } else {
+        let mut existing_ids = settings
+            .skills
+            .iter()
+            .map(|skill| skill.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        for default_skill in default_ai_skills() {
+            if existing_ids.insert(default_skill.id.clone()) {
+                settings.skills.push(default_skill);
+            }
+        }
     }
 
     let mut mcp_seen = std::collections::HashSet::new();
@@ -4297,10 +4439,14 @@ fn mcp_runtime_status_from_settings(
     out
 }
 
+fn mcp_list_servers_inner(state: &AppState) -> Result<Vec<McpServerStatusDto>, String> {
+    let settings = load_ai_settings()?;
+    Ok(mcp_runtime_status_from_settings(state, &settings))
+}
+
 #[tauri::command]
 fn mcp_list_servers(state: State<'_, AppState>) -> Result<Vec<McpServerStatusDto>, String> {
-    let settings = load_ai_settings()?;
-    Ok(mcp_runtime_status_from_settings(state.inner(), &settings))
+    mcp_list_servers_inner(state.inner())
 }
 
 #[tauri::command]
@@ -4311,9 +4457,8 @@ fn mcp_save_servers(servers: Vec<McpServerEntry>) -> Result<Vec<McpServerEntry>,
     Ok(saved.mcp_servers)
 }
 
-#[tauri::command]
-async fn mcp_start_server(
-    state: State<'_, AppState>,
+async fn mcp_start_server_inner(
+    state: &AppState,
     id: String,
 ) -> Result<AiHubActionResultDto, String> {
     let settings = load_ai_settings()?;
@@ -4384,8 +4529,15 @@ async fn mcp_start_server(
 }
 
 #[tauri::command]
-async fn mcp_stop_server(
+async fn mcp_start_server(
     state: State<'_, AppState>,
+    id: String,
+) -> Result<AiHubActionResultDto, String> {
+    mcp_start_server_inner(state.inner(), id).await
+}
+
+async fn mcp_stop_server_inner(
+    state: &AppState,
     id: String,
 ) -> Result<AiHubActionResultDto, String> {
     let mut runtimes = state.mcp_runtimes.lock().unwrap_or_else(|e| e.into_inner());
@@ -4420,8 +4572,15 @@ async fn mcp_stop_server(
 }
 
 #[tauri::command]
-fn mcp_server_logs(
+async fn mcp_stop_server(
     state: State<'_, AppState>,
+    id: String,
+) -> Result<AiHubActionResultDto, String> {
+    mcp_stop_server_inner(state.inner(), id).await
+}
+
+fn mcp_server_logs_inner(
+    state: &AppState,
     id: String,
     limit: Option<usize>,
 ) -> Result<Vec<String>, String> {
@@ -4434,6 +4593,15 @@ fn mcp_server_logs(
     let len = logs.len();
     let start = len.saturating_sub(limit);
     Ok(logs.iter().skip(start).cloned().collect())
+}
+
+#[tauri::command]
+fn mcp_server_logs(
+    state: State<'_, AppState>,
+    id: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    mcp_server_logs_inner(state.inner(), id, limit)
 }
 
 #[tauri::command]
@@ -4612,6 +4780,16 @@ pub struct AssistantStepExecutionResult {
     request_id: String,
     command: String,
     risk_level: String,
+    output: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSkillExecutionResult {
+    ok: bool,
+    skill_id: String,
+    executor: String,
+    target: String,
+    request_id: String,
     output: serde_json::Value,
 }
 
@@ -5907,6 +6085,310 @@ async fn assistant_execute_step(
     })
 }
 
+fn resolve_ai_skill(settings: &AiSettings, skill_id: &str) -> Result<AiSkillDefinition, String> {
+    settings
+        .skills
+        .iter()
+        .find(|skill| skill.id == skill_id)
+        .cloned()
+        .ok_or_else(|| format!("Skill not found: {}", skill_id))
+}
+
+fn skill_prompt_input(input: &serde_json::Value) -> Option<String> {
+    if let Some(prompt) = input.as_str() {
+        let prompt = prompt.trim();
+        if !prompt.is_empty() {
+            return Some(prompt.to_string());
+        }
+    }
+
+    input
+        .as_object()
+        .and_then(|obj| obj.get("prompt"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn skill_input_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+fn normalize_skill_input(skill: &AiSkillDefinition, input: serde_json::Value) -> serde_json::Value {
+    if skill.executor != "agent_cli_preset" {
+        return input;
+    }
+
+    match input {
+        serde_json::Value::String(prompt) => {
+            serde_json::json!({ "prompt": prompt.trim() })
+        }
+        serde_json::Value::Object(mut map) => {
+            if let Some(prompt) = map.get("prompt").and_then(|value| value.as_str()) {
+                map.insert(
+                    "prompt".to_string(),
+                    serde_json::Value::String(prompt.trim().to_string()),
+                );
+            }
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn validate_skill_input(
+    path: &str,
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), String> {
+    let Some(schema_obj) = schema.as_object() else {
+        return Ok(());
+    };
+    if schema_obj.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(expected_type) = schema_obj.get("type").and_then(|value| value.as_str()) {
+        match expected_type {
+            "object" => {
+                let object = value.as_object().ok_or_else(|| {
+                    format!(
+                        "{} must be an object, got {}",
+                        path,
+                        skill_input_kind(value)
+                    )
+                })?;
+                let properties = schema_obj
+                    .get("properties")
+                    .and_then(|value| value.as_object());
+
+                if let Some(required) = schema_obj
+                    .get("required")
+                    .and_then(|value| value.as_array())
+                {
+                    for item in required {
+                        let Some(key) = item.as_str() else {
+                            continue;
+                        };
+                        if !object.contains_key(key) {
+                            return Err(format!("{}.{} is required", path, key));
+                        }
+                    }
+                }
+
+                let allow_additional = schema_obj
+                    .get("additionalProperties")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true);
+                if !allow_additional {
+                    for key in object.keys() {
+                        if !properties
+                            .map(|items| items.contains_key(key))
+                            .unwrap_or(false)
+                        {
+                            return Err(format!("{}.{} is not allowed", path, key));
+                        }
+                    }
+                }
+
+                if let Some(properties) = properties {
+                    for (key, property_schema) in properties {
+                        if let Some(property_value) = object.get(key) {
+                            validate_skill_input(
+                                &format!("{}.{}", path, key),
+                                property_value,
+                                property_schema,
+                            )?;
+                        }
+                    }
+                }
+            }
+            "string" => {
+                let text = value.as_str().ok_or_else(|| {
+                    format!("{} must be a string, got {}", path, skill_input_kind(value))
+                })?;
+                if let Some(min_length) =
+                    schema_obj.get("minLength").and_then(|value| value.as_u64())
+                {
+                    if text.chars().count() < min_length as usize {
+                        return Err(format!(
+                            "{} must be at least {} characters",
+                            path, min_length
+                        ));
+                    }
+                }
+            }
+            "boolean" => {
+                if !value.is_boolean() {
+                    return Err(format!(
+                        "{} must be a boolean, got {}",
+                        path,
+                        skill_input_kind(value)
+                    ));
+                }
+            }
+            "number" => {
+                if !value.is_number() {
+                    return Err(format!(
+                        "{} must be a number, got {}",
+                        path,
+                        skill_input_kind(value)
+                    ));
+                }
+            }
+            "integer" => match value {
+                serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => {}
+                _ => {
+                    return Err(format!(
+                        "{} must be an integer, got {}",
+                        path,
+                        skill_input_kind(value)
+                    ));
+                }
+            },
+            "array" => {
+                let items = value.as_array().ok_or_else(|| {
+                    format!("{} must be an array, got {}", path, skill_input_kind(value))
+                })?;
+                if let Some(min_items) = schema_obj.get("minItems").and_then(|value| value.as_u64())
+                {
+                    if items.len() < min_items as usize {
+                        return Err(format!(
+                            "{} must contain at least {} items",
+                            path, min_items
+                        ));
+                    }
+                }
+                if let Some(item_schema) = schema_obj.get("items") {
+                    for (index, item) in items.iter().enumerate() {
+                        validate_skill_input(&format!("{}[{}]", path, index), item, item_schema)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(allowed_values) = schema_obj.get("enum").and_then(|value| value.as_array()) {
+        if !allowed_values.iter().any(|candidate| candidate == value) {
+            return Err(format!("{} must match one of the allowed values", path));
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn ai_skill_execute(
+    state: State<'_, AppState>,
+    skill_id: String,
+    input: Option<serde_json::Value>,
+    dry_run: Option<bool>,
+    confirmed: Option<bool>,
+) -> Result<AiSkillExecutionResult, String> {
+    let settings = load_ai_settings()?;
+    let skill = resolve_ai_skill(&settings, skill_id.trim())?;
+    if !skill.enabled {
+        return Err(format!("Skill '{}' is disabled", skill.id));
+    }
+
+    let input_value = normalize_skill_input(&skill, input.unwrap_or_else(|| serde_json::json!({})));
+    validate_skill_input("input", &input_value, &skill.input_schema)?;
+
+    let (request_id, output) = match skill.executor.as_str() {
+        "assistant_step" | "sandbox_action" => {
+            let confirmation_hint = assistant_command_policy(&skill.target)
+                .map(|policy| policy.risk_level != "read")
+                .unwrap_or(false);
+            let result = assistant_execute_step(
+                state.clone(),
+                skill.target.clone(),
+                input_value,
+                None,
+                Some(confirmation_hint),
+                confirmed,
+            )
+            .await?;
+            let request_id = result.request_id.clone();
+            (
+                request_id,
+                serde_json::to_value(result).map_err(|e| e.to_string())?,
+            )
+        }
+        "mcp_action" => {
+            let access = mcp_check_access(
+                skill.target.clone(),
+                None,
+                Some(mcp_action_policy(&skill.target).requires_confirmation),
+                confirmed,
+            )?;
+            if !access.allowed {
+                return Err(access.message);
+            }
+            let result = assistant_execute_step(
+                state.clone(),
+                skill.target.clone(),
+                input_value,
+                Some(access.risk_level),
+                Some(access.requires_confirmation),
+                confirmed,
+            )
+            .await?;
+            let request_id = result.request_id.clone();
+            (
+                request_id,
+                serde_json::to_value(result).map_err(|e| e.to_string())?,
+            )
+        }
+        "agent_cli_preset" => {
+            let result = agent_cli_run(
+                Some(skill.target.clone()),
+                None,
+                None,
+                skill_prompt_input(&input_value),
+                dry_run.unwrap_or(false),
+                None,
+            )
+            .await?;
+            let request_id = result.request_id.clone();
+            (
+                request_id,
+                serde_json::to_value(result).map_err(|e| e.to_string())?,
+            )
+        }
+        other => return Err(format!("Unsupported skill executor '{}'", other)),
+    };
+
+    ai_audit_log(
+        "ai_skill_execute",
+        "write",
+        &request_id,
+        &format!(
+            "skill_id={} executor={} target={} dry_run={}",
+            skill.id,
+            skill.executor,
+            skill.target,
+            dry_run.unwrap_or(false)
+        ),
+    );
+
+    Ok(AiSkillExecutionResult {
+        ok: true,
+        skill_id: skill.id,
+        executor: skill.executor,
+        target: skill.target,
+        request_id,
+        output,
+    })
+}
+
 #[tauri::command]
 fn mcp_check_access(
     action: String,
@@ -6271,7 +6753,8 @@ mod ai_tests {
         assistant_arg_optional_string, assistant_arg_string, assistant_command_policy,
         default_ai_settings, infer_assistant_steps, infer_assistant_steps_with_runtime,
         is_command_allowed, mcp_action_policy, mcp_confirmation_satisfied, normalize_ai_settings,
-        redact_sensitive,
+        normalize_skill_input, redact_sensitive, resolve_ai_skill, skill_prompt_input,
+        validate_skill_input,
     };
 
     #[test]
@@ -6353,6 +6836,22 @@ mod ai_tests {
         assert!(settings
             .skills
             .iter()
+            .any(|skill| skill.id == "managed-sandbox-list"));
+        assert!(settings
+            .skills
+            .iter()
+            .any(|skill| skill.id == "managed-sandbox-command"));
+        assert!(settings
+            .skills
+            .iter()
+            .any(|skill| skill.id == "agent-cli-codex-prompt"));
+        assert!(settings
+            .skills
+            .iter()
+            .any(|skill| skill.id == "agent-cli-claude-prompt"));
+        assert!(settings
+            .skills
+            .iter()
             .any(|skill| skill.id == "agent-cli-openclaw-plan"));
     }
 
@@ -6362,6 +6861,91 @@ mod ai_tests {
         settings.skills.clear();
         let normalized = normalize_ai_settings(settings);
         assert!(!normalized.skills.is_empty());
+    }
+
+    #[test]
+    fn normalize_ai_settings_appends_new_default_skills() {
+        let mut settings = default_ai_settings();
+        settings
+            .skills
+            .retain(|skill| skill.id == "assistant-container-diagnose");
+        let normalized = normalize_ai_settings(settings);
+        assert!(normalized
+            .skills
+            .iter()
+            .any(|skill| skill.id == "managed-sandbox-list"));
+        assert!(normalized
+            .skills
+            .iter()
+            .any(|skill| skill.id == "managed-sandbox-command"));
+        assert!(normalized
+            .skills
+            .iter()
+            .any(|skill| skill.id == "agent-cli-codex-prompt"));
+        assert!(normalized
+            .skills
+            .iter()
+            .any(|skill| skill.id == "agent-cli-claude-prompt"));
+    }
+
+    #[test]
+    fn skill_prompt_input_supports_string_and_object_forms() {
+        assert_eq!(
+            skill_prompt_input(&serde_json::json!("plan infra")),
+            Some("plan infra".to_string())
+        );
+        assert_eq!(
+            skill_prompt_input(&serde_json::json!({ "prompt": "run tests" })),
+            Some("run tests".to_string())
+        );
+        assert_eq!(skill_prompt_input(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn skill_input_schema_normalizes_prompt_string_input() {
+        let settings = default_ai_settings();
+        let skill = resolve_ai_skill(&settings, "agent-cli-codex-prompt").expect("codex skill");
+        let normalized = normalize_skill_input(&skill, serde_json::json!("  summarize repo  "));
+        assert_eq!(
+            normalized,
+            serde_json::json!({ "prompt": "summarize repo" })
+        );
+        validate_skill_input("input", &normalized, &skill.input_schema).expect("prompt schema");
+    }
+
+    #[test]
+    fn skill_input_schema_rejects_missing_and_unknown_fields() {
+        let settings = default_ai_settings();
+        let skill = resolve_ai_skill(&settings, "managed-sandbox-command").expect("sandbox skill");
+        let missing = validate_skill_input(
+            "input",
+            &serde_json::json!({ "id": "sandbox-1" }),
+            &skill.input_schema,
+        )
+        .expect_err("missing command should fail");
+        assert!(missing.contains("input.command is required"));
+
+        let unexpected = validate_skill_input(
+            "input",
+            &serde_json::json!({
+                "id": "sandbox-1",
+                "command": "echo hi",
+                "extra": true
+            }),
+            &skill.input_schema,
+        )
+        .expect_err("unexpected field should fail");
+        assert!(unexpected.contains("input.extra is not allowed"));
+    }
+
+    #[test]
+    fn skill_input_schema_rejects_empty_prompt_values() {
+        let settings = default_ai_settings();
+        let skill = resolve_ai_skill(&settings, "agent-cli-claude-prompt").expect("claude skill");
+        let normalized = normalize_skill_input(&skill, serde_json::json!("   "));
+        let err = validate_skill_input("input", &normalized, &skill.input_schema)
+            .expect_err("blank prompt should fail");
+        assert!(err.contains("input.prompt must be at least 1 characters"));
     }
 
     #[derive(Clone, Copy)]
@@ -6752,6 +7336,494 @@ async fn set_window_theme(window: tauri::WebviewWindow, theme: String) -> Result
     window.set_theme(t).map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
+mod ai_runtime_tests {
+    use super::{
+        default_ai_settings, load_ai_settings, mcp_export_client_config, mcp_list_servers_inner,
+        mcp_server_logs_inner, mcp_start_server_inner, mcp_stop_server_inner, ollama_delete_model,
+        ollama_list_models, ollama_pull_model, ollama_status, ollama_storage_info,
+        sandbox_audit_list, sandbox_create, sandbox_delete, sandbox_exec, sandbox_inspect,
+        sandbox_list, sandbox_start, sandbox_stop, save_ai_settings, AppState, McpServerEntry,
+        SandboxCreateRequest,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    struct EnvGuard {
+        key: String,
+        prev: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &str, value: impl AsRef<str>) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value.as_ref());
+            Self {
+                key: key.to_string(),
+                prev,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(value) => std::env::set_var(&self.key, value),
+                None => std::env::remove_var(&self.key),
+            }
+        }
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct DockerCleanup {
+        container_name: Option<String>,
+        image_tag: Option<String>,
+    }
+
+    impl Drop for DockerCleanup {
+        fn drop(&mut self) {
+            if let Some(name) = &self.container_name {
+                let _ = Command::new("docker").args(["rm", "-f", name]).output();
+            }
+            if let Some(tag) = &self.image_tag {
+                let _ = Command::new("docker")
+                    .args(["image", "rm", "-f", tag])
+                    .output();
+            }
+        }
+    }
+
+    fn docker_ready() -> bool {
+        matches!(
+            Command::new("docker").arg("info").output(),
+            Ok(output) if output.status.success()
+        )
+    }
+
+    fn test_app_state() -> AppState {
+        AppState {
+            hv: Box::new(cratebay_core::vm::StubHypervisor::new()),
+            grpc_addr: "http://127.0.0.1:65531".to_string(),
+            daemon: Mutex::new(None),
+            daemon_ready: Mutex::new(false),
+            log_stream_handles: Mutex::new(HashMap::new()),
+            mcp_runtimes: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn fake_ollama_models(state_path: &Path) -> Vec<String> {
+        std::fs::read_to_string(state_path)
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn fake_ollama_tags_payload(state_path: &Path) -> String {
+        let models = fake_ollama_models(state_path)
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let size = 64_u64 * 1024 * 1024 * (index as u64 + 1);
+                json!({
+                    "name": name,
+                    "modified_at": format!("2026-03-07T00:00:{:02}Z", index),
+                    "size": size,
+                    "digest": format!("sha256:test{:02}", index),
+                    "details": {
+                        "family": "qwen2.5",
+                        "parameter_size": "7B",
+                        "quantization_level": "Q4_K_M"
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({ "models": models }).to_string()
+    }
+
+    struct FakeOllamaServer {
+        stop: Arc<AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+        base_url: String,
+    }
+
+    impl FakeOllamaServer {
+        fn start(state_path: PathBuf) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake ollama server");
+            listener
+                .set_nonblocking(true)
+                .expect("set fake ollama listener nonblocking");
+            let port = listener.local_addr().expect("listener addr").port();
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_flag = stop.clone();
+            let handle = thread::spawn(move || {
+                while !stop_flag.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut buffer = [0_u8; 4096];
+                            let read = stream.read(&mut buffer).unwrap_or(0);
+                            let request = String::from_utf8_lossy(&buffer[..read]);
+                            let path = request
+                                .lines()
+                                .next()
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .unwrap_or("/");
+                            let (status, body) =
+                                if path == "/api/version" || path.ends_with("/api/version") {
+                                    (
+                                        "HTTP/1.1 200 OK",
+                                        json!({ "version": "0.5.7-test" }).to_string(),
+                                    )
+                                } else if path == "/api/tags" || path.ends_with("/api/tags") {
+                                    ("HTTP/1.1 200 OK", fake_ollama_tags_payload(&state_path))
+                                } else {
+                                    (
+                                        "HTTP/1.1 404 Not Found",
+                                        json!({ "error": "not found", "path": path }).to_string(),
+                                    )
+                                };
+                            let response = format!(
+                                "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                status,
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(25));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                stop,
+                handle: Some(handle),
+                base_url: format!("http://127.0.0.1:{}", port),
+            }
+        }
+    }
+
+    impl Drop for FakeOllamaServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(port) = self.base_url.rsplit(':').next() {
+                let _ = TcpStream::connect(format!("127.0.0.1:{}", port));
+            }
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn write_fake_ollama_binary(bin_dir: &Path, state_path: &Path) {
+        let script = format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nstate=\"{}\"\nmkdir -p \"$(dirname \"$state\")\"\ntouch \"$state\"\ncase \"${{1:-}}\" in\n  --version)\n    echo \"ollama version 0.5.7-test\"\n    ;;\n  pull)\n    model=\"${{2:?model required}}\"\n    if ! grep -Fxq \"$model\" \"$state\"; then\n      echo \"$model\" >> \"$state\"\n    fi\n    echo \"pulled $model\"\n    ;;\n  rm)\n    model=\"${{2:?model required}}\"\n    tmp=\"$state.tmp\"\n    grep -Fxv \"$model\" \"$state\" > \"$tmp\" || true\n    mv \"$tmp\" \"$state\"\n    echo \"removed $model\"\n    ;;\n  *)\n    echo \"unsupported fake ollama args: $*\" >&2\n    exit 1\n    ;;\nesac\n",
+            state_path.display()
+        );
+        let script_path = bin_dir.join("ollama");
+        std::fs::write(&script_path, script).expect("write fake ollama binary");
+        let chmod = Command::new("chmod")
+            .args(["+x", script_path.to_str().expect("script path")])
+            .status()
+            .expect("chmod fake ollama");
+        assert!(chmod.success(), "fake ollama binary should be executable");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker runtime"]
+    async fn sandbox_runtime_smoke_lifecycle() {
+        let _lock = env_lock();
+        assert!(
+            docker_ready(),
+            "Docker daemon must be available for sandbox runtime smoke"
+        );
+
+        let tmp = TempDir::new("cratebay-ai-sandbox-smoke");
+        let config_dir = tmp.path.join("config");
+        let _config = EnvGuard::set(
+            "CRATEBAY_CONFIG_DIR",
+            config_dir.to_str().expect("config dir"),
+        );
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let sandbox_name = format!("cbx-ai-sandbox-{}-{}", std::process::id(), suffix);
+        let mut cleanup = DockerCleanup {
+            container_name: Some(sandbox_name.clone()),
+            image_tag: None,
+        };
+
+        let created = sandbox_create(SandboxCreateRequest {
+            template_id: "python-dev".to_string(),
+            name: Some(sandbox_name.clone()),
+            image: Some("alpine:3.20".to_string()),
+            command: Some("sleep 300".to_string()),
+            env: Some(vec!["CRATEBAY_E2E=1".to_string()]),
+            cpu_cores: Some(1),
+            memory_mb: Some(256),
+            ttl_hours: Some(1),
+            owner: Some("ci".to_string()),
+        })
+        .await
+        .expect("create sandbox");
+
+        assert_eq!(created.name, sandbox_name);
+        assert!(created.login_cmd.contains(&sandbox_name));
+
+        let list = sandbox_list().await.expect("list sandboxes");
+        let item = list
+            .iter()
+            .find(|entry| entry.name == sandbox_name)
+            .expect("created sandbox should be listed");
+        assert_eq!(item.template_id, "python-dev");
+        assert_eq!(item.owner, "ci");
+        assert_eq!(item.cpu_cores, 1);
+        assert_eq!(item.memory_mb, 256);
+        assert!(!item.is_expired);
+
+        let inspect = sandbox_inspect(created.id.clone())
+            .await
+            .expect("inspect sandbox");
+        assert!(inspect.running);
+        assert!(inspect
+            .env
+            .iter()
+            .any(|entry| entry == "CRATEBAY_SANDBOX=1"));
+        assert!(inspect.env.iter().any(|entry| entry == "CRATEBAY_E2E=1"));
+
+        let exec = sandbox_exec(created.id.clone(), "echo CRATEBAY_SANDBOX_OK".to_string())
+            .await
+            .expect("exec sandbox command");
+        assert!(exec.output.contains("CRATEBAY_SANDBOX_OK"));
+
+        sandbox_stop(created.id.clone())
+            .await
+            .expect("stop sandbox");
+        let stopped = sandbox_inspect(created.id.clone())
+            .await
+            .expect("inspect stopped sandbox");
+        assert!(!stopped.running);
+
+        sandbox_start(created.id.clone())
+            .await
+            .expect("restart sandbox");
+        let restarted = sandbox_inspect(created.id.clone())
+            .await
+            .expect("inspect restarted sandbox");
+        assert!(restarted.running);
+
+        sandbox_delete(created.id.clone())
+            .await
+            .expect("delete sandbox");
+        cleanup.container_name = None;
+
+        let after = sandbox_list().await.expect("list sandboxes after delete");
+        assert!(!after.iter().any(|entry| entry.name == sandbox_name));
+
+        let audit = sandbox_audit_list(Some(20)).expect("sandbox audit list");
+        assert!(audit
+            .iter()
+            .any(|event| event.action == "create" && event.sandbox_name == sandbox_name));
+        assert!(audit
+            .iter()
+            .any(|event| event.action == "delete" && event.sandbox_name == sandbox_name));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local runtime canary server"]
+    async fn ollama_runtime_canary_smoke() {
+        let _lock = env_lock();
+
+        let tmp = TempDir::new("cratebay-ollama-smoke");
+        let config_dir = tmp.path.join("config");
+        let bin_dir = tmp.path.join("bin");
+        let models_dir = tmp.path.join("models");
+        let state_path = tmp.path.join("fake-ollama-models.txt");
+        std::fs::create_dir_all(&bin_dir).expect("create fake bin dir");
+        std::fs::create_dir_all(&models_dir).expect("create fake models dir");
+        std::fs::write(&state_path, "qwen2.5:7b\n").expect("seed fake models");
+        write_fake_ollama_binary(&bin_dir, &state_path);
+        let server = FakeOllamaServer::start(state_path.clone());
+
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let joined_path = if current_path.is_empty() {
+            bin_dir.display().to_string()
+        } else {
+            format!("{}:{}", bin_dir.display(), current_path)
+        };
+        let _path = EnvGuard::set("PATH", joined_path);
+        let _config = EnvGuard::set(
+            "CRATEBAY_CONFIG_DIR",
+            config_dir.to_str().expect("config dir"),
+        );
+        let _models = EnvGuard::set("OLLAMA_MODELS", models_dir.to_str().expect("models dir"));
+        let _base_url = EnvGuard::set("CRATEBAY_OLLAMA_BASE_URL", &server.base_url);
+
+        let status = ollama_status().await.expect("ollama status");
+        assert!(status.installed);
+        assert!(status.running);
+        assert_eq!(status.version, "0.5.7-test");
+        assert_eq!(status.base_url, server.base_url);
+
+        let models = ollama_list_models().await.expect("initial ollama models");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "qwen2.5:7b");
+
+        let storage = ollama_storage_info().await.expect("ollama storage info");
+        assert!(storage.exists);
+        assert_eq!(storage.model_count, 1);
+        assert_eq!(PathBuf::from(storage.path), models_dir);
+
+        let pull = ollama_pull_model("smoke:test".to_string())
+            .await
+            .expect("pull fake model");
+        assert!(pull.ok);
+        assert!(pull.message.contains("pulled smoke:test"));
+
+        let pulled_models = ollama_list_models().await.expect("models after pull");
+        assert!(pulled_models.iter().any(|item| item.name == "smoke:test"));
+
+        let storage_after_pull = ollama_storage_info().await.expect("storage after pull");
+        assert_eq!(storage_after_pull.model_count, 2);
+
+        let delete = ollama_delete_model("smoke:test".to_string())
+            .await
+            .expect("delete fake model");
+        assert!(delete.ok);
+        assert!(delete.message.contains("removed smoke:test"));
+
+        let models_after_delete = ollama_list_models().await.expect("models after delete");
+        assert_eq!(models_after_delete.len(), 1);
+        assert_eq!(models_after_delete[0].name, "qwen2.5:7b");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local process runtime"]
+    async fn mcp_runtime_smoke_lifecycle() {
+        let _lock = env_lock();
+
+        let tmp = TempDir::new("cratebay-mcp-smoke");
+        let config_dir = tmp.path.join("config");
+        let _config = EnvGuard::set(
+            "CRATEBAY_CONFIG_DIR",
+            config_dir.to_str().expect("config dir"),
+        );
+
+        let mut settings = default_ai_settings();
+        settings.mcp_servers = vec![McpServerEntry {
+            id: "local-smoke".to_string(),
+            name: "Local Smoke MCP".to_string(),
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "echo MCP_READY; while true; do sleep 1; done".to_string(),
+            ],
+            env: vec!["CRATEBAY_MCP=1".to_string()],
+            working_dir: tmp.path.display().to_string(),
+            enabled: true,
+            notes: "runtime smoke".to_string(),
+        }];
+        save_ai_settings(settings).expect("save MCP test settings");
+
+        let state = test_app_state();
+        let started = mcp_start_server_inner(&state, "local-smoke".to_string())
+            .await
+            .expect("start MCP runtime");
+        assert!(started.ok);
+        assert!(started.message.contains("Started Local Smoke MCP"));
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let servers = mcp_list_servers_inner(&state).expect("list MCP servers");
+        let server = servers
+            .iter()
+            .find(|entry| entry.id == "local-smoke")
+            .expect("started MCP server should be listed");
+        assert!(server.running);
+        assert_eq!(server.status, "running");
+        assert!(server.pid.is_some());
+
+        let logs = mcp_server_logs_inner(&state, "local-smoke".to_string(), Some(20))
+            .expect("read MCP runtime logs");
+        assert!(
+            logs.iter().any(|line| line.contains("MCP_READY"))
+                || logs.iter().any(|line| line.contains("started pid="))
+        );
+
+        let exported =
+            mcp_export_client_config("codex".to_string()).expect("export codex MCP config");
+        assert!(exported.contains("\"local-smoke\""));
+        assert!(exported.contains("\"/bin/sh\""));
+
+        let loaded = load_ai_settings().expect("reload AI settings");
+        assert_eq!(loaded.mcp_servers.len(), 1);
+        assert_eq!(loaded.mcp_servers[0].id, "local-smoke");
+
+        let stopped = mcp_stop_server_inner(&state, "local-smoke".to_string())
+            .await
+            .expect("stop MCP runtime");
+        assert!(stopped.ok);
+
+        let after_stop = mcp_list_servers_inner(&state).expect("list MCP servers after stop");
+        let stopped_server = after_stop
+            .iter()
+            .find(|entry| entry.id == "local-smoke")
+            .expect("stopped MCP server should still be listed");
+        assert!(!stopped_server.running);
+        assert!(matches!(
+            stopped_server.status.as_str(),
+            "exited" | "stopped"
+        ));
+    }
+}
+
 pub fn run() {
     cratebay_core::logging::init();
     #[allow(unused_mut)]
@@ -6929,6 +8001,7 @@ pub fn run() {
             mcp_server_logs,
             mcp_export_client_config,
             opensandbox_status,
+            ai_skill_execute,
             validate_ai_profile,
             ai_secret_set,
             ai_secret_delete,

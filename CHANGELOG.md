@@ -16,13 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ollama phase 1 in GUI (`ollama_status`, `ollama_list_models`) with runtime status and local model listing.
 - AI bootstrap script `scripts/setup-ai.sh` for prerequisite checks and optional best-effort install flow.
 - OpenSandbox local scaffold under `tools/opensandbox/` with template config and setup notes.
+- Skills runtime defaults now include direct Codex CLI and Claude Code prompt entries.
+- Settings AI section now supports direct skill execution for local sandbox and agent bridge entries.
+- Assistant now exposes quick skills for direct Codex / Claude / managed sandbox execution without generating a plan first.
+- Built-in skills now enforce schema validation before runtime dispatch.
 - Public vision docs (`docs/VISION.md`, `docs/VISION.zh.md`) with the AI Hub direction and versioning policy.
+
+#### Automated Validation
+- Playwright end-to-end coverage for the GUI, including app shell navigation, runtime flows, AI Hub, assistant flows, and security guardrails.
+- Local CI, release-readiness, and GitHub Actions now run automated browser validation and persist Playwright artifacts for debugging.
+- Added a validation matrix and Linux desktop-shell smoke harness for real Tauri shell verification.
+- Added real Docker runtime smoke and AI runtime smoke gates to local CI, release-readiness, and Linux CI.
+- Added backend runtime smokes for Ollama-compatible model flows, MCP lifecycle, and Docker-backed sandbox lifecycle.
+- AI sandboxes now auto-pull their image when the requested image is missing locally.
 
 ### Changed
 
 - Reset the public preview line to `v0.7.0`; reserve `v1.0.0` for GA only.
 - Refreshed website layout and aligned README / Roadmap / Tutorial wording with the preview policy.
 - Updated roadmap milestones to make AI Hub completion and pre-v1 validation explicit.
+- Clarified that CrateBay-managed sandboxes are the primary path and external sandbox compatibility remains experimental.
 
 ## [0.7.0] - 2026-03-02
 

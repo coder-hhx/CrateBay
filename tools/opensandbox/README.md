@@ -1,14 +1,14 @@
-# OpenSandbox (Local) — Quick Setup for CrateBay Integration
+# OpenSandbox (Local) — Optional Compatibility Reference for CrateBay
 
-CrateBay’s AI sandbox direction treats OpenSandbox as an **optional local runtime** that CrateBay can manage and call via API.
+CrateBay’s primary sandbox path is the built-in **managed sandbox** flow backed by Docker.
 
-This folder contains a small, source-controlled setup scaffold.
+This folder stays as an **optional external compatibility reference** for local experiments and status visibility only. It is **not** part of the current `v1.0` critical path.
 
 ## What you get here
 
 - `sandbox.example.toml`: a conservative example config (Docker runtime, host/bridge networking notes).
 
-## Local install/run (recommended for dev)
+## Local install/run (optional, experimental)
 
 1) Install `opensandbox-server`
 
@@ -36,14 +36,14 @@ cp ./sandbox.example.toml ~/.sandbox.toml
 opensandbox-server --config ~/.sandbox.toml
 ```
 
-The API docs are usually exposed at:
+If you want to experiment locally, the API docs are usually exposed at:
 
 - `http://localhost:8080/docs`
 
 ## Notes
 
+- **Current roadmap**: CrateBay is not prioritizing a full OpenSandbox lifecycle integration in the current milestone.
 - **Docker socket access**: OpenSandbox needs to talk to Docker to create sandboxes.
 - **Networking mode**:
   - `host`: simplest; higher performance; typically single active sandbox at a time.
   - `bridge`: isolated networking; requires correct `host_ip` for endpoint resolution in some deployments.
-

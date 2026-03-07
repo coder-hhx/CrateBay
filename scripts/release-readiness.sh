@@ -34,19 +34,21 @@ run_check() {
 echo "CrateBay pre-v1 release-readiness gate"
 echo "Report: $report_file"
 
-run_check "Local CI gate (Rust + frontend)" ./scripts/ci-local.sh
+run_check "Local CI gate (Rust + frontend + Playwright E2E)" ./scripts/ci-local.sh
 run_check "Tauri GUI check" cargo check -p cratebay-gui
 run_check "Tauri GUI tests" cargo test -p cratebay-gui
+run_check "AI runtime smoke (Ollama + MCP + sandbox when Docker is available)" ./scripts/ai-runtime-smoke.sh
+run_check "Docker runtime smoke (real CLI + daemon)"   bash -lc 'if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then ./scripts/docker-runtime-smoke.sh; else echo "SKIP: Docker daemon is not available on this machine."; fi'
 run_check "AI core scenario gate (>=95%)" \
   cargo test -p cratebay-gui ai_tests::assistant_core_scenarios_success_rate
 run_check "AI UI smoke tests (Assistant + Settings + AiHub)" \
-  bash -lc "cd crates/cratebay-gui && npm run test:unit -- src/pages/__tests__/Assistant.test.tsx src/pages/__tests__/Settings.ai.test.tsx src/pages/__tests__/AiHub.test.tsx"
+  bash -lc "export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\"; if [[ -s \"$NVM_DIR/nvm.sh\" ]]; then . \"$NVM_DIR/nvm.sh\"; nvm use 24 >/dev/null 2>&1 || nvm use 22 >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true; fi; cd \"$repo_root/crates/cratebay-gui\" && npm run test:unit -- src/pages/__tests__/Assistant.test.tsx src/pages/__tests__/Settings.ai.test.tsx src/pages/__tests__/AiHub.test.tsx"
 run_check "Private planning notice presence" \
-  bash -lc "rg -n 'maintained privately|私有环境维护|private' docs/RELEASE_SMOKE_CHECKLIST.md docs/ROADMAP.md docs/VISION.md docs/VISION.zh.md"
+  bash -c "rg -n 'maintained privately|私有环境维护|private' docs/RELEASE_SMOKE_CHECKLIST.md docs/ROADMAP.md docs/VISION.md docs/VISION.zh.md"
 run_check "Release wording guard (must not claim released)" \
-  bash -lc "if rg -n '(已发布|正式发布|已上线|正式上线|is now live|now live|officially released|已经发布)' README.md README.zh.md docs/TUTORIAL.md docs/TUTORIAL.zh.md website/index.html website/script.js; then exit 1; fi"
+  bash -c "if rg -n '(已发布|正式发布|已上线|正式上线|is now live|now live|officially released|已经发布)' README.md README.zh.md docs/TUTORIAL.md docs/TUTORIAL.zh.md website/index.html website/script.js; then exit 1; fi"
 run_check "Coming-soon wording guard (required)" \
-  bash -lc "rg -n '(coming soon|即将发布|即将提供)' README.md README.zh.md docs/TUTORIAL.md docs/TUTORIAL.zh.md website/index.html website/script.js"
+  bash -c "rg -n '(coming soon|即将发布|即将提供)' README.md README.zh.md docs/TUTORIAL.md docs/TUTORIAL.zh.md website/index.html website/script.js"
 
 echo
 if [[ $status -eq 0 ]]; then

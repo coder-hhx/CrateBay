@@ -17,12 +17,14 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { APP_VERSION } from "@/lib/appVersion"
+import { defaultSkillInputValue, formatSkillExecutionOutput, skillNeedsConfirmation, skillUsesPromptInput } from "@/lib/aiSkills"
 import { cardActionOutline, cardActionSecondary } from "@/lib/styles"
 import type {
   AgentCliPreset,
   AgentCliRunResult,
   AiConnectionTestResult,
   AiSkillDefinition,
+  AiSkillExecutionResult,
   AiProfileValidationResult,
   AiProviderProfile,
   AiSettings,
@@ -82,6 +84,11 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
   const [agentRunning, setAgentRunning] = useState(false)
   const [agentResult, setAgentResult] = useState<AgentCliRunResult | null>(null)
   const [agentError, setAgentError] = useState("")
+  const [skillInputMap, setSkillInputMap] = useState<Record<string, string>>({})
+  const [skillDryRunMap, setSkillDryRunMap] = useState<Record<string, boolean>>({})
+  const [skillResultMap, setSkillResultMap] = useState<Record<string, string>>({})
+  const [skillErrorMap, setSkillErrorMap] = useState<Record<string, string>>({})
+  const [skillRunningId, setSkillRunningId] = useState("")
   const [settingsTab, setSettingsTab] = useState<"general" | "ai">("general")
 
   const sectionTitle = (key: string) => {
@@ -145,6 +152,30 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
       .then((exists) => setSecretExists(exists))
       .catch(() => setSecretExists(null))
   }, [activeProfile])
+
+  useEffect(() => {
+    if (!aiSettings) return
+
+    setSkillInputMap((prev) => {
+      const next = { ...prev }
+      for (const skill of aiSettings.skills ?? []) {
+        if (!(skill.id in next)) {
+          next[skill.id] = defaultSkillInputValue(skill)
+        }
+      }
+      return next
+    })
+
+    setSkillDryRunMap((prev) => {
+      const next = { ...prev }
+      for (const skill of aiSettings.skills ?? []) {
+        if (!(skill.id in next)) {
+          next[skill.id] = skill.executor === "agent_cli_preset"
+        }
+      }
+      return next
+    })
+  }, [aiSettings])
 
   const handleCheckUpdate = async () => {
     setChecking(true)
@@ -379,6 +410,54 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
       setAgentError(String(e))
     } finally {
       setAgentRunning(false)
+    }
+  }
+
+  const handleRunSkill = async (skill: AiSkillDefinition) => {
+    setSkillRunningId(skill.id)
+    setSkillErrorMap((prev) => ({ ...prev, [skill.id]: "" }))
+    setSkillResultMap((prev) => ({ ...prev, [skill.id]: "" }))
+
+    try {
+      let input: unknown
+      if (skillUsesPromptInput(skill)) {
+        const prompt = (skillInputMap[skill.id] ?? "").trim()
+        if (!prompt) {
+          throw new Error(`${t("agentCliPrompt")} is required`)
+        }
+        input = { prompt }
+      } else {
+        const rawInput = skillInputMap[skill.id] ?? "{}"
+        const parsed = JSON.parse(rawInput) as unknown
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("skill input must be a JSON object")
+        }
+        input = parsed
+      }
+
+      const needsConfirmation = skillNeedsConfirmation(skill)
+      const confirmed = needsConfirmation
+        ? window.confirm(`${t("assistantConfirmAction")}\n${skill.display_name}\n${skill.target}`)
+        : null
+      if (needsConfirmation && !confirmed) {
+        return
+      }
+
+      const result = await invoke<AiSkillExecutionResult>("ai_skill_execute", {
+        skillId: skill.id,
+        input,
+        dryRun: skill.executor === "agent_cli_preset" ? (skillDryRunMap[skill.id] ?? true) : null,
+        confirmed,
+      })
+
+      setSkillResultMap((prev) => ({
+        ...prev,
+        [skill.id]: formatSkillExecutionOutput(result, t("done")),
+      }))
+    } catch (e) {
+      setSkillErrorMap((prev) => ({ ...prev, [skill.id]: String(e) }))
+    } finally {
+      setSkillRunningId("")
     }
   }
 
@@ -784,7 +863,8 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
                   {(aiSettings.skills ?? []).map((skill) => (
                     <div
                       key={skill.id}
-                      className="space-y-1 rounded-md border border-border/60 bg-background px-3 py-2"
+                      data-testid={`skill-card-${skill.id}`}
+                      className="space-y-2 rounded-md border border-border/60 bg-background px-3 py-2"
                     >
                       <label className="flex items-center gap-2 text-sm text-foreground">
                         <Checkbox
@@ -806,6 +886,77 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
                         {skill.target}
                       </div>
                       <div className="text-xs text-muted-foreground">{skill.description}</div>
+
+                      {skill.enabled && (
+                        <div className="space-y-2 rounded-md border border-border/60 bg-card px-3 py-3">
+                          <label className="text-xs font-semibold text-muted-foreground">
+                            {skillUsesPromptInput(skill) ? t("agentCliPrompt") : t("assistantStepArgs")}
+                          </label>
+                          <textarea
+                            data-testid={`skill-input-${skill.id}`}
+                            value={skillInputMap[skill.id] ?? defaultSkillInputValue(skill)}
+                            onChange={(event) =>
+                              setSkillInputMap((prev) => ({
+                                ...prev,
+                                [skill.id]: event.target.value,
+                              }))
+                            }
+                            spellCheck={false}
+                            className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          />
+
+                          {skill.executor === "agent_cli_preset" && (
+                            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Checkbox
+                                checked={skillDryRunMap[skill.id] ?? true}
+                                onCheckedChange={(value) =>
+                                  setSkillDryRunMap((prev) => ({
+                                    ...prev,
+                                    [skill.id]: value === true,
+                                  }))
+                                }
+                              />
+                              <span>{t("agentCliDryRun")}</span>
+                            </label>
+                          )}
+
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className={cardActionOutline}
+                              onClick={() => handleRunSkill(skill)}
+                              disabled={skillRunningId === skill.id}
+                            >
+                              {skillRunningId === skill.id ? t("working") : t("aiSkillRun")}
+                            </Button>
+                          </div>
+
+                          {skillResultMap[skill.id] && (
+                            <div className="space-y-1">
+                              <div className="text-xs font-semibold text-muted-foreground">
+                                {t("aiSkillResult")}
+                              </div>
+                              <pre
+                                data-testid={`skill-result-${skill.id}`}
+                                className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-background p-2 text-xs text-muted-foreground"
+                              >
+                                {skillResultMap[skill.id]}
+                              </pre>
+                            </div>
+                          )}
+
+                          {skillErrorMap[skill.id] && (
+                            <Alert variant="destructive">
+                              <AlertTitle>{skill.display_name}</AlertTitle>
+                              <AlertDescription>
+                                <p className="whitespace-pre-wrap">{skillErrorMap[skill.id]}</p>
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                   <div className="text-xs text-muted-foreground">

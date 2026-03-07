@@ -112,6 +112,29 @@ npm run tauri build
 
 检查清单：`docs/RELEASE_SMOKE_CHECKLIST.md`
 
+现在这套 GA 前门禁已经包含 Rust 检查、前端 lint/build/i18n 校验、单元测试、基于 Playwright 的 GUI 端到端验证，以及 AI runtime smoke 与真实 Docker runtime smoke（本机有 daemon 时自动执行）。
+
+### GUI 自动化验证
+
+```bash
+cd crates/cratebay-gui
+npm ci
+npm run test:unit
+npm run test:e2e:install
+npx playwright test
+```
+
+这套 Playwright 用例会运行真实构建后的前端，并注入 Tauri bridge mock，覆盖应用壳导航、容器/镜像/卷、VM/Kubernetes、AI Hub、Assistant 与安全护栏回归场景。
+
+如果要补齐运行时级别信心，可以额外执行：
+
+```bash
+./scripts/docker-runtime-smoke.sh
+./scripts/ai-runtime-smoke.sh
+```
+
+详细覆盖矩阵：`docs/VALIDATION_MATRIX.md`
+
 ### 仅构建 CLI
 
 ```bash
@@ -213,7 +236,7 @@ Docker 存储卷管理：
 设置页拆分为两个标签页：
 
 - **常规**：主题、语言、更新检查
-- **AI**：模型配置、密钥引用、MCP 策略、Skills 注册表预览、Agent/CLI 桥接
+- **AI**：模型配置、密钥引用、MCP 策略、可执行的 Skills 注册表、Assistant 快捷 skills，以及面向 Codex / Claude 等 CLI 的 Agent/CLI 桥接
 
 其中 GUI 偏好保存在 `localStorage`，AI 配置持久化在 `ai-settings.json`。
 
@@ -223,7 +246,8 @@ Docker 存储卷管理：
 - **Models** 标签已支持 Ollama 运行状态、本地模型列表、拉取 / 删除与存储可见性
 - **Sandboxes** 标签已支持模板生命周期、资源限制、TTL 清理、命令执行与本地审计日志
 - **MCP** 标签已支持注册表、本地进程启停、日志与客户端配置导出
-- **Assistant** 已可覆盖容器 / VM / K8s / 模型 / 沙箱 / MCP 的计划与执行
+- **Assistant** 已可覆盖容器 / VM / K8s / 模型 / 沙箱 / MCP 的计划与执行，并支持直接运行已启用的快捷 skills
+- **直连集成** 当前聚焦于本地 provider profiles，以及 Codex、Claude Code 等 Agent/CLI bridge 预设
 
 > 说明：详细产品规划、版本排期与内部验收门槛均在私有环境维护，不在公开仓库披露。
 
@@ -433,6 +457,7 @@ cratebay docker ps
 | `CRATEBAY_CONFIG_DIR` | 覆盖配置目录（保存 `vms.json`） |
 | `CRATEBAY_DATA_DIR` | 覆盖数据目录 |
 | `CRATEBAY_LOG_DIR` | 覆盖日志目录 |
+| `CRATEBAY_OLLAMA_BASE_URL` | 覆盖 AI Hub Models 使用的本地 Ollama 兼容 HTTP 地址 |
 | `CRATEBAY_LOG_RETENTION_DAYS` | 错误日志保留天数（默认：7） |
 | `CRATEBAY_VZ_RUNNER_PATH` | 覆盖 `cratebay-vz` 路径（macOS VZ PoC） |
 | `CRATEBAY_VZ_KERNEL` | Linux kernel 路径（macOS VZ PoC） |

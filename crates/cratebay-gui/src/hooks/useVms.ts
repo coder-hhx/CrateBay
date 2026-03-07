@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { detectVmSshPort } from "../lib/vms"
 import type { VmInfoDto, OsImageDto, OsImageDownloadProgressDto } from "../types"
 
 export function useVms() {
@@ -14,7 +15,7 @@ export function useVms() {
   const [vmActing, setVmActing] = useState("")
   const [vmLoginUser, setVmLoginUser] = useState("root")
   const [vmLoginHost, setVmLoginHost] = useState("127.0.0.1")
-  const [vmLoginPort, setVmLoginPort] = useState<number | "">(2222)
+  const [vmLoginPort, setVmLoginPort] = useState<number | "">("")
 
   const [mountVmId, setMountVmId] = useState("")
   const [mountTag, setMountTag] = useState("")
@@ -125,11 +126,13 @@ export function useVms() {
   const getLoginCmd = useCallback(async (vm: VmInfoDto) => {
     setVmError("")
     try {
+      const resolvedPort = vmLoginPort === "" ? detectVmSshPort(vm.port_forwards) : vmLoginPort
       const cmd = await invoke<string>("vm_login_cmd", {
         name: vm.name || vm.id,
         user: vmLoginUser,
         host: vmLoginHost,
-        port: vmLoginPort === "" ? null : vmLoginPort,
+        port: resolvedPort,
+        portForwards: vm.port_forwards,
       })
       return cmd
     } catch (e) {

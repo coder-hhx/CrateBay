@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { iconStroke, cardActionOutline, cardActionGhost, cardActionDanger } from "@/lib/styles"
+import { detectVmSshPort } from "@/lib/vms"
 import type {
   OsImageDownloadProgressDto,
   OsImageDto,
@@ -369,6 +370,7 @@ export function Vms({
             const isExpanded = expandedVmId === vm.id
             const isActing = vmActing === vm.id
             const stats = vmStatsMap[vm.id]
+            const suggestedSshPort = detectVmSshPort(vm.port_forwards)
 
             const memoryPct =
               stats && vm.memory_mb > 0
@@ -380,7 +382,7 @@ export function Vms({
                 : 0
 
             return (
-              <Card key={vm.id} className="py-0">
+              <Card key={vm.id} className="py-0" data-testid={`vm-card-${vm.id}`}>
                 <CardHeader className="border-b py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -455,6 +457,7 @@ export function Vms({
                         size="icon-xs"
                         onClick={() => onLoginCmd(vm)}
                         title={t("vmLogin")}
+                        data-testid={`vm-quick-login-${vm.id}`}
                         className={cn(iconStroke, "[&_svg]:size-3", cardActionOutline)}
                       >
                         {I.key}
@@ -486,6 +489,7 @@ export function Vms({
                         size="icon-xs"
                         onClick={() => toggleExpanded(vm)}
                         title={isExpanded ? t("close") : "Details"}
+                        data-testid={`vm-expand-${vm.id}`}
                         className={cn(iconStroke, "[&_svg]:size-3", cardActionGhost)}
                       >
                         <span className={cn("transition-transform", isExpanded && "rotate-180")}>
@@ -533,10 +537,10 @@ export function Vms({
                     <Tabs value={activeTab} onValueChange={(v) => handleTabChange(vm.id, v)}>
                       <TabsList variant="line" className="w-full justify-start">
                         <TabsTrigger value="info">Info</TabsTrigger>
-                        <TabsTrigger value="ssh">{t("vmLogin")}</TabsTrigger>
+                        <TabsTrigger value="ssh" data-testid={`vm-tab-ssh-${vm.id}`}>{t("vmLogin")}</TabsTrigger>
                         <TabsTrigger value="mounts">{t("mounts")}</TabsTrigger>
                         <TabsTrigger value="console">{t("console")}</TabsTrigger>
-                        <TabsTrigger value="ports">{t("portForwarding")}</TabsTrigger>
+                        <TabsTrigger value="ports" data-testid={`vm-tab-ports-${vm.id}`}>{t("portForwarding")}</TabsTrigger>
                       </TabsList>
 
                       <TabsContent value="info" className="pt-3 space-y-3">
@@ -569,9 +573,20 @@ export function Vms({
                       </TabsContent>
 
                       <TabsContent value="ssh" className="pt-3 space-y-3">
-                        <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+                        <div
+                          className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground"
+                          data-testid={`vm-ssh-hint-${vm.id}`}
+                        >
                           {t("vmLoginHint")}
                         </div>
+                        {suggestedSshPort !== null && (
+                          <div
+                            className="rounded-lg border border-brand-cyan/15 bg-brand-cyan/8 px-3 py-2 text-xs text-brand-cyan"
+                            data-testid={`vm-ssh-detected-port-${vm.id}`}
+                          >
+                            {t("vmDetectedSshPort")}: {suggestedSshPort} → 22/tcp
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                           <div className="space-y-2">
                             <div className="text-xs font-medium text-muted-foreground">{t("user")}</div>
@@ -586,6 +601,8 @@ export function Vms({
                             <Input
                               type="number"
                               value={vmLoginPort}
+                              placeholder={suggestedSshPort === null ? "2222" : String(suggestedSshPort)}
+                              data-testid={`vm-login-port-${vm.id}`}
                               onChange={(e) =>
                                 setVmLoginPort(e.target.value === "" ? "" : Number(e.target.value))
                               }
@@ -593,7 +610,12 @@ export function Vms({
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button type="button" variant="outline" onClick={() => onLoginCmd(vm)}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => onLoginCmd(vm)}
+                            data-testid={`vm-login-command-${vm.id}`}
+                          >
                             <span className={cn("mr-1", iconStroke, "[&_svg]:size-4")}>{I.key}</span>
                             {t("loginCommand")}
                           </Button>
@@ -738,6 +760,7 @@ export function Vms({
                             <Input
                               type="number"
                               value={pfHostPort}
+                              data-testid={`vm-port-host-${vm.id}`}
                               onChange={(e) =>
                                 setPfHostPort(e.target.value === "" ? "" : Number(e.target.value))
                               }
@@ -748,6 +771,7 @@ export function Vms({
                             <Input
                               type="number"
                               value={pfGuestPort}
+                              data-testid={`vm-port-guest-${vm.id}`}
                               onChange={(e) =>
                                 setPfGuestPort(e.target.value === "" ? "" : Number(e.target.value))
                               }
@@ -775,6 +799,7 @@ export function Vms({
                               type="button"
                               onClick={() => handleAddPortForward(vm.id)}
                               disabled={pfHostPort === "" || pfGuestPort === ""}
+                              data-testid={`vm-port-forward-add-${vm.id}`}
                             >
                               <span className={cn("mr-1", iconStroke, "[&_svg]:size-4")}>{I.plus}</span>
                               {t("addPortForward")}

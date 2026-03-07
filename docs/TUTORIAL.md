@@ -112,6 +112,29 @@ Output: `crates/cratebay-gui/src-tauri/target/release/bundle/`
 
 Checklist reference: `docs/RELEASE_SMOKE_CHECKLIST.md`
 
+The release-readiness gate now includes Rust checks, frontend lint/build/i18n validation, unit tests, Playwright end-to-end coverage for the GUI, AI runtime smoke, and real Docker runtime smoke when a daemon is available.
+
+### Automated GUI Validation
+
+```bash
+cd crates/cratebay-gui
+npm ci
+npm run test:unit
+npm run test:e2e:install
+npx playwright test
+```
+
+The Playwright suite validates the real built frontend with a mocked Tauri bridge and covers app shell navigation, containers/images/volumes, VMs/Kubernetes, AI Hub flows, assistant flows, and security guardrails.
+
+For runtime-level confidence, add these targeted gates:
+
+```bash
+./scripts/docker-runtime-smoke.sh
+./scripts/ai-runtime-smoke.sh
+```
+
+Detailed coverage matrix: `docs/VALIDATION_MATRIX.md`
+
 ### CLI Only
 
 ```bash
@@ -213,7 +236,7 @@ Also available in current pre-v1 preview builds:
 Settings are split into two tabs:
 
 - **General**: Theme, language, update checks
-- **AI**: Provider profiles, secret refs, MCP policy, skills registry preview, Agent/CLI bridge
+- **AI**: Provider profiles, secret refs, MCP policy, executable Skills Registry, Assistant quick skills, and Agent/CLI bridge for Codex / Claude / other supported CLIs
 
 Preferences are saved in `localStorage` (GUI) and AI settings are persisted to `ai-settings.json`.
 
@@ -223,7 +246,8 @@ Current AI development surface (pre-v1):
 - **Models** tab includes Ollama runtime status, local model list, pull, delete, and storage visibility
 - **Sandboxes** tab includes template lifecycle, limits, TTL cleanup, command execution, and local audit log
 - **MCP** tab now includes registry, local process start/stop, logs, and config export
-- **Assistant** can now plan across container / VM / K8s / model / sandbox / MCP workflows
+- **Assistant** can now plan across container / VM / K8s / model / sandbox / MCP workflows, or run enabled quick skills directly
+- **Direct integrations** now center on local provider profiles plus Agent/CLI bridge presets such as Codex and Claude Code
 
 > Note: detailed product planning and product scheduling are maintained privately and are not published in this repository.
 
@@ -433,6 +457,7 @@ cratebay docker ps
 | `CRATEBAY_CONFIG_DIR` | Override config directory (stores `vms.json`) |
 | `CRATEBAY_DATA_DIR` | Override data directory |
 | `CRATEBAY_LOG_DIR` | Override log directory |
+| `CRATEBAY_OLLAMA_BASE_URL` | Override the local Ollama-compatible HTTP endpoint used by AI Hub models |
 | `CRATEBAY_LOG_RETENTION_DAYS` | Keep error logs for N days (default: 7) |
 | `CRATEBAY_VZ_RUNNER_PATH` | Override `cratebay-vz` path (macOS VZ PoC) |
 | `CRATEBAY_VZ_KERNEL` | Linux kernel path (macOS VZ PoC) |

@@ -4,22 +4,22 @@
   const translations = {
     en: {
       lang: "en",
-      title: "CrateBay — Local AI sandboxes in one GUI · Coming Soon",
+      title: "CrateBay — Local AI managed sandboxes in one GUI · Coming Soon",
       description:
-        "CrateBay — desktop GUI for local AI sandboxes, local models, MCP, and local AI infrastructure.",
-      keywords: "cratebay, ai sandbox, local models, mcp, agents, desktop gui, coming soon",
+        "CrateBay — desktop GUI for local AI managed sandboxes, local models, MCP, and local AI infrastructure.",
+      keywords: "cratebay, ai managed sandbox, local models, mcp, agents, desktop gui, coming soon",
       brand: "CrateBay",
       comingSoon: "Coming Soon",
-      heroTitle: "Local AI sandboxes, in one GUI.",
+      heroTitle: "Local AI managed sandboxes, in one GUI.",
       heroLead:
-        "AI sandboxes. Local models. MCP. Containers, VMs, and Kubernetes — all in one desktop app.",
+        "Managed sandboxes. Local models. MCP. Containers, VMs, and Kubernetes — all in one desktop app.",
       heroSub:
         "Built for fast local AI workflows without the mess of scripts, terminals, and scattered tools.",
       githubCta: "GitHub",
       summary1Label: "AI Sandboxes",
       summary1Title: "Run locally",
       summary1Body:
-        "Create, start, stop, and manage local AI sandboxes visually.",
+        "Create, start, stop, and manage built-in local AI sandboxes visually.",
       summary2Label: "Local Models",
       summary2Title: "One-click local models",
       summary2Body:
@@ -27,47 +27,49 @@
       summary3Label: "MCP + Infra",
       summary3Title: "One place for everything",
       summary3Body:
-        "Keep MCP, models, containers, VMs, and Kubernetes in one control plane.",
+        "Keep MCP, models, containers, VMs, Kubernetes, and executable skills in one control plane.",
       sectionKicker: "Why It Hits",
       sectionTitle: "Local AI is hot. The workflow is still broken.",
       sectionBody:
-        "Bring up a model, start a sandbox, connect tools, and iterate — all inside one desktop GUI.",
+        "Bring up a model, start a managed sandbox, connect tools, and iterate — all inside one desktop GUI.",
       card1Title: "Sandbox-first GUI",
       card1Body:
-        "AI sandboxes are a first-class desktop workflow.",
+        "Managed sandboxes are a first-class desktop workflow.",
       card2Title: "One-click local models",
       card2Body:
         "Make local model setup fast, visual, and daily-use ready.",
       card3Title: "MCP built into the desktop",
       card3Body:
-        "Bring MCP servers and assistant flows into the same desktop environment.",
+        "Bring MCP servers, Codex / Claude bridges, assistant flows, and quick skills into the same desktop environment.",
       card4Title: "Your local AI stack, in one app",
       card4Body:
-        "Keep models, sandboxes, and infra in one app.",
+        "Keep models, managed sandboxes, and infra in one app.",
       statusKicker: "Status",
       statusTitle: "Coming soon",
       statusBody:
         "For builders who want a better local AI workflow.",
+      statusNote:
+        "The preview now ships with automated UI, Docker runtime, and AI runtime validation across the core desktop flows.",
       footer: "CrateBay · <span data-year></span>",
     },
     zh: {
       lang: "zh-CN",
-      title: "CrateBay — 本地 AI Sandbox，一体化桌面 GUI · 即将推出",
+      title: "CrateBay — 本地 AI 托管沙箱，一体化桌面 GUI · 即将推出",
       description:
-        "CrateBay —— 面向本地 AI sandbox、本地模型、MCP 与本地 AI 基础设施的一体化桌面 GUI。",
-      keywords: "cratebay, ai sandbox, 本地模型, mcp, agents, desktop gui, 即将推出",
+        "CrateBay —— 面向本地 AI 托管沙箱、本地模型、MCP 与本地 AI 基础设施的一体化桌面 GUI。",
+      keywords: "cratebay, ai managed sandbox, 本地模型, mcp, agents, desktop gui, 即将推出",
       brand: "CrateBay",
       comingSoon: "即将推出",
-      heroTitle: "本地 AI Sandbox，一体化 GUI。",
+      heroTitle: "本地 AI 托管沙箱，一体化 GUI。",
       heroLead:
-        "AI sandbox、本地模型、MCP、容器、VM、Kubernetes —— 全都放进一个桌面应用里。",
+        "托管沙箱、本地模型、MCP、容器、VM、Kubernetes —— 全都放进一个桌面应用里。",
       heroSub:
         "为更快的本地 AI 工作流而生：少一点终端和脚本，多一点速度与掌控感。",
       githubCta: "GitHub",
       summary1Label: "AI Sandboxes",
       summary1Title: "本地运行，可视化管理",
       summary1Body:
-        "用桌面 GUI 创建、启动、停止并管理本地 AI sandbox。",
+        "用桌面 GUI 创建、启动、停止并管理由 CrateBay 托管的本地 AI 沙箱。",
       summary2Label: "Local Models",
       summary2Title: "一键本地模型",
       summary2Body:
@@ -75,27 +77,29 @@
       summary3Label: "MCP + Infra",
       summary3Title: "一个界面管理全栈",
       summary3Body:
-        "把 MCP、模型、容器、VM、Kubernetes 统一放进一个桌面控制面。",
+        "把 MCP、模型、容器、VM、Kubernetes 与可执行 skills 统一放进一个桌面控制面。",
       sectionKicker: "为什么它有吸引力",
       sectionTitle: "本地 AI 很火，但真正顺手的工作流还不多。",
       sectionBody:
-        "拉起模型、启动 sandbox、连接工具、快速迭代，都在一个桌面 GUI 里完成。",
+        "拉起模型、启动托管沙箱、连接工具、快速迭代，都在一个桌面 GUI 里完成。",
       card1Title: "Sandbox-first GUI",
       card1Body:
-        "本地 AI sandbox，不该只是 CLI 背后的专家功能。",
+        "由 CrateBay 托管的 AI 沙箱，不该只是 CLI 背后的专家功能。",
       card2Title: "一键本地模型",
       card2Body:
         "让本地模型部署与管理更快、更直观。",
       card3Title: "桌面内建 MCP",
       card3Body:
-        "把 MCP server 和 assistant 工作流放进同一个桌面环境里。",
+        "把 MCP server、Codex / Claude 桥接、assistant 工作流与快捷 skills 放进同一个桌面环境里。",
       card4Title: "你的本地 AI 栈，一个应用搞定",
       card4Body:
-        "把模型、sandbox 和基础设施放进一个应用。",
+        "把模型、托管沙箱和基础设施放进一个应用。",
       statusKicker: "状态",
       statusTitle: "即将推出",
       statusBody:
         "如果你想要更好的本地 AI 工作流，就关注 CrateBay。",
+      statusNote:
+        "当前预览版本已补齐核心桌面流程的自动化 UI、Docker runtime 与 AI runtime 验证。",
       footer: "CrateBay · <span data-year></span>",
     },
   }

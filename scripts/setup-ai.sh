@@ -5,7 +5,8 @@ set -euo pipefail
 #
 # Optional bootstrap for CrateBay's AI infrastructure roadmap:
 #   - Local model runtime (Ollama-first)
-#   - Agent sandboxes (OpenSandbox-compatible path)
+#   - Managed sandboxes (Docker-backed, built in)
+#   - Experimental external sandbox compatibility reference
 #   - MCP server management
 #
 # This script is intentionally conservative:
@@ -33,7 +34,7 @@ Usage:
 
 Options:
   --install                 Attempt to install missing tools (best-effort).
-  --init-opensandbox-config Copy tools/opensandbox/sandbox.example.toml into ~/.cratebay/opensandbox.toml
+  --init-opensandbox-config Copy the optional experimental OpenSandbox example config into ~/.cratebay/opensandbox.toml
   -h, --help                Show help.
 EOF
 }
@@ -79,19 +80,19 @@ fi
 if have_cmd python3; then
   echo "  ✓ python3       : $(python3 --version 2>&1)"
 else
-  echo "  ⚠ python3       : missing (required for opensandbox-server install)"
+  echo "  ⚠ python3       : missing (only needed for experimental opensandbox-server install)"
 fi
 
 if have_cmd uv; then
   echo "  ✓ uv            : $(uv --version 2>&1 | head -n 1)"
 else
-  echo "  ⚠ uv            : missing (optional; recommended by OpenSandbox docs)"
+  echo "  ⚠ uv            : missing (optional; only used for experimental OpenSandbox setup)"
 fi
 
 if have_cmd opensandbox-server; then
   echo "  ✓ opensandbox-server: installed"
 else
-  echo "  ⚠ opensandbox-server: missing (optional; for Agent Sandboxes backend)"
+  echo "  ⚠ opensandbox-server: missing (optional experimental external sandbox runtime)"
 fi
 
 echo ""
@@ -167,7 +168,7 @@ if [[ "${do_install}" == "true" ]]; then
 fi
 
 if [[ "${init_opensandbox_config}" == "true" ]]; then
-  echo "== OpenSandbox config =="
+  echo "== OpenSandbox config (experimental) =="
   src="${REPO_ROOT}/tools/opensandbox/sandbox.example.toml"
   dst_dir="${HOME}/.cratebay"
   dst="${dst_dir}/opensandbox.toml"
@@ -184,7 +185,7 @@ fi
 
 echo "== Next steps =="
 echo "  - Read the AI infra proposal: docs/VISION.md (or docs/VISION.zh.md)"
-echo "  - OpenSandbox local scaffold : tools/opensandbox/README.md"
+echo "  - Managed sandboxes are the primary product path"
+echo "  - Optional external sandbox reference: tools/opensandbox/README.md"
 echo ""
 echo "=== Done ==="
-
