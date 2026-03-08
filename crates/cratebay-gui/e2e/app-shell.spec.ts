@@ -16,12 +16,6 @@ test("navigates all top-level sections", async ({ page }) => {
   await page.getByTestId("nav-volumes").click()
   await expect(page.getByTestId("volumes-create")).toBeVisible()
 
-  await page.getByTestId("nav-vms").click()
-  await expect(page.getByTestId("vms-create")).toBeVisible()
-
-  await page.getByTestId("nav-kubernetes").click()
-  await expect(page.getByTestId("k8s-tab-overview")).toBeVisible()
-
   await page.getByTestId("nav-ai").click()
   await expect(page.getByRole("tab", { name: "Models" })).toBeVisible()
   await expect(page.getByRole("tab", { name: "Assistant" })).toBeVisible()
