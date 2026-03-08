@@ -1,10 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { invoke } from "@tauri-apps/api/core"
 import { Dashboard } from "../Dashboard"
 import { messages } from "../../i18n/messages"
-import type { ContainerInfo, VmInfoDto } from "../../types"
+import type {
+  AiSettings,
+  ContainerInfo,
+  GpuStatusDto,
+  McpServerStatusDto,
+  OllamaModelDto,
+  OllamaStatusDto,
+  SandboxInfoDto,
+  SandboxRuntimeUsageDto,
+} from "../../types"
 
 const t = (key: string) => messages.en[key] || key
 
@@ -18,216 +27,327 @@ const mockContainer = (overrides?: Partial<ContainerInfo>): ContainerInfo => ({
   ...overrides,
 })
 
-const mockVm = (overrides?: Partial<VmInfoDto>): VmInfoDto => ({
-  id: "vm-1",
-  name: "dev-vm",
+const mockSandbox = (overrides?: Partial<SandboxInfoDto>): SandboxInfoDto => ({
+  id: "sandbox-1",
+  short_id: "sandbox-1",
+  name: "Agent Sandbox",
+  image: "python:3.12",
   state: "running",
-  cpus: 2,
+  status: "Up 5 minutes",
+  template_id: "python-agent",
+  owner: "test",
+  created_at: "2026-03-06T00:00:00Z",
+  expires_at: "2026-03-06T08:00:00Z",
+  ttl_hours: 8,
+  cpu_cores: 2,
   memory_mb: 2048,
-  disk_gb: 20,
-  rosetta_enabled: false,
-  mounts: [],
-  port_forwards: [],
-  os_image: null,
+  is_expired: false,
   ...overrides,
 })
+
+const baseOllamaStatus: OllamaStatusDto = {
+  installed: true,
+  running: true,
+  version: "0.6.2",
+  base_url: "http://127.0.0.1:11434",
+}
+
+const baseModels: OllamaModelDto[] = [
+  {
+    name: "qwen2.5:7b",
+    size_bytes: 7516192768,
+    size_human: "7.0 GB",
+    modified_at: "2026-03-06T01:00:00Z",
+    digest: "sha256:qwen",
+    family: "qwen2.5",
+    parameter_size: "7B",
+    quantization_level: "Q4_K_M",
+  },
+  {
+    name: "llama3.2:3b",
+    size_bytes: 2147483648,
+    size_human: "2.0 GB",
+    modified_at: "2026-03-06T02:00:00Z",
+    digest: "sha256:llama",
+    family: "llama3.2",
+    parameter_size: "3B",
+    quantization_level: "Q4_K_M",
+  },
+]
+
+const baseMcpServers: McpServerStatusDto[] = [
+  {
+    id: "filesystem",
+    name: "Filesystem MCP",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    env: [],
+    working_dir: "/tmp",
+    enabled: true,
+    notes: "",
+    running: true,
+    status: "running",
+    started_at: "2026-03-06T03:00:00Z",
+    exit_code: null,
+  },
+]
+
+const baseAiSettings: AiSettings = {
+  active_profile_id: "openai-default",
+  profiles: [
+    {
+      id: "openai-default",
+      provider_id: "openai",
+      display_name: "OpenAI Default",
+      model: "gpt-5-mini",
+      base_url: "https://api.openai.com/v1",
+      api_key_ref: "openai",
+      headers: {},
+    },
+    {
+      id: "anthropic-default",
+      provider_id: "anthropic",
+      display_name: "Anthropic Default",
+      model: "claude-sonnet",
+      base_url: "https://api.anthropic.com",
+      api_key_ref: "anthropic",
+      headers: {},
+    },
+  ],
+  skills: [],
+  security_policy: {
+    destructive_action_confirmation: true,
+    mcp_remote_enabled: false,
+    mcp_allowed_actions: [],
+    mcp_auth_token_ref: "",
+    mcp_audit_enabled: true,
+    cli_command_allowlist: ["codex", "claude"],
+  },
+  mcp_servers: baseMcpServers,
+  opensandbox: {
+    enabled: true,
+    base_url: "http://127.0.0.1:8080",
+    config_path: "/Users/test/.cratebay/opensandbox.toml",
+  },
+}
+
+const baseGpuStatus: GpuStatusDto = {
+  available: true,
+  utilization_supported: true,
+  backend: "nvidia-smi",
+  message: "Live GPU telemetry is available for 1 device(s).",
+  devices: [
+    {
+      index: 0,
+      name: "NVIDIA RTX 4090",
+      utilization_percent: 62,
+      memory_used_bytes: 6442450944,
+      memory_total_bytes: 25769803776,
+      memory_used_human: "6.0 GB",
+      memory_total_human: "24.0 GB",
+      temperature_celsius: 58,
+      power_watts: 210.5,
+    },
+  ],
+}
+
+const baseSandboxRuntimeUsage: SandboxRuntimeUsageDto = {
+  running: true,
+  cpu_percent: 18.5,
+  memory_usage_mb: 256,
+  memory_limit_mb: 1024,
+  memory_percent: 25,
+  network_rx_bytes: 1024,
+  network_tx_bytes: 2048,
+  gpu_attribution_supported: true,
+  gpu_message: "Matched 2 GPU process(es) across 1 device(s).",
+  gpu_processes: [
+    {
+      gpu_index: 0,
+      gpu_name: "NVIDIA RTX 4090",
+      pid: 4242,
+      process_name: "python",
+      memory_used_bytes: 2147483648,
+      memory_used_human: "2.0 GB",
+    },
+    {
+      gpu_index: 0,
+      gpu_name: "NVIDIA RTX 4090",
+      pid: 4243,
+      process_name: "uvicorn",
+      memory_used_bytes: 1073741824,
+      memory_used_human: "1.0 GB",
+    },
+  ],
+  gpu_memory_used_bytes: 3221225472,
+  gpu_memory_used_human: "3.0 GB",
+}
 
 const defaultProps = {
   containers: [] as ContainerInfo[],
   running: [] as ContainerInfo[],
-  vmsCount: 0,
-  vmsRunningCount: 0,
-  runningVms: [] as VmInfoDto[],
   imgResultsCount: 0,
   installedImagesCount: 0,
   volumesCount: 0,
   onNavigate: vi.fn(),
+  onOpenAiTab: vi.fn(),
+  onOpenSettingsTab: vi.fn(),
   t,
+}
+
+function setupInvoke({
+  sandboxes = [mockSandbox()],
+  models = baseModels,
+  gpu = baseGpuStatus,
+  mcpServers = baseMcpServers,
+  aiSettings = baseAiSettings,
+  ollamaStatus = baseOllamaStatus,
+}: {
+  sandboxes?: SandboxInfoDto[]
+  models?: OllamaModelDto[]
+  gpu?: GpuStatusDto | null
+  mcpServers?: McpServerStatusDto[]
+  aiSettings?: AiSettings | null
+  ollamaStatus?: OllamaStatusDto | null
+} = {}) {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "container_stats") {
+      return {
+        cpu_percent: 25,
+        memory_usage_mb: 128,
+        memory_limit_mb: 512,
+        memory_percent: 25,
+        network_rx_bytes: 0,
+        network_tx_bytes: 0,
+      }
+    }
+    if (command === "sandbox_list") return sandboxes
+    if (command === "ollama_status") return ollamaStatus
+    if (command === "ollama_list_models") return models
+    if (command === "mcp_list_servers") return mcpServers
+    if (command === "load_ai_settings") return aiSettings
+    if (command === "gpu_status") return gpu
+    if (command === "sandbox_runtime_usage") {
+      const { id } = args as { id: string }
+      if (id === "sandbox-1") return baseSandboxRuntimeUsage
+      return {
+        ...baseSandboxRuntimeUsage,
+        gpu_processes: [],
+        gpu_memory_used_bytes: 0,
+        gpu_memory_used_human: "0 B",
+      }
+    }
+    return null
+  })
 }
 
 describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(invoke).mockResolvedValue(null)
+    setupInvoke()
   })
 
-  it("renders four dashboard cards", () => {
+  it("renders AI-first overview cards", async () => {
     render(<Dashboard {...defaultProps} />)
 
-    expect(screen.getByText(t("containers"))).toBeInTheDocument()
-    expect(screen.getByText(t("vms"))).toBeInTheDocument()
-    expect(screen.getByText(t("images"))).toBeInTheDocument()
-    expect(screen.getByText(t("volumes"))).toBeInTheDocument()
+    expect(screen.getByText(t("dashboardAiOverview"))).toBeInTheDocument()
+    expect(screen.getByTestId("dashboard-card-sandboxes")).toBeInTheDocument()
+    expect(screen.getByTestId("dashboard-card-models")).toBeInTheDocument()
+    expect(screen.getByTestId("dashboard-card-mcp")).toBeInTheDocument()
+    expect(screen.getByTestId("dashboard-card-ai-settings")).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("dashboard-card-sandboxes")).getByText("1")).toBeInTheDocument()
+      expect(within(screen.getByTestId("dashboard-card-models")).getByText("2")).toBeInTheDocument()
+      expect(within(screen.getByTestId("dashboard-card-ai-settings")).getByText("2")).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId("dashboard-card-vms")).not.toBeInTheDocument()
   })
 
-  it("shows container count on the containers card", () => {
+  it("deep-links primary cards into AI Hub and AI settings tabs", async () => {
+    const user = userEvent.setup()
+    const onOpenAiTab = vi.fn()
+    const onOpenSettingsTab = vi.fn()
+    render(
+      <Dashboard
+        {...defaultProps}
+        onOpenAiTab={onOpenAiTab}
+        onOpenSettingsTab={onOpenSettingsTab}
+      />
+    )
+
+    await user.click(screen.getByTestId("dashboard-card-sandboxes"))
+    await user.click(screen.getByTestId("dashboard-card-models"))
+    await user.click(screen.getByTestId("dashboard-card-mcp"))
+    await user.click(screen.getByTestId("dashboard-card-ai-settings"))
+
+    expect(onOpenAiTab).toHaveBeenCalledWith("sandboxes")
+    expect(onOpenAiTab).toHaveBeenCalledWith("models")
+    expect(onOpenAiTab).toHaveBeenCalledWith("mcp")
+    expect(onOpenSettingsTab).toHaveBeenCalledWith("ai")
+  })
+
+  it("keeps containers, images, and volumes as secondary runtime cards", async () => {
     const containers = [mockContainer(), mockContainer({ id: "def456", name: "api" })]
-    render(<Dashboard {...defaultProps} containers={containers} />)
+    render(
+      <Dashboard
+        {...defaultProps}
+        containers={containers}
+        running={containers}
+        installedImagesCount={8}
+        imgResultsCount={15}
+        volumesCount={3}
+      />
+    )
 
-    const containersCard = screen.getByTestId("dashboard-card-containers")
-    expect(within(containersCard).getByText("2")).toBeInTheDocument()
+    expect(screen.getByText(t("dashboardEngineOverview"))).toBeInTheDocument()
+    expect(within(screen.getByTestId("dashboard-card-containers")).getByText("2")).toBeInTheDocument()
+    expect(within(screen.getByTestId("dashboard-card-images")).getByText("8")).toBeInTheDocument()
+    expect(within(screen.getByTestId("dashboard-card-volumes")).getByText("3")).toBeInTheDocument()
+    expect(within(screen.getByTestId("dashboard-card-images")).getByText(new RegExp(`15\\s+${t("searchResults")}`, "i"))).toBeInTheDocument()
   })
 
-  it("shows VM count on the VMs card", () => {
-    render(<Dashboard {...defaultProps} vmsCount={3} vmsRunningCount={1} />)
+  it("shows CPU, memory, and GPU runtime overview", async () => {
+    const running = [mockContainer()]
+    render(<Dashboard {...defaultProps} containers={running} running={running} />)
 
-    const vmsCard = screen.getByTestId("dashboard-card-vms")
-    expect(within(vmsCard).getByText("3")).toBeInTheDocument()
-    expect(within(vmsCard).getByText(/1 running/)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("container_stats", { id: "abc123" })
+    })
+
+    const gpuCard = screen.getByTestId("dashboard-metric-gpu")
+    expect(screen.getByTestId("dashboard-metric-cpu")).toBeInTheDocument()
+    expect(screen.getByTestId("dashboard-metric-memory")).toBeInTheDocument()
+    expect(within(gpuCard).getByText(/1 gpu devices/i)).toBeInTheDocument()
+    expect(within(gpuCard).getByText(/62% .* 6 GB \/ 24 GB .* 1 sandboxes .* 2 gpu processes .* 3 GB/i)).toBeInTheDocument()
   })
 
-  it("navigates to containers page when containers card is clicked", async () => {
-    const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    render(<Dashboard {...defaultProps} onNavigate={onNavigate} />)
-
-    const containersCard = screen.getByTestId("dashboard-card-containers")
-    await user.click(containersCard)
-
-    expect(onNavigate).toHaveBeenCalledWith("containers")
-  })
-
-  it("navigates to VMs page when VMs card is clicked", async () => {
-    const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    render(<Dashboard {...defaultProps} onNavigate={onNavigate} />)
-
-    const vmsCard = screen.getByTestId("dashboard-card-vms")
-    await user.click(vmsCard)
-
-    expect(onNavigate).toHaveBeenCalledWith("vms")
-  })
-
-  it("navigates to images page when images card is clicked", async () => {
-    const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    render(<Dashboard {...defaultProps} onNavigate={onNavigate} />)
-
-    const imagesCard = screen.getByTestId("dashboard-card-images")
-    await user.click(imagesCard)
-
-    expect(onNavigate).toHaveBeenCalledWith("images")
-  })
-
-  it("shows running containers list when there are running containers", () => {
-    const running = [
-      mockContainer(),
-      mockContainer({ id: "def456", name: "api-server", image: "node:18" }),
+  it("shows running sandboxes in the active AI workloads panel", async () => {
+    const sandboxes = [
+      mockSandbox(),
+      mockSandbox({ id: "sandbox-2", short_id: "sandbox-2", name: "Codegen Sandbox", template_id: "node-agent" }),
     ]
-    render(
-      <Dashboard {...defaultProps} containers={running} running={running} />
-    )
+    setupInvoke({ sandboxes })
 
-    expect(screen.getByText("web-server")).toBeInTheDocument()
-    expect(screen.getByText("api-server")).toBeInTheDocument()
-    expect(screen.getByText(t("running"))).toBeInTheDocument()
-    expect(screen.getAllByTestId("dashboard-running-item")).toHaveLength(2)
-  })
-
-  it("does not show running containers section when none are running", () => {
     render(<Dashboard {...defaultProps} />)
 
-    expect(screen.queryByTestId("dashboard-running-item")).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getAllByTestId("dashboard-sandbox-item")).toHaveLength(2)
+    })
+    expect(screen.getByText("Agent Sandbox")).toBeInTheDocument()
+    expect(screen.getByText("Codegen Sandbox")).toBeInTheDocument()
   })
 
-  it("shows 'view all' link when more than 5 containers are running", async () => {
+  it("deep-links empty AI workload state to sandboxes tab", async () => {
     const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    const running = Array.from({ length: 7 }, (_, i) =>
-      mockContainer({ id: `id-${i}`, name: `container-${i}` })
-    )
-    render(
-      <Dashboard
-        {...defaultProps}
-        containers={running}
-        running={running}
-        onNavigate={onNavigate}
-      />
-    )
+    const onOpenAiTab = vi.fn()
+    setupInvoke({ sandboxes: [mockSandbox({ state: "exited", status: "Exited" })] })
 
-    const viewAll = screen.getByText(t("viewAll"))
-    expect(viewAll).toBeInTheDocument()
+    render(<Dashboard {...defaultProps} onOpenAiTab={onOpenAiTab} />)
 
-    await user.click(viewAll)
-    expect(onNavigate).toHaveBeenCalledWith("containers")
-  })
-
-  it("renders only up to 5 running container cards", () => {
-    const running = Array.from({ length: 7 }, (_, i) =>
-      mockContainer({ id: `id-${i}`, name: `container-${i}` })
-    )
-    render(
-      <Dashboard {...defaultProps} containers={running} running={running} />
-    )
-
-    // Should only render 5 running-item elements in the running section
-    expect(screen.getAllByTestId("dashboard-running-item")).toHaveLength(5)
-  })
-
-  it("shows resource panel when containers or VMs are running", () => {
-    const running = [mockContainer()]
-    render(
-      <Dashboard {...defaultProps} containers={running} running={running} />
-    )
-
-    expect(screen.getByText(t("cpuUsage"))).toBeInTheDocument()
-    expect(screen.getByText(t("memoryUsage"))).toBeInTheDocument()
-  })
-
-  it("does not show resource panel when nothing is running", () => {
-    render(<Dashboard {...defaultProps} />)
-
-    expect(screen.queryByText(t("cpuUsage"))).not.toBeInTheDocument()
-    expect(screen.queryByText(t("memoryUsage"))).not.toBeInTheDocument()
-  })
-
-  it("shows image results count", () => {
-    render(
-      <Dashboard {...defaultProps} imgResultsCount={15} installedImagesCount={8} />
-    )
-
-    const imagesCard = screen.getByTestId("dashboard-card-images")
-    expect(within(imagesCard).getByText("8")).toBeInTheDocument()
-    expect(
-      within(imagesCard).getByText(new RegExp(`15\\s+${t("searchResults")}`, "i"))
-    ).toBeInTheDocument()
-  })
-
-  it("fetches stats for running containers", () => {
-    const running = [mockContainer()]
-    vi.mocked(invoke).mockResolvedValue({
-      cpu_percent: 25.0,
-      memory_usage_mb: 128,
-      memory_limit_mb: 512,
-      memory_percent: 25,
-      network_rx_bytes: 0,
-      network_tx_bytes: 0,
-    })
-
-    render(
-      <Dashboard {...defaultProps} containers={running} running={running} />
-    )
-
-    expect(invoke).toHaveBeenCalledWith("container_stats", { id: "abc123" })
-  })
-
-  it("fetches stats for running VMs", () => {
-    const runningVm = mockVm()
-    vi.mocked(invoke).mockResolvedValue({
-      cpu_percent: 10.0,
-      memory_usage_mb: 512,
-      disk_usage_gb: 5,
-    })
-
-    render(
-      <Dashboard
-        {...defaultProps}
-        vmsCount={1}
-        vmsRunningCount={1}
-        runningVms={[runningVm]}
-      />
-    )
-
-    expect(invoke).toHaveBeenCalledWith("vm_stats", { id: "vm-1" })
+    expect(await screen.findByText(t("dashboardNoAiWorkloads"))).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: t("dashboardOpenAiHub") }))
+    expect(onOpenAiTab).toHaveBeenCalledWith("sandboxes")
   })
 })

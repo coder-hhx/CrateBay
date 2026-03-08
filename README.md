@@ -7,7 +7,7 @@
 <p align="center"><strong>Coming Soon</strong></p>
 
 <p align="center">
-  Free, open-source desktop infrastructure for containers, VMs, Kubernetes, and AI-powered workflows.
+  Open-source desktop control plane for local AI sandboxes, local models, MCP servers, and provider / CLI bridges.
 </p>
 
 <p align="center">
@@ -18,5 +18,7 @@
 ## Public Info
 
 - CrateBay is under active development.
-- More features and details are coming soon.
+- The public v1 scope is focused on local AI sandboxes, local models, MCP servers, and provider / CLI bridges.
+- Containers remain the supporting runtime underneath those workflows.
+- VMs and Kubernetes remain experimental post-v1 tracks until dedicated runner validation is in place.
 - Public updates will be shared through releases and changelog entries when they are ready.

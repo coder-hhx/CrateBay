@@ -283,7 +283,7 @@ jobs:
   desktop-smoke-linux:
     name: Desktop Smoke (Tauri Linux)
     runs-on: ubuntu-latest
-    needs: frontend-e2e
+    needs: [frontend-e2e, docker-runtime-smoke]
     steps:
       - uses: actions/checkout@v4
 
@@ -320,6 +320,14 @@ jobs:
 
       - name: Run desktop smoke
         run: xvfb-run -a ./scripts/run-desktop-e2e-linux.sh
+
+      - name: Upload desktop smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-artifacts
+          path: dist/desktop-smoke
+          if-no-files-found: ignore
 
   # -----------------------------------------------------------
   # Release binary size check (macOS only — primary target)

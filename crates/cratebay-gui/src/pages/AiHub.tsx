@@ -16,6 +16,7 @@ import { iconStroke, cardActionDanger, cardActionOutline, cardActionSecondary } 
 import { Assistant } from "./Assistant"
 import type {
   AiHubActionResultDto,
+  GpuStatusDto,
   AiSettings,
   McpServerEntry,
   McpServerStatusDto,
@@ -30,13 +31,15 @@ import type {
   SandboxExecResultDto,
   SandboxInfoDto,
   SandboxInspectDto,
+  SandboxRuntimeUsageDto,
   SandboxTemplateDto,
 } from "../types"
 
-type AiHubTab = "overview" | "models" | "sandboxes" | "mcp" | "assistant"
+export type AiHubTab = "sandboxes" | "models" | "mcp" | "assistant"
 
 interface AiHubProps {
   t: (key: string) => string
+  initialTab?: AiHubTab
 }
 
 function formatSandboxTime(value: string) {
@@ -48,58 +51,12 @@ function formatSandboxTime(value: string) {
   return parsed.toLocaleString()
 }
 
-function HubCard({
-  title,
-  desc,
-  icon,
-  toneClass,
-  right,
-  onClick,
-}: {
-  title: string
-  desc: string
-  icon: React.ReactNode
-  toneClass: string
-  right?: React.ReactNode
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "rounded-xl border border-border/50 bg-card/95 px-5 py-4 text-left shadow-sm transition-colors hover:bg-muted/35 hover:border-primary/30",
-        "focus-visible:outline-hidden focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      )}
-      onClick={onClick}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className={cn("text-sm font-semibold text-foreground")}>{title}</span>
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">{desc}</div>
-        </div>
-        <div
-          className={cn(
-            "size-10 shrink-0 rounded-lg flex items-center justify-center",
-            iconStroke,
-            "[&_svg]:size-[18px]",
-            toneClass
-          )}
-        >
-          {icon}
-        </div>
-      </div>
-      {right && <div className="mt-3">{right}</div>}
-    </button>
-  )
-}
-
-export function AiHub({ t }: AiHubProps) {
-  const [tab, setTab] = useState<AiHubTab>("overview")
+export function AiHub({ t, initialTab = "sandboxes" }: AiHubProps) {
+  const [tab, setTab] = useState<AiHubTab>(initialTab)
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusDto | null>(null)
   const [ollamaModels, setOllamaModels] = useState<OllamaModelDto[]>([])
   const [ollamaStorage, setOllamaStorage] = useState<OllamaStorageInfoDto | null>(null)
+  const [gpuStatus, setGpuStatus] = useState<GpuStatusDto | null>(null)
   const [ollamaLoading, setOllamaLoading] = useState(false)
   const [ollamaError, setOllamaError] = useState("")
   const [ollamaNotice, setOllamaNotice] = useState("")
@@ -109,6 +66,9 @@ export function AiHub({ t }: AiHubProps) {
   const [sandboxes, setSandboxes] = useState<SandboxInfoDto[]>([])
   const [sandboxAudit, setSandboxAudit] = useState<SandboxAuditEventDto[]>([])
   const [sandboxInspect, setSandboxInspect] = useState<SandboxInspectDto | null>(null)
+  const [sandboxRuntimeUsage, setSandboxRuntimeUsage] = useState<SandboxRuntimeUsageDto | null>(null)
+  const [sandboxRuntimeLoading, setSandboxRuntimeLoading] = useState(false)
+  const [sandboxRuntimeError, setSandboxRuntimeError] = useState("")
   const [sandboxLoading, setSandboxLoading] = useState(false)
   const [sandboxCreating, setSandboxCreating] = useState(false)
   const [sandboxActingId, setSandboxActingId] = useState("")
@@ -141,8 +101,12 @@ export function AiHub({ t }: AiHubProps) {
     setOllamaError("")
     setOllamaNotice("")
     try {
-      const status = await invoke<OllamaStatusDto>("ollama_status")
+      const [status, gpu] = await Promise.all([
+        invoke<OllamaStatusDto>("ollama_status"),
+        invoke<GpuStatusDto>("gpu_status").catch(() => null),
+      ])
       setOllamaStatus(status)
+      setGpuStatus(gpu)
       if (status.installed) {
         const storage = await invoke<OllamaStorageInfoDto>("ollama_storage_info")
         setOllamaStorage(storage)
@@ -221,6 +185,10 @@ export function AiHub({ t }: AiHubProps) {
   }, [refreshMcp])
 
   useEffect(() => {
+    setTab(initialTab)
+  }, [initialTab])
+
+  useEffect(() => {
     if (!mcpSelectedId) {
       setMcpLogs([])
       return
@@ -229,6 +197,27 @@ export function AiHub({ t }: AiHubProps) {
       .then((logs) => setMcpLogs(logs))
       .catch(() => setMcpLogs([]))
   }, [mcpSelectedId, mcpServers])
+
+  const formatGpuMetric = useCallback((value: number | null | undefined, suffix: string) => {
+    if (value == null || Number.isNaN(value)) return "-"
+    const rounded = suffix === "%" ? Math.round(value) : Math.round(value * 10) / 10
+    return `${rounded}${suffix}`
+  }, [])
+
+  const formatGpuMemory = useCallback((used?: string | null, total?: string | null) => {
+    if (used && total) return `${used} / ${total}`
+    return total || used || "-"
+  }, [])
+
+  const formatUsagePercent = useCallback((value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return "-"
+    return `${Math.round(value * 10) / 10}%`
+  }, [])
+
+  const formatUsageMegabytes = useCallback((value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return "-"
+    return `${Math.round(value * 10) / 10} MB`
+  }, [])
 
   const totalModelBytes = useMemo(
     () => ollamaModels.reduce((sum, m) => sum + (m.size_bytes || 0), 0),
@@ -260,6 +249,25 @@ export function AiHub({ t }: AiHubProps) {
     [sandboxes]
   )
 
+  const loadSandboxInspect = useCallback(async (id: string) => {
+    setSandboxRuntimeLoading(true)
+    setSandboxRuntimeError("")
+    setSandboxRuntimeUsage(null)
+    try {
+      const inspect = await invoke<SandboxInspectDto>("sandbox_inspect", { id })
+      setSandboxInspect(inspect)
+      try {
+        const runtimeUsage = await invoke<SandboxRuntimeUsageDto>("sandbox_runtime_usage", { id })
+        setSandboxRuntimeUsage(runtimeUsage)
+      } catch (e) {
+        setSandboxRuntimeError(String(e))
+      }
+      return inspect
+    } finally {
+      setSandboxRuntimeLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (!selectedSandboxTemplate) return
     if (sandboxCpu === "" && sandboxMemoryMb === "" && sandboxTtlHours === "" && !sandboxCommand.trim()) {
@@ -278,8 +286,6 @@ export function AiHub({ t }: AiHubProps) {
 
   const tabLabel = useMemo(() => {
     switch (tab) {
-      case "overview":
-        return t("overview")
       case "models":
         return t("models")
       case "sandboxes":
@@ -334,8 +340,7 @@ export function AiHub({ t }: AiHubProps) {
       }
 
       const created = await invoke<SandboxCreateResultDto>("sandbox_create", { request })
-      const inspect = await invoke<SandboxInspectDto>("sandbox_inspect", { id: created.id })
-      setSandboxInspect(inspect)
+      await loadSandboxInspect(created.id)
       setSandboxInspectError("")
       setSandboxName("")
       setSandboxEnvLines("")
@@ -362,18 +367,25 @@ export function AiHub({ t }: AiHubProps) {
     setSandboxActingId(actionKey)
     try {
       if (action === "inspect") {
-        const inspect = await invoke<SandboxInspectDto>("sandbox_inspect", { id: item.id })
-        setSandboxInspect(inspect)
+        await loadSandboxInspect(item.id)
       } else if (action === "start") {
         await invoke("sandbox_start", { id: item.id })
         await refreshSandboxes()
+        if (sandboxInspect?.id === item.id) {
+          await loadSandboxInspect(item.id)
+        }
       } else if (action === "stop") {
         await invoke("sandbox_stop", { id: item.id })
         await refreshSandboxes()
+        if (sandboxInspect?.id === item.id) {
+          await loadSandboxInspect(item.id)
+        }
       } else if (action === "delete") {
         await invoke("sandbox_delete", { id: item.id })
         if (sandboxInspect?.id === item.id) {
           setSandboxInspect(null)
+          setSandboxRuntimeUsage(null)
+          setSandboxRuntimeError("")
         }
         await refreshSandboxes()
       }
@@ -601,127 +613,25 @@ export function AiHub({ t }: AiHubProps) {
                   {t("aiHubActiveTab")}: <span className="text-foreground/90 font-medium">{tabLabel}</span>
                 </span>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {t("aiHubDesc")}
-              </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {t("aiHubDesc")}
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              className={cn(cardActionOutline)}
-              onClick={() => setTab("overview")}
-            >
-              <span className={cn("mr-1", iconStroke, "[&_svg]:size-3")}>{I.refresh}</span>
-              {t("overview")}
-            </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </CardContent>
+    </Card>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as AiHubTab)}>
-        <TabsList variant="line" className="w-full justify-start">
-          <TabsTrigger value="overview">{t("overview")}</TabsTrigger>
-          <TabsTrigger value="models">{t("models")}</TabsTrigger>
-          <TabsTrigger value="sandboxes">{t("sandboxes")}</TabsTrigger>
-          <TabsTrigger value="mcp">{t("mcp")}</TabsTrigger>
-          <TabsTrigger value="assistant">{t("assistant")}</TabsTrigger>
-        </TabsList>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as AiHubTab)}>
+      <TabsList variant="line" className="w-full justify-start">
+        <TabsTrigger value="sandboxes">{t("sandboxes")}</TabsTrigger>
+        <TabsTrigger value="models">{t("models")}</TabsTrigger>
+        <TabsTrigger value="mcp" data-testid="aihub-tab-mcp">{t("mcp")}</TabsTrigger>
+        <TabsTrigger value="assistant">{t("assistant")}</TabsTrigger>
+      </TabsList>
 
-        <TabsContent value="overview" className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <HubCard
-              title={t("models")}
-              desc={t("aiModelsCardDesc")}
-              icon={I.layers}
-              toneClass="bg-brand-cyan/10 text-brand-cyan"
-              right={
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md border border-border/50 bg-muted/60 px-2 py-1 font-mono">
-                    ollama
-                  </span>
-                  <span>{t("aiModelsCardHint")}</span>
-                  {ollamaStatus?.running && (
-                    <Badge
-                      variant="secondary"
-                      className="rounded-md border border-brand-green/15 bg-brand-green/10 px-1.5 py-0 text-[11px] text-brand-green"
-                    >
-                      {ollamaModels.length} {t("models").toLowerCase()}
-                    </Badge>
-                  )}
-                </div>
-              }
-              onClick={() => setTab("models")}
-            />
-
-            <HubCard
-              title={t("sandboxes")}
-              desc={t("aiSandboxesCardDesc")}
-              icon={I.server}
-              toneClass="bg-brand-green/10 text-brand-green"
-              right={
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md border border-border/50 bg-muted/60 px-2 py-1 font-mono">
-                    managed
-                  </span>
-                  <span>{t("aiSandboxesCardHint")}</span>
-                  {sandboxes.length > 0 && (
-                    <>
-                      <Badge
-                        variant="secondary"
-                        className="rounded-md border border-brand-green/15 bg-brand-green/10 px-1.5 py-0 text-[11px] text-brand-green"
-                      >
-                        {runningSandboxCount} {t("running")}
-                      </Badge>
-                      {expiredSandboxCount > 0 && (
-                        <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[11px]">
-                          {expiredSandboxCount} {t("sandboxExpired")}
-                        </Badge>
-                      )}
-                    </>
-                  )}
-                </div>
-              }
-              onClick={() => setTab("sandboxes")}
-            />
-
-            <HubCard
-              title={t("mcp")}
-              desc={t("aiMcpCardDesc")}
-              icon={I.globe}
-              toneClass="bg-primary/10 text-primary"
-              right={
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md border border-border/50 bg-muted/60 px-2 py-1 font-mono">
-                    mcp
-                  </span>
-                  <span>{t("aiMcpCardHint")}</span>
-                </div>
-              }
-              onClick={() => setTab("mcp")}
-            />
-
-            <HubCard
-              title={t("assistant")}
-              desc={t("assistantDesc")}
-              icon={I.aiAssistant}
-              toneClass="bg-primary/10 text-primary"
-              right={
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md border border-border/50 bg-muted/60 px-2 py-1 font-mono">
-                    skills
-                  </span>
-                  <span>{t("aiAssistantCardHint")}</span>
-                </div>
-              }
-              onClick={() => setTab("assistant")}
-            />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="models" className="space-y-3">
-          <Card className="py-0">
-            <CardContent className="py-4 space-y-3">
+      <TabsContent value="models" className="space-y-3">
+        <Card className="py-0">
+          <CardContent className="py-4 space-y-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -771,7 +681,7 @@ export function AiHub({ t }: AiHubProps) {
               )}
               {ollamaNotice && <div className="text-xs text-muted-foreground">{ollamaNotice}</div>}
 
-              <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]">
+              <div className="grid gap-3 lg:grid-cols-3">
                 <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
                   <div className="text-xs font-semibold text-muted-foreground">{t("aiModelStorage")}</div>
                   <div className="mt-2 text-sm font-semibold text-foreground">{ollamaStorage?.total_size_human ?? `${Math.round((totalModelBytes / (1024 * 1024 * 1024)) * 10) / 10} GB`}</div>
@@ -782,6 +692,42 @@ export function AiHub({ t }: AiHubProps) {
                   <code className="mt-1 block break-all rounded-lg border border-border/50 bg-popover/40 px-2 py-2 text-[11px] text-foreground">
                     {ollamaStorage?.path || t("ollamaStorageMissing")}
                   </code>
+                </div>
+
+                <div data-testid="ollama-gpu-card" className="rounded-xl border border-border/50 bg-muted/20 p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs font-semibold text-muted-foreground">{t("gpuRuntime")}</div>
+                    {gpuStatus?.backend && (
+                      <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[11px]">
+                        {gpuStatus.backend}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="mt-2 text-sm font-semibold text-foreground">
+                    {gpuStatus?.available ? `${gpuStatus.devices.length} ${t("gpuDevices").toLowerCase()}` : t("gpuTelemetryUnavailable")}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {gpuStatus?.message || t("gpuTelemetryUnavailable")}
+                  </div>
+                  {gpuStatus?.devices.length ? (
+                    <div className="mt-3 space-y-2">
+                      {gpuStatus.devices.map((device) => (
+                        <div
+                          key={`${device.index}-${device.name}`}
+                          data-testid={`ollama-gpu-device-${device.index}`}
+                          className="rounded-lg border border-border/50 bg-popover/40 px-2.5 py-2"
+                        >
+                          <div className="truncate text-xs font-semibold text-foreground">{device.name}</div>
+                          <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+                            <div>{t("gpuUtilization")}: <span className="text-foreground">{formatGpuMetric(device.utilization_percent, "%")}</span></div>
+                            <div>{t("gpuMemory")}: <span className="text-foreground">{formatGpuMemory(device.memory_used_human, device.memory_total_human)}</span></div>
+                            <div>{t("gpuTemperature")}: <span className="text-foreground">{formatGpuMetric(device.temperature_celsius, "°C")}</span></div>
+                            <div>{t("gpuPower")}: <span className="text-foreground">{formatGpuMetric(device.power_watts, "W")}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rounded-xl border border-border/50 bg-muted/20 p-3 space-y-2">
@@ -828,19 +774,6 @@ export function AiHub({ t }: AiHubProps) {
           {ollamaStatus?.running && (
             <Card className="py-0">
               <CardContent className="py-0">
-                <div className="border-b border-border/50 px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">{ollamaModels.length}</span> {t("models")}
-                    <span className="text-muted-foreground/40">•</span>
-                    <span>
-                      <span className="text-brand-cyan font-medium">
-                        {ollamaStorage?.total_size_human ?? `${Math.round((totalModelBytes / (1024 * 1024 * 1024)) * 10) / 10} GB`}
-                      </span>{" "}
-                      {t("aiModelStorage")}
-                    </span>
-                  </div>
-                </div>
-
                 {ollamaModels.length === 0 ? (
                   <div className="px-4 py-6">
                     <EmptyState
@@ -1276,6 +1209,52 @@ export function AiHub({ t }: AiHubProps) {
                     <div>{t("memoryMb")}: <span className="text-foreground">{sandboxInspect.memory_mb}</span></div>
                   </div>
                 )}
+                {sandboxInspect && (
+                  <div data-testid="sandbox-runtime-card" className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-xs">
+                    <div className="mb-2 text-muted-foreground">{t("sandboxRuntimeUsage")}</div>
+                    {sandboxRuntimeLoading ? (
+                      <div className="text-muted-foreground">{t("working")}</div>
+                    ) : sandboxRuntimeError ? (
+                      <ErrorInline message={sandboxRuntimeError} onDismiss={() => setSandboxRuntimeError("")} />
+                    ) : sandboxRuntimeUsage ? (
+                      <>
+                        <div className="grid grid-cols-1 gap-2 text-muted-foreground lg:grid-cols-2">
+                          <div>{t("cpuUsage")}: <span className="text-foreground">{formatUsagePercent(sandboxRuntimeUsage.cpu_percent)}</span></div>
+                          <div>
+                            {t("memoryUsage")}: <span className="text-foreground">{formatUsageMegabytes(sandboxRuntimeUsage.memory_usage_mb)} / {formatUsageMegabytes(sandboxRuntimeUsage.memory_limit_mb)} ({formatUsagePercent(sandboxRuntimeUsage.memory_percent)})</span>
+                          </div>
+                          <div>{t("gpuMemory")}: <span className="text-foreground">{sandboxRuntimeUsage.gpu_processes.length > 0 ? sandboxRuntimeUsage.gpu_memory_used_human : "-"}</span></div>
+                          <div>{t("gpuProcesses")}: <span className="text-foreground">{sandboxRuntimeUsage.gpu_processes.length}</span></div>
+                        </div>
+                        <div className="mt-2 text-muted-foreground">
+                          {sandboxRuntimeUsage.running
+                            ? sandboxRuntimeUsage.gpu_attribution_supported
+                              ? sandboxRuntimeUsage.gpu_processes.length > 0
+                                ? `${sandboxRuntimeUsage.gpu_processes.length} ${t("gpuProcesses").toLowerCase()} · ${new Set(sandboxRuntimeUsage.gpu_processes.map((process) => process.gpu_index)).size} ${t("gpuDevices").toLowerCase()}`
+                                : t("sandboxGpuIdle")
+                              : sandboxRuntimeUsage.gpu_message || t("gpuTelemetryUnavailable")
+                            : t("stopped")}
+                        </div>
+                        {sandboxRuntimeUsage.gpu_processes.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {sandboxRuntimeUsage.gpu_processes.map((process) => (
+                              <Badge
+                                key={`${process.pid}-${process.gpu_index}-${process.process_name}`}
+                                variant="secondary"
+                                className="rounded-md px-1.5 py-0 text-[11px]"
+                              >
+                                {process.process_name} · GPU {process.gpu_index}
+                                {process.memory_used_human ? ` · ${process.memory_used_human}` : ""}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-muted-foreground">-</div>
+                    )}
+                  </div>
+                )}
                 {sandboxInspect?.command && (
                   <div className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-xs">
                     <div className="mb-1 text-muted-foreground">{t("sandboxCommand")}</div>
@@ -1383,13 +1362,14 @@ export function AiHub({ t }: AiHubProps) {
                     <span className={cn("mr-1", iconStroke, "[&_svg]:size-3")}>{I.refresh}</span>
                     {mcpLoading ? t("working") : t("refresh")}
                   </Button>
-                  <Button type="button" size="xs" className={cn(cardActionSecondary)} onClick={handleAddMcpServer}>
+                  <Button type="button" size="xs" data-testid="mcp-add-server" className={cn(cardActionSecondary)} onClick={handleAddMcpServer}>
                     <span className={cn("mr-1", iconStroke, "[&_svg]:size-3")}>{I.play}</span>
                     {t("mcpAddServer")}
                   </Button>
                   <Button
                     type="button"
                     size="xs"
+                    data-testid="mcp-save-registry"
                     className={cn(cardActionSecondary)}
                     onClick={handleSaveMcpRegistry}
                     disabled={mcpActingId === "save"}
@@ -1425,20 +1405,21 @@ export function AiHub({ t }: AiHubProps) {
                           const runtime = mcpServers.find((item) => item.id === server.id)
                           const selected = mcpSelectedId === server.id
                           return (
-                            <TableRow key={server.id} className={selected ? "bg-primary/5" : ""}>
+                            <TableRow key={server.id} data-testid={`mcp-row-${server.id}`} className={selected ? "bg-primary/5" : ""}>
                               <TableCell>
-                                <button type="button" className="text-left" onClick={() => setMcpSelectedId(server.id)}>
+                                <button type="button" data-testid={`mcp-select-${server.id}`} className="text-left" onClick={() => setMcpSelectedId(server.id)}>
                                   <div className="text-sm font-medium text-foreground">{server.name || server.id}</div>
                                   <div className="text-xs font-mono text-muted-foreground">{server.id}</div>
                                 </button>
                               </TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{runtime?.running ? t("mcpRunning") : (runtime?.status === "exited" ? t("mcpExited") : t("mcpStopped"))}</TableCell>
+                              <TableCell data-testid={`mcp-status-${server.id}`} className="text-xs text-muted-foreground">{runtime?.running ? t("mcpRunning") : (runtime?.status === "exited" ? t("mcpExited") : t("mcpStopped"))}</TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-2">
                                   <Button
                                     type="button"
                                     variant="outline"
                                     size="xs"
+                                    data-testid={`mcp-toggle-${server.id}`}
                                     className={runtime?.running ? cn(cardActionDanger) : cn(cardActionSecondary)}
                                     onClick={() => handleMcpAction(runtime?.running ? "stop" : "start", server.id)}
                                     disabled={!!mcpActingId && mcpActingId !== `${runtime?.running ? "stop" : "start"}:${server.id}`}
@@ -1469,6 +1450,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("mcpServerId")}</label>
                       <Input
+                        data-testid="mcp-input-id"
                         value={selectedMcpDraft?.id ?? ""}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, id: e.target.value }))}
                         className="h-8 rounded-lg border-border/60 bg-popover/40 text-xs font-mono"
@@ -1478,6 +1460,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("name")}</label>
                       <Input
+                        data-testid="mcp-input-name"
                         value={selectedMcpDraft?.name ?? ""}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, name: e.target.value }))}
                         className="h-8 rounded-lg border-border/60 bg-popover/40 text-xs"
@@ -1487,6 +1470,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("mcpCommand")}</label>
                       <Input
+                        data-testid="mcp-input-command"
                         value={selectedMcpDraft?.command ?? ""}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, command: e.target.value }))}
                         className="h-8 rounded-lg border-border/60 bg-popover/40 text-xs font-mono"
@@ -1496,6 +1480,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("mcpArgs")}</label>
                       <textarea
+                        data-testid="mcp-input-args"
                         value={(selectedMcpDraft?.args ?? []).join("\n")}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, args: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) }))}
                         placeholder={t("mcpArgsHint")}
@@ -1506,6 +1491,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-semibold text-muted-foreground">ENV</label>
                       <textarea
+                        data-testid="mcp-input-env"
                         value={(selectedMcpDraft?.env ?? []).join("\n")}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, env: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) }))}
                         placeholder={t("mcpEnvHint")}
@@ -1516,6 +1502,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("mcpWorkingDir")}</label>
                       <Input
+                        data-testid="mcp-input-working-dir"
                         value={selectedMcpDraft?.working_dir ?? ""}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, working_dir: e.target.value }))}
                         className="h-8 rounded-lg border-border/60 bg-popover/40 text-xs font-mono"
@@ -1525,6 +1512,7 @@ export function AiHub({ t }: AiHubProps) {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-semibold text-muted-foreground">{t("mcpNotes")}</label>
                       <textarea
+                        data-testid="mcp-input-notes"
                         value={selectedMcpDraft?.notes ?? ""}
                         onChange={(e) => updateSelectedMcpDraft((draft) => ({ ...draft, notes: e.target.value }))}
                         className="min-h-[72px] w-full rounded-lg border border-border/60 bg-popover/40 px-2.5 py-2 text-xs text-foreground outline-hidden ring-ring/40 transition focus:ring-2"
@@ -1533,7 +1521,7 @@ export function AiHub({ t }: AiHubProps) {
                     </div>
                   </div>
                   {selectedMcpStatus && (
-                    <div className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+                    <div data-testid="mcp-selected-status" className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
                       <div>{t("mcpStatus")}: <span className="text-foreground">{selectedMcpStatus.running ? t("mcpRunning") : (selectedMcpStatus.status === "exited" ? t("mcpExited") : t("mcpStopped"))}</span></div>
                       {selectedMcpStatus.pid && <div>PID: <span className="text-foreground">{selectedMcpStatus.pid}</span></div>}
                       {selectedMcpStatus.started_at && <div>{t("sandboxCreatedAt")}: <span className="text-foreground">{formatSandboxTime(selectedMcpStatus.started_at)}</span></div>}
@@ -1577,7 +1565,7 @@ export function AiHub({ t }: AiHubProps) {
               <Card className="py-0">
                 <CardContent className="py-4 space-y-3">
                   <div className="text-sm font-semibold text-foreground">{t("mcpLogs")}</div>
-                  <div className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 font-mono text-[11px] text-muted-foreground min-h-[180px] whitespace-pre-wrap break-all">
+                  <div data-testid="mcp-logs-output" className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2 font-mono text-[11px] text-muted-foreground min-h-[180px] whitespace-pre-wrap break-all">
                     {mcpLogs.length > 0 ? mcpLogs.join("\n") : "-"}
                   </div>
                 </CardContent>

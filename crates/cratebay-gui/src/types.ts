@@ -348,6 +348,26 @@ export interface K8sDeployment {
   age: string
 }
 
+export interface GpuDeviceDto {
+  index: number
+  name: string
+  utilization_percent?: number | null
+  memory_used_bytes?: number | null
+  memory_total_bytes?: number | null
+  memory_used_human?: string | null
+  memory_total_human?: string | null
+  temperature_celsius?: number | null
+  power_watts?: number | null
+}
+
+export interface GpuStatusDto {
+  available: boolean
+  utilization_supported: boolean
+  backend: string
+  message: string
+  devices: GpuDeviceDto[]
+}
+
 export interface OllamaStatusDto {
   installed: boolean
   running: boolean
@@ -443,6 +463,30 @@ export interface SandboxInspectDto {
   running: boolean
   command: string
   env: string[]
+}
+
+export interface GpuProcessDto {
+  gpu_index: number
+  gpu_name: string
+  pid: number
+  process_name: string
+  memory_used_bytes?: number | null
+  memory_used_human?: string | null
+}
+
+export interface SandboxRuntimeUsageDto {
+  running: boolean
+  cpu_percent: number
+  memory_usage_mb: number
+  memory_limit_mb: number
+  memory_percent: number
+  network_rx_bytes: number
+  network_tx_bytes: number
+  gpu_attribution_supported: boolean
+  gpu_message: string
+  gpu_processes: GpuProcessDto[]
+  gpu_memory_used_bytes: number
+  gpu_memory_used_human: string
 }
 
 export interface SandboxAuditEventDto {

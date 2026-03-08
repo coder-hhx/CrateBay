@@ -12,7 +12,7 @@ use futures_util::stream::TryStreamExt;
 use keyring::Entry;
 use reqwest::header::WWW_AUTHENTICATE;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use std::time::Duration;
 use tauri::async_runtime::JoinHandle;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, State, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
@@ -2623,6 +2623,28 @@ fn ollama_http_client() -> Result<reqwest::Client, String> {
 }
 
 #[derive(Debug, Serialize)]
+pub struct GpuDeviceDto {
+    index: u32,
+    name: String,
+    utilization_percent: Option<f64>,
+    memory_used_bytes: Option<u64>,
+    memory_total_bytes: Option<u64>,
+    memory_used_human: Option<String>,
+    memory_total_human: Option<String>,
+    temperature_celsius: Option<f64>,
+    power_watts: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GpuStatusDto {
+    available: bool,
+    utilization_supported: bool,
+    backend: String,
+    message: String,
+    devices: Vec<GpuDeviceDto>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct OllamaStatusDto {
     installed: bool,
     running: bool,
@@ -2673,6 +2695,315 @@ struct OllamaModelDetails {
     parameter_size: String,
     #[serde(default)]
     quantization_level: String,
+}
+
+fn parse_optional_metric_f64(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("n/a") || trimmed == "-" {
+        None
+    } else {
+        trimmed.parse::<f64>().ok()
+    }
+}
+
+fn parse_optional_metric_u64(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("n/a") || trimmed == "-" {
+        None
+    } else {
+        trimmed
+            .parse::<u64>()
+            .ok()
+            .or_else(|| trimmed.parse::<f64>().ok().map(|item| item.round() as u64))
+    }
+}
+
+fn gpu_status_unavailable(message: impl Into<String>) -> GpuStatusDto {
+    GpuStatusDto {
+        available: false,
+        utilization_supported: false,
+        backend: String::new(),
+        message: message.into(),
+        devices: Vec::new(),
+    }
+}
+
+fn query_nvidia_gpu_status() -> Result<GpuStatusDto, String> {
+    let output = runtime_setup_run(
+        "nvidia-smi",
+        &[
+            "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+            "--format=csv,noheader,nounits",
+        ],
+    )?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("nvidia-smi exited with status {}", output.status)
+        } else {
+            detail
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut devices = Vec::new();
+    for (line_index, line) in stdout.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let cols = trimmed.split(',').map(|item| item.trim()).collect::<Vec<_>>();
+        if cols.len() < 7 {
+            continue;
+        }
+        let index = cols[0].parse::<u32>().unwrap_or(line_index as u32);
+        let memory_used_bytes = parse_optional_metric_u64(cols[3]).map(|mb| mb * 1024 * 1024);
+        let memory_total_bytes = parse_optional_metric_u64(cols[4]).map(|mb| mb * 1024 * 1024);
+        devices.push(GpuDeviceDto {
+            index,
+            name: cols[1].to_string(),
+            utilization_percent: parse_optional_metric_f64(cols[2]),
+            memory_used_bytes,
+            memory_total_bytes,
+            memory_used_human: memory_used_bytes.map(format_bytes_human),
+            memory_total_human: memory_total_bytes.map(format_bytes_human),
+            temperature_celsius: parse_optional_metric_f64(cols[5]),
+            power_watts: parse_optional_metric_f64(cols[6]),
+        });
+    }
+
+    if devices.is_empty() {
+        return Ok(gpu_status_unavailable(
+            "nvidia-smi is installed, but no GPU devices were reported.",
+        ));
+    }
+
+    Ok(GpuStatusDto {
+        available: true,
+        utilization_supported: true,
+        backend: "nvidia-smi".to_string(),
+        message: format!(
+            "Live GPU telemetry is available for {} device(s).",
+            devices.len()
+        ),
+        devices,
+    })
+}
+
+#[derive(Debug)]
+struct NvidiaGpuInventory {
+    index: u32,
+    uuid: String,
+    name: String,
+}
+
+#[derive(Debug)]
+struct NvidiaGpuProcessSample {
+    gpu_uuid: String,
+    pid: u32,
+    process_name: String,
+    memory_used_bytes: Option<u64>,
+}
+
+fn query_nvidia_gpu_inventory() -> Result<Vec<NvidiaGpuInventory>, String> {
+    let output = runtime_setup_run(
+        "nvidia-smi",
+        &[
+            "--query-gpu=index,uuid,name",
+            "--format=csv,noheader,nounits",
+        ],
+    )?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("nvidia-smi exited with status {}", output.status)
+        } else {
+            detail
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut devices = Vec::new();
+    for (line_index, line) in stdout.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let cols = trimmed.split(',').map(|item| item.trim()).collect::<Vec<_>>();
+        if cols.len() < 3 {
+            continue;
+        }
+        devices.push(NvidiaGpuInventory {
+            index: cols[0].parse::<u32>().unwrap_or(line_index as u32),
+            uuid: cols[1].to_string(),
+            name: cols[2].to_string(),
+        });
+    }
+    Ok(devices)
+}
+
+fn query_nvidia_compute_processes() -> Result<Vec<NvidiaGpuProcessSample>, String> {
+    let output = runtime_setup_run(
+        "nvidia-smi",
+        &[
+            "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+    )?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}
+{}", stdout.trim(), stderr.trim()).to_lowercase();
+    if combined.contains("no running compute processes found") {
+        return Ok(Vec::new());
+    }
+
+    if !output.status.success() {
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            format!("nvidia-smi exited with status {}", output.status)
+        } else {
+            detail.to_string()
+        });
+    }
+
+    let mut processes = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let cols = trimmed.split(',').map(|item| item.trim()).collect::<Vec<_>>();
+        if cols.len() < 4 {
+            continue;
+        }
+        let Ok(pid) = cols[1].parse::<u32>() else {
+            continue;
+        };
+        processes.push(NvidiaGpuProcessSample {
+            gpu_uuid: cols[0].to_string(),
+            pid,
+            process_name: cols[2].to_string(),
+            memory_used_bytes: parse_optional_metric_u64(cols[3]).map(|mb| mb * 1024 * 1024),
+        });
+    }
+
+    Ok(processes)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_belongs_to_container(pid: u32, container_id: &str, short_id: &str) -> bool {
+    let path = PathBuf::from("/proc").join(pid.to_string()).join("cgroup");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    raw.lines()
+        .any(|line| line.contains(container_id) || line.contains(short_id))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_process_belongs_to_container(_pid: u32, _container_id: &str, _short_id: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn query_macos_gpu_status() -> Result<GpuStatusDto, String> {
+    let output = runtime_setup_run("system_profiler", &["SPDisplaysDataType", "-json"])?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("system_profiler exited with status {}", output.status)
+        } else {
+            detail
+        });
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid GPU JSON: {}", e))?;
+    let items = value
+        .get("SPDisplaysDataType")
+        .and_then(|entry| entry.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut devices = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let name = obj
+            .get("sppci_model")
+            .and_then(|entry| entry.as_str())
+            .or_else(|| obj.get("_name").and_then(|entry| entry.as_str()))
+            .or_else(|| obj.get("spdisplays_vendor").and_then(|entry| entry.as_str()))
+            .unwrap_or("GPU")
+            .trim()
+            .to_string();
+        let memory_total_human = obj
+            .get("spdisplays_vram")
+            .and_then(|entry| entry.as_str())
+            .or_else(|| obj.get("spdisplays_vram_shared").and_then(|entry| entry.as_str()))
+            .map(|entry| entry.trim().to_string());
+        devices.push(GpuDeviceDto {
+            index: index as u32,
+            name,
+            utilization_percent: None,
+            memory_used_bytes: None,
+            memory_total_bytes: None,
+            memory_used_human: None,
+            memory_total_human,
+            temperature_celsius: None,
+            power_watts: None,
+        });
+    }
+
+    if devices.is_empty() {
+        return Ok(gpu_status_unavailable(
+            "No GPU devices were detected by system_profiler.",
+        ));
+    }
+
+    Ok(GpuStatusDto {
+        available: true,
+        utilization_supported: false,
+        backend: "system_profiler".to_string(),
+        message: "GPU devices are detected, but live utilization is unavailable on this platform."
+            .to_string(),
+        devices,
+    })
+}
+
+#[tauri::command]
+async fn gpu_status() -> Result<GpuStatusDto, String> {
+    tokio::task::spawn_blocking(|| {
+        if runtime_setup_command_exists("nvidia-smi") {
+            return query_nvidia_gpu_status().or_else(|error| {
+                Ok(gpu_status_unavailable(format!(
+                    "GPU telemetry probe failed: {}",
+                    error
+                )))
+            });
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if runtime_setup_command_exists("system_profiler") {
+                return query_macos_gpu_status().or_else(|error| {
+                    Ok(gpu_status_unavailable(format!(
+                        "GPU telemetry probe failed: {}",
+                        error
+                    )))
+                });
+            }
+        }
+
+        Ok(gpu_status_unavailable(
+            "GPU telemetry is unavailable on this machine. Install NVIDIA tooling or use a supported local runtime.",
+        ))
+    })
+    .await
+    .map_err(|e| format!("gpu_status task failed: {}", e))?
 }
 
 async fn ollama_check_installed() -> bool {
@@ -3159,6 +3490,32 @@ pub struct SandboxInspectDto {
     env: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GpuProcessDto {
+    gpu_index: u32,
+    gpu_name: String,
+    pid: u32,
+    process_name: String,
+    memory_used_bytes: Option<u64>,
+    memory_used_human: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SandboxRuntimeUsageDto {
+    running: bool,
+    cpu_percent: f64,
+    memory_usage_mb: f64,
+    memory_limit_mb: f64,
+    memory_percent: f64,
+    network_rx_bytes: u64,
+    network_tx_bytes: u64,
+    gpu_attribution_supported: bool,
+    gpu_message: String,
+    gpu_processes: Vec<GpuProcessDto>,
+    gpu_memory_used_bytes: u64,
+    gpu_memory_used_human: String,
+}
+
 #[derive(Debug, Clone)]
 struct SandboxMeta {
     template_id: String,
@@ -3521,6 +3878,164 @@ async fn sandbox_inspect(id: String) -> Result<SandboxInspectDto, String> {
         running,
         command,
         env,
+    })
+}
+
+#[tauri::command]
+async fn sandbox_runtime_usage(id: String) -> Result<SandboxRuntimeUsageDto, String> {
+    let docker = connect_docker()?;
+    let inspect = docker
+        .inspect_container(&id, None::<InspectContainerOptions>)
+        .await
+        .map_err(|e| format!("Failed to inspect sandbox {}: {}", id, e))?;
+
+    let labels = inspect
+        .config
+        .as_ref()
+        .and_then(|cfg| cfg.labels.clone())
+        .unwrap_or_default();
+    if !sandbox_is_managed(&labels) {
+        return Err("Target container is not a CrateBay-managed sandbox".to_string());
+    }
+
+    let running = inspect
+        .state
+        .as_ref()
+        .and_then(|state| state.running)
+        .unwrap_or(false);
+    if !running {
+        return Ok(SandboxRuntimeUsageDto {
+            running: false,
+            cpu_percent: 0.0,
+            memory_usage_mb: 0.0,
+            memory_limit_mb: 0.0,
+            memory_percent: 0.0,
+            network_rx_bytes: 0,
+            network_tx_bytes: 0,
+            gpu_attribution_supported: false,
+            gpu_message: "Sandbox is not running.".to_string(),
+            gpu_processes: Vec::new(),
+            gpu_memory_used_bytes: 0,
+            gpu_memory_used_human: format_bytes_human(0),
+        });
+    }
+
+    let stats = container_stats(id.clone()).await?;
+
+    let (gpu_attribution_supported, gpu_message, gpu_processes, gpu_memory_used_bytes) =
+        if !cfg!(target_os = "linux") {
+            (
+                false,
+                "Per-sandbox GPU attribution currently requires Linux with NVIDIA tooling."
+                    .to_string(),
+                Vec::new(),
+                0,
+            )
+        } else if !runtime_setup_command_exists("nvidia-smi") {
+            (
+                false,
+                "nvidia-smi was not found. Install NVIDIA tooling to attribute GPU usage to a sandbox."
+                    .to_string(),
+                Vec::new(),
+                0,
+            )
+        } else {
+            let sandbox_id = id.clone();
+            let sandbox_short_id = sandbox_short_id(&id);
+            match tokio::task::spawn_blocking(move || {
+                let inventory = query_nvidia_gpu_inventory()?;
+                let inventory_by_uuid = inventory
+                    .into_iter()
+                    .map(|device| (device.uuid.clone(), device))
+                    .collect::<HashMap<_, _>>();
+                let mut matched_processes = query_nvidia_compute_processes()?
+                    .into_iter()
+                    .filter(|process| {
+                        linux_process_belongs_to_container(
+                            process.pid,
+                            &sandbox_id,
+                            &sandbox_short_id,
+                        )
+                    })
+                    .map(|process| {
+                        let (gpu_index, gpu_name) = inventory_by_uuid
+                            .get(&process.gpu_uuid)
+                            .map(|device| (device.index, device.name.clone()))
+                            .unwrap_or((0, process.gpu_uuid.clone()));
+                        GpuProcessDto {
+                            gpu_index,
+                            gpu_name,
+                            pid: process.pid,
+                            process_name: process.process_name,
+                            memory_used_bytes: process.memory_used_bytes,
+                            memory_used_human: process.memory_used_bytes.map(format_bytes_human),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                matched_processes.sort_by(|a, b| {
+                    a.gpu_index
+                        .cmp(&b.gpu_index)
+                        .then(a.pid.cmp(&b.pid))
+                        .then(a.process_name.cmp(&b.process_name))
+                });
+
+                let gpu_memory_used_bytes = matched_processes
+                    .iter()
+                    .filter_map(|process| process.memory_used_bytes)
+                    .sum::<u64>();
+                let gpu_count = matched_processes
+                    .iter()
+                    .map(|process| process.gpu_index)
+                    .collect::<HashSet<_>>()
+                    .len();
+                let gpu_message = if matched_processes.is_empty() {
+                    "No GPU compute workload from this sandbox was detected.".to_string()
+                } else {
+                    format!(
+                        "Matched {} GPU process(es) across {} device(s).",
+                        matched_processes.len(),
+                        gpu_count.max(1)
+                    )
+                };
+
+                Ok::<(bool, String, Vec<GpuProcessDto>, u64), String>((
+                    true,
+                    gpu_message,
+                    matched_processes,
+                    gpu_memory_used_bytes,
+                ))
+            })
+            .await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => (
+                    false,
+                    format!("GPU attribution probe failed: {}", error),
+                    Vec::new(),
+                    0,
+                ),
+                Err(error) => (
+                    false,
+                    format!("GPU attribution task failed: {}", error),
+                    Vec::new(),
+                    0,
+                ),
+            }
+        };
+
+    Ok(SandboxRuntimeUsageDto {
+        running: true,
+        cpu_percent: stats.cpu_percent,
+        memory_usage_mb: stats.memory_usage_mb,
+        memory_limit_mb: stats.memory_limit_mb,
+        memory_percent: stats.memory_percent,
+        network_rx_bytes: stats.network_rx_bytes,
+        network_tx_bytes: stats.network_tx_bytes,
+        gpu_attribution_supported,
+        gpu_message,
+        gpu_processes,
+        gpu_memory_used_bytes,
+        gpu_memory_used_human: format_bytes_human(gpu_memory_used_bytes),
     })
 }
 
@@ -4983,12 +5498,65 @@ fn ai_audit_log(action: &str, level: &str, request_id: &str, details: &str) {
     }
 }
 
+fn file_secret_path(key_ref: &str) -> Option<PathBuf> {
+    let base = std::env::var("CRATEBAY_TEST_SECRET_DIR").ok()?;
+    let mut name = key_ref
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if name.trim_matches('_').is_empty() {
+        name = "secret".to_string();
+    }
+    Some(PathBuf::from(base).join(format!("{}.secret", name)))
+}
+
 fn secret_entry(key_ref: &str) -> Result<Entry, String> {
     Entry::new(AI_SECRET_SERVICE, key_ref)
         .map_err(|e| format!("Failed to create secret entry: {e}"))
 }
 
 fn secret_set(key_ref: &str, value: &str) -> Result<(), String> {
+    if let Some(path) = file_secret_path(key_ref) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create test secret directory {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
+        std::fs::write(&path, value).map_err(|e| {
+            format!(
+                "Failed to write test secret '{}' at {}: {}",
+                key_ref,
+                path.display(),
+                e
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to stat test secret '{}': {}", key_ref, e))?
+                .permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&path, perms).map_err(|e| {
+                format!(
+                    "Failed to set permissions on test secret '{}': {}",
+                    key_ref, e
+                )
+            })?;
+        }
+        return Ok(());
+    }
+
     let entry = secret_entry(key_ref)?;
     entry
         .set_password(value)
@@ -4996,6 +5564,24 @@ fn secret_set(key_ref: &str, value: &str) -> Result<(), String> {
 }
 
 fn secret_get(key_ref: &str) -> Result<Option<String>, String> {
+    if let Some(path) = file_secret_path(key_ref) {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let value = std::fs::read_to_string(&path).map_err(|e| {
+            format!(
+                "Failed to read test secret '{}' at {}: {}",
+                key_ref,
+                path.display(),
+                e
+            )
+        })?;
+        if value.trim().is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(value));
+    }
+
     let entry = secret_entry(key_ref)?;
     match entry.get_password() {
         Ok(v) => {
@@ -5017,6 +5603,21 @@ fn secret_get(key_ref: &str) -> Result<Option<String>, String> {
 }
 
 fn secret_delete(key_ref: &str) -> Result<(), String> {
+    if let Some(path) = file_secret_path(key_ref) {
+        match std::fs::remove_file(&path) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(format!(
+                    "Failed to delete test secret '{}' at {}: {}",
+                    key_ref,
+                    path.display(),
+                    e
+                ))
+            }
+        }
+    }
+
     let entry = secret_entry(key_ref)?;
     match entry.delete_password() {
         Ok(_) => Ok(()),
@@ -7339,12 +7940,13 @@ async fn set_window_theme(window: tauri::WebviewWindow, theme: String) -> Result
 #[cfg(test)]
 mod ai_runtime_tests {
     use super::{
-        default_ai_settings, load_ai_settings, mcp_export_client_config, mcp_list_servers_inner,
-        mcp_server_logs_inner, mcp_start_server_inner, mcp_stop_server_inner, ollama_delete_model,
-        ollama_list_models, ollama_pull_model, ollama_status, ollama_storage_info,
-        sandbox_audit_list, sandbox_create, sandbox_delete, sandbox_exec, sandbox_inspect,
-        sandbox_list, sandbox_start, sandbox_stop, save_ai_settings, AppState, McpServerEntry,
-        SandboxCreateRequest,
+        agent_cli_run, ai_profile, ai_test_connection, default_ai_settings, load_ai_settings,
+        mcp_export_client_config, mcp_list_servers_inner, mcp_server_logs_inner,
+        mcp_start_server_inner, mcp_stop_server_inner, ollama_delete_model, ollama_list_models,
+        ollama_pull_model, ollama_status, ollama_storage_info, sandbox_audit_list,
+        sandbox_create, sandbox_delete, sandbox_exec, sandbox_inspect, sandbox_list,
+        sandbox_start, sandbox_stop, save_ai_settings, secret_delete, secret_set, AppState,
+        McpServerEntry, SandboxCreateRequest,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -7412,6 +8014,73 @@ mod ai_runtime_tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn canary_timeout(env_key: &str, default_secs: u64) -> u64 {
+        std::env::var(env_key)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default_secs)
+            .max(1)
+    }
+
+    fn require_env(key: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| panic!("required env var missing: {}", key))
+    }
+
+    fn configure_canary_dirs(tmp: &TempDir) -> (EnvGuard, EnvGuard, EnvGuard, EnvGuard) {
+        let config_dir = tmp.path.join("config");
+        let data_dir = tmp.path.join("data");
+        let log_dir = tmp.path.join("logs");
+        let secret_dir = tmp.path.join("secrets");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::create_dir_all(&data_dir).expect("create data dir");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+        std::fs::create_dir_all(&secret_dir).expect("create secret dir");
+        (
+            EnvGuard::set("CRATEBAY_CONFIG_DIR", config_dir.to_str().expect("config dir")),
+            EnvGuard::set("CRATEBAY_DATA_DIR", data_dir.to_str().expect("data dir")),
+            EnvGuard::set("CRATEBAY_LOG_DIR", log_dir.to_str().expect("log dir")),
+            EnvGuard::set(
+                "CRATEBAY_TEST_SECRET_DIR",
+                secret_dir.to_str().expect("secret dir"),
+            ),
+        )
+    }
+
+    fn prepend_path(dir: &Path) -> String {
+        let current = std::env::var("PATH").unwrap_or_default();
+        if current.is_empty() {
+            dir.display().to_string()
+        } else {
+            format!("{}:{}", dir.display(), current)
+        }
+    }
+
+    fn write_forwarder_binary(bin_dir: &Path, name: &str, target_env: &str) {
+        std::fs::create_dir_all(bin_dir).expect("create canary bin dir");
+        let script_path = bin_dir.join(name);
+        let script = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+target="${{{target_env}:-}}"
+if [[ -z "$target" ]]; then
+  echo "missing {target_env}" >&2
+  exit 97
+fi
+exec "$target" "$@"
+"#
+        );
+        std::fs::write(&script_path, script).expect("write forwarder script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script_path)
+                .expect("forwarder metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms).expect("forwarder perms");
         }
     }
 
@@ -7745,6 +8414,210 @@ mod ai_runtime_tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires real OpenAI canary credentials"]
+    async fn openai_provider_canary_real_connection() {
+        let _lock = env_lock();
+        let tmp = TempDir::new("cratebay-openai-provider-canary");
+        let (_config, _data, _log, _secret_dir) = configure_canary_dirs(&tmp);
+
+        let profile_id = "openai-canary";
+        let api_key_ref = "OPENAI_CANARY_API_KEY";
+        let api_key = require_env("CRATEBAY_CANARY_OPENAI_API_KEY");
+        let base_url = std::env::var("CRATEBAY_CANARY_OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        let model = std::env::var("CRATEBAY_CANARY_OPENAI_MODEL")
+            .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+
+        let mut settings = default_ai_settings();
+        settings.profiles = vec![ai_profile(
+            profile_id,
+            "openai",
+            "OpenAI Canary",
+            &model,
+            &base_url,
+            api_key_ref,
+        )];
+        settings.active_profile_id = profile_id.to_string();
+        save_ai_settings(settings).expect("save OpenAI canary settings");
+        secret_set(api_key_ref, &api_key).expect("store OpenAI canary API key");
+
+        let result = ai_test_connection(
+            Some(profile_id.to_string()),
+            Some(canary_timeout("CRATEBAY_CANARY_OPENAI_TIMEOUT_SEC", 25) * 1000),
+        )
+        .await
+        .expect("run OpenAI canary connection test");
+        let _ = secret_delete(api_key_ref);
+
+        assert!(result.ok, "OpenAI canary failed: {}", result.message);
+        assert!(
+            result.message.to_ascii_uppercase().contains("PONG"),
+            "OpenAI canary response should contain PONG: {}",
+            result.message
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Anthropic canary credentials"]
+    async fn anthropic_provider_canary_real_connection() {
+        let _lock = env_lock();
+        let tmp = TempDir::new("cratebay-anthropic-provider-canary");
+        let (_config, _data, _log, _secret_dir) = configure_canary_dirs(&tmp);
+
+        let profile_id = "anthropic-canary";
+        let api_key_ref = "ANTHROPIC_CANARY_API_KEY";
+        let api_key = require_env("CRATEBAY_CANARY_ANTHROPIC_API_KEY");
+        let base_url = std::env::var("CRATEBAY_CANARY_ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
+        let model = std::env::var("CRATEBAY_CANARY_ANTHROPIC_MODEL")
+            .unwrap_or_else(|_| "claude-3-7-sonnet-latest".to_string());
+
+        let mut settings = default_ai_settings();
+        settings.profiles = vec![ai_profile(
+            profile_id,
+            "anthropic",
+            "Anthropic Canary",
+            &model,
+            &base_url,
+            api_key_ref,
+        )];
+        settings.active_profile_id = profile_id.to_string();
+        save_ai_settings(settings).expect("save Anthropic canary settings");
+        secret_set(api_key_ref, &api_key).expect("store Anthropic canary API key");
+
+        let result = ai_test_connection(
+            Some(profile_id.to_string()),
+            Some(canary_timeout("CRATEBAY_CANARY_ANTHROPIC_TIMEOUT_SEC", 25) * 1000),
+        )
+        .await
+        .expect("run Anthropic canary connection test");
+        let _ = secret_delete(api_key_ref);
+
+        assert!(result.ok, "Anthropic canary failed: {}", result.message);
+        assert!(
+            result.message.to_ascii_uppercase().contains("PONG"),
+            "Anthropic canary response should contain PONG: {}",
+            result.message
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Codex CLI bridge"]
+    async fn codex_cli_bridge_canary() {
+        let _lock = env_lock();
+        let _target = require_env("CRATEBAY_CANARY_CODEX_BIN");
+        let tmp = TempDir::new("cratebay-codex-cli-canary");
+        let (_config, _data, _log, _secret_dir) = configure_canary_dirs(&tmp);
+        let bin_dir = tmp.path.join("bin");
+        write_forwarder_binary(&bin_dir, "codex", "CRATEBAY_CANARY_CODEX_BIN");
+        let _path = EnvGuard::set("PATH", prepend_path(&bin_dir));
+        let prompt = std::env::var("CRATEBAY_CANARY_CODEX_PROMPT")
+            .unwrap_or_else(|_| "Reply with PONG and exit.".to_string());
+
+        let result = agent_cli_run(
+            Some("codex".to_string()),
+            None,
+            None,
+            Some(prompt),
+            false,
+            Some(canary_timeout("CRATEBAY_CANARY_CODEX_TIMEOUT_SEC", 60)),
+        )
+        .await
+        .expect("run Codex CLI canary");
+
+        let combined = format!("{}
+{}", result.stdout, result.stderr).to_ascii_uppercase();
+        assert!(result.ok, "Codex CLI canary failed: {:?}", result);
+        assert!(
+            result.command_line.starts_with("codex exec "),
+            "Codex preset command should use preset form: {}",
+            result.command_line
+        );
+        assert!(combined.contains("PONG"), "Codex CLI output should contain PONG: {}", combined);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Claude CLI bridge"]
+    async fn claude_cli_bridge_canary() {
+        let _lock = env_lock();
+        let _target = require_env("CRATEBAY_CANARY_CLAUDE_BIN");
+        let tmp = TempDir::new("cratebay-claude-cli-canary");
+        let (_config, _data, _log, _secret_dir) = configure_canary_dirs(&tmp);
+        let bin_dir = tmp.path.join("bin");
+        write_forwarder_binary(&bin_dir, "claude", "CRATEBAY_CANARY_CLAUDE_BIN");
+        let _path = EnvGuard::set("PATH", prepend_path(&bin_dir));
+        let prompt = std::env::var("CRATEBAY_CANARY_CLAUDE_PROMPT")
+            .unwrap_or_else(|_| "Reply with PONG and exit.".to_string());
+
+        let result = agent_cli_run(
+            Some("claude".to_string()),
+            None,
+            None,
+            Some(prompt),
+            false,
+            Some(canary_timeout("CRATEBAY_CANARY_CLAUDE_TIMEOUT_SEC", 60)),
+        )
+        .await
+        .expect("run Claude CLI canary");
+
+        let combined = format!("{}
+{}", result.stdout, result.stderr).to_ascii_uppercase();
+        assert!(result.ok, "Claude CLI canary failed: {:?}", result);
+        assert!(
+            result.command_line.starts_with("claude --print "),
+            "Claude preset command should use preset form: {}",
+            result.command_line
+        );
+        assert!(combined.contains("PONG"), "Claude CLI output should contain PONG: {}", combined);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Ollama daemon"]
+    async fn ollama_real_daemon_canary_smoke() {
+        let _lock = env_lock();
+        let tmp = TempDir::new("cratebay-ollama-daemon-canary");
+        let (_config, _data, _log, _secret_dir) = configure_canary_dirs(&tmp);
+
+        let _base = std::env::var("CRATEBAY_CANARY_OLLAMA_BASE_URL")
+            .ok()
+            .map(|value| EnvGuard::set("CRATEBAY_OLLAMA_BASE_URL", value));
+        let _models = std::env::var("CRATEBAY_CANARY_OLLAMA_MODELS_DIR")
+            .ok()
+            .map(|value| EnvGuard::set("OLLAMA_MODELS", value));
+
+        let status = ollama_status().await.expect("ollama daemon status");
+        assert!(status.installed, "Ollama daemon canary expects installed=true");
+        assert!(status.running, "Ollama daemon canary expects running=true");
+
+        let models = ollama_list_models().await.expect("ollama daemon models");
+        if let Ok(expected_model) = std::env::var("CRATEBAY_CANARY_OLLAMA_EXPECT_MODEL") {
+            assert!(
+                models.iter().any(|item| item.name == expected_model),
+                "expected Ollama model '{}' to be present; got {:?}",
+                expected_model,
+                models.iter().map(|item| item.name.clone()).collect::<Vec<_>>()
+            );
+        } else {
+            assert!(!models.is_empty(), "Ollama daemon canary expects at least one model");
+        }
+
+        let storage = ollama_storage_info().await.expect("ollama daemon storage info");
+        assert!(storage.exists, "Ollama storage should exist");
+        assert!(storage.model_count >= 1, "Ollama storage should report at least one model");
+
+        if let Ok(model) = std::env::var("CRATEBAY_CANARY_OLLAMA_PULL_MODEL") {
+            let pull = ollama_pull_model(model.clone())
+                .await
+                .expect("pull Ollama canary model");
+            assert!(pull.ok, "Ollama pull should succeed: {}", pull.message);
+            let delete = ollama_delete_model(model.clone())
+                .await
+                .expect("delete Ollama canary model");
+            assert!(delete.ok, "Ollama delete should succeed: {}", delete.message);
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "requires local process runtime"]
     async fn mcp_runtime_smoke_lifecycle() {
         let _lock = env_lock();
@@ -7852,7 +8725,7 @@ pub fn run() {
         );
     }
 
-    builder
+    let app = builder
         .manage(AppState {
             hv: cratebay_core::create_hypervisor(),
             grpc_addr: grpc_addr(),
@@ -7978,6 +8851,7 @@ pub fn run() {
             k8s_list_deployments,
             k8s_pod_logs,
             ollama_status,
+            gpu_status,
             ollama_list_models,
             ollama_storage_info,
             ollama_pull_model,
@@ -7989,6 +8863,7 @@ pub fn run() {
             sandbox_stop,
             sandbox_delete,
             sandbox_inspect,
+            sandbox_runtime_usage,
             sandbox_audit_list,
             sandbox_cleanup_expired,
             sandbox_exec,
@@ -8018,6 +8893,21 @@ pub fn run() {
             open_release_page,
             set_window_theme
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    });
 }

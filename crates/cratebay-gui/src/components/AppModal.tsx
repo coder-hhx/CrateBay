@@ -109,7 +109,7 @@ export function AppModal({
         )}
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button type="button" variant="outline" data-testid="app-modal-close" onClick={onClose}>
             {t("close")}
           </Button>
           {modalKind === "package" && (

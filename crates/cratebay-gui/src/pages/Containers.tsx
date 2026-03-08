@@ -420,13 +420,16 @@ export function Containers({
   const renderCard = (c: ContainerInfo, opts?: { child?: boolean }) => {
     const isRunning = c.state === "running"
     const name = c.name || c.id
+    const testKey = name.replace(/[^a-zA-Z0-9_-]/g, "-")
     const stats = isRunning ? containerStats[c.id] : undefined
 
     const disabled = acting === c.id
     return (
       <Card
         key={c.id}
-        data-testid={`container-card-${c.id}`}
+        data-testid={`container-card-${testKey}`}
+        data-container-id={c.id}
+        data-container-name={name}
         className={cn("py-0", opts?.child && "ml-6")}
       >
         <CardContent className="py-4">
@@ -448,6 +451,7 @@ export function Containers({
                   <div className="font-semibold text-foreground truncate">{name}</div>
                   <Badge
                     variant="secondary"
+                    data-testid={`container-status-${testKey}`}
                     className={cn(
                       "rounded-md px-2 py-0.5 text-[11px] border",
                       isRunning
@@ -512,6 +516,7 @@ export function Containers({
                 type="button"
                 size="xs"
                 variant="secondary"
+                data-testid={`container-login-${testKey}`}
                 className={cardActionSecondary}
                 disabled={disabled}
                 title={t("loginCommand")}
@@ -542,6 +547,7 @@ export function Containers({
                 type="button"
                 size="xs"
                 variant="secondary"
+                data-testid={`container-env-${testKey}`}
                 className={cardActionSecondary}
                 disabled={disabled}
                 title={t("viewEnvVars")}
@@ -590,6 +596,7 @@ export function Containers({
                   type="button"
                   size="xs"
                   variant="outline"
+                  data-testid={`container-stop-${testKey}`}
                   className={cardActionOutline}
                   disabled={disabled}
                   title={t("stop")}
@@ -603,6 +610,7 @@ export function Containers({
                   type="button"
                   size="xs"
                   variant="outline"
+                  data-testid={`container-start-${testKey}`}
                   className={cardActionOutline}
                   disabled={disabled}
                   title={t("start")}
@@ -617,6 +625,7 @@ export function Containers({
                 type="button"
                 size="xs"
                 variant="destructive"
+                data-testid={`container-delete-${testKey}`}
                 disabled={disabled}
                 title={t("delete")}
                 onClick={() => {
@@ -909,6 +918,7 @@ export function Containers({
                   type="button"
                   variant="outline"
                   size="xs"
+                  data-testid="containers-run-add-env"
                   onClick={() => setRunEnvVars([...runEnvVars, { key: "", value: "" }])}
                 >
                   <span className={cn(iconStroke, "[&_svg]:size-3")}>{I.plus}</span>
@@ -924,6 +934,7 @@ export function Containers({
                       className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2"
                     >
                       <Input
+                        data-testid={`containers-run-env-key-${i}`}
                         value={env.key}
                         onChange={(e) => {
                           const updated = [...runEnvVars]
@@ -934,6 +945,7 @@ export function Containers({
                       />
                       <span className="text-xs text-muted-foreground">=</span>
                       <Input
+                        data-testid={`containers-run-env-value-${i}`}
                         value={env.value}
                         onChange={(e) => {
                           const updated = [...runEnvVars]
@@ -965,10 +977,10 @@ export function Containers({
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowRunModal(false)}>
+            <Button type="button" variant="outline" data-testid="containers-run-close" onClick={() => setShowRunModal(false)}>
               {t("close")}
             </Button>
-            <Button type="button" disabled={!runImage.trim()} onClick={handleRun}>
+            <Button type="button" data-testid="containers-run-submit" disabled={!runImage.trim()} onClick={handleRun}>
               <span className={cn(iconStroke, "[&_svg]:size-4")}>{I.play}</span>
               {t("create")}
             </Button>
@@ -1029,7 +1041,7 @@ export function Containers({
           )}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowEnvModal(false)}>
+            <Button type="button" variant="outline" data-testid="containers-env-close" onClick={() => setShowEnvModal(false)}>
               {t("close")}
             </Button>
           </DialogFooter>
@@ -1268,6 +1280,7 @@ export function Containers({
             <AlertDialogCancel>{t("close")}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
+              data-testid="containers-remove-confirm"
               onClick={() => {
                 onContainerAction("remove_container", confirmRemove)
                 setConfirmRemove("")

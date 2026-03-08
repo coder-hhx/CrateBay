@@ -1,0 +1,108 @@
+name: Provider Canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+jobs:
+  provider-canary:
+    name: Provider Canary (Controlled)
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CRATEBAY_PROVIDER_CANARY_ENABLED == 'true' }}
+    runs-on: [self-hosted, linux, provider-canary]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: provider-canary
+
+      - name: Run controlled provider canaries
+        env:
+          RUST_BACKTRACE: "1"
+          CRATEBAY_CANARY_OPENAI_API_KEY: ${{ secrets.CRATEBAY_CANARY_OPENAI_API_KEY }}
+          CRATEBAY_CANARY_OPENAI_BASE_URL: ${{ vars.CRATEBAY_CANARY_OPENAI_BASE_URL }}
+          CRATEBAY_CANARY_OPENAI_MODEL: ${{ vars.CRATEBAY_CANARY_OPENAI_MODEL }}
+          CRATEBAY_CANARY_OPENAI_TIMEOUT_SEC: ${{ vars.CRATEBAY_CANARY_OPENAI_TIMEOUT_SEC }}
+          CRATEBAY_CANARY_ANTHROPIC_API_KEY: ${{ secrets.CRATEBAY_CANARY_ANTHROPIC_API_KEY }}
+          CRATEBAY_CANARY_ANTHROPIC_BASE_URL: ${{ vars.CRATEBAY_CANARY_ANTHROPIC_BASE_URL }}
+          CRATEBAY_CANARY_ANTHROPIC_MODEL: ${{ vars.CRATEBAY_CANARY_ANTHROPIC_MODEL }}
+          CRATEBAY_CANARY_ANTHROPIC_TIMEOUT_SEC: ${{ vars.CRATEBAY_CANARY_ANTHROPIC_TIMEOUT_SEC }}
+          CRATEBAY_CANARY_CODEX_BIN: ${{ vars.CRATEBAY_CANARY_CODEX_BIN }}
+          CRATEBAY_CANARY_CODEX_PROMPT: ${{ vars.CRATEBAY_CANARY_CODEX_PROMPT }}
+          CRATEBAY_CANARY_CODEX_TIMEOUT_SEC: ${{ vars.CRATEBAY_CANARY_CODEX_TIMEOUT_SEC }}
+          CRATEBAY_CANARY_CLAUDE_BIN: ${{ vars.CRATEBAY_CANARY_CLAUDE_BIN }}
+          CRATEBAY_CANARY_CLAUDE_PROMPT: ${{ vars.CRATEBAY_CANARY_CLAUDE_PROMPT }}
+          CRATEBAY_CANARY_CLAUDE_TIMEOUT_SEC: ${{ vars.CRATEBAY_CANARY_CLAUDE_TIMEOUT_SEC }}
+        run: ./scripts/provider-canary-smoke.sh
+
+      - name: Upload provider canary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-canary-artifacts
+          path: dist/provider-canary
+          if-no-files-found: ignore
+
+  ollama-daemon-canary:
+    name: Ollama Daemon Canary
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CRATEBAY_OLLAMA_CANARY_ENABLED == 'true' }}
+    runs-on: [self-hosted, linux, ollama-canary]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ollama-daemon-canary
+
+      - name: Run Ollama daemon canary
+        env:
+          RUST_BACKTRACE: "1"
+          CRATEBAY_CANARY_OLLAMA_BIN: ${{ vars.CRATEBAY_CANARY_OLLAMA_BIN }}
+          CRATEBAY_CANARY_OLLAMA_BASE_URL: ${{ vars.CRATEBAY_CANARY_OLLAMA_BASE_URL }}
+          CRATEBAY_CANARY_OLLAMA_MODELS_DIR: ${{ vars.CRATEBAY_CANARY_OLLAMA_MODELS_DIR }}
+          CRATEBAY_CANARY_OLLAMA_EXPECT_MODEL: ${{ vars.CRATEBAY_CANARY_OLLAMA_EXPECT_MODEL }}
+          CRATEBAY_CANARY_OLLAMA_PULL_MODEL: ${{ vars.CRATEBAY_CANARY_OLLAMA_PULL_MODEL }}
+        run: ./scripts/ollama-daemon-smoke.sh
+
+      - name: Upload Ollama canary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ollama-daemon-canary-artifacts
+          path: dist/ollama-daemon-smoke
+          if-no-files-found: ignore

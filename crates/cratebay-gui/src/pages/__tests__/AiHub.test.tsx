@@ -6,6 +6,7 @@ import { AiHub } from "../AiHub"
 import { messages } from "../../i18n/messages"
 import type {
   AiHubActionResultDto,
+  GpuStatusDto,
   AiSettings,
   McpServerEntry,
   McpServerStatusDto,
@@ -16,6 +17,7 @@ import type {
   SandboxAuditEventDto,
   SandboxCleanupResultDto,
   SandboxInfoDto,
+  SandboxRuntimeUsageDto,
   SandboxTemplateDto,
 } from "../../types"
 
@@ -34,6 +36,26 @@ const baseOllamaStatus: OllamaStatusDto = {
   running: true,
   version: "0.6.2",
   base_url: "http://127.0.0.1:11434",
+}
+
+const baseGpuStatus: GpuStatusDto = {
+  available: true,
+  utilization_supported: true,
+  backend: "nvidia-smi",
+  message: "Live GPU telemetry is available for 1 device(s).",
+  devices: [
+    {
+      index: 0,
+      name: "NVIDIA RTX 4090",
+      utilization_percent: 62,
+      memory_used_bytes: 6442450944,
+      memory_total_bytes: 25769803776,
+      memory_used_human: "6.0 GB",
+      memory_total_human: "24.0 GB",
+      temperature_celsius: 58,
+      power_watts: 210.5,
+    },
+  ],
 }
 
 const baseOllamaStorage: OllamaStorageInfoDto = {
@@ -65,6 +87,32 @@ const baseOpenSandboxStatus: OpenSandboxStatusDto = {
   config_path: "/Users/test/.cratebay/opensandbox.toml",
 }
 
+const baseSandboxRuntimeUsage: SandboxRuntimeUsageDto = {
+  running: true,
+  cpu_percent: 18.5,
+  memory_usage_mb: 256,
+  memory_limit_mb: 1024,
+  memory_percent: 25,
+  network_rx_bytes: 1024,
+  network_tx_bytes: 2048,
+  gpu_attribution_supported: true,
+  gpu_message: "Matched 1 GPU process(es) across 1 device(s).",
+  gpu_processes: [
+    {
+      gpu_index: 0,
+      gpu_name: "NVIDIA RTX 4090",
+      pid: 4242,
+      process_name: "python",
+      memory_used_bytes: 2147483648,
+      memory_used_human: "2.0 GB",
+    },
+  ],
+  gpu_memory_used_bytes: 2147483648,
+  gpu_memory_used_human: "2.0 GB",
+}
+
+const baseMcpStatuses: McpServerStatusDto[] = []
+
 const buildAiSettings = (servers: McpServerEntry[]): AiSettings => ({
   active_profile_id: "",
   profiles: [],
@@ -91,6 +139,56 @@ describe("AiHub", () => {
     vi.mocked(invoke).mockResolvedValue(null)
   })
 
+  it("shows GPU telemetry in the models runtime panel", async () => {
+    const user = userEvent.setup()
+
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "ollama_status") return baseOllamaStatus
+      if (command === "gpu_status") return baseGpuStatus
+      if (command === "ollama_storage_info") return baseOllamaStorage
+      if (command === "ollama_list_models") return [] as OllamaModelDto[]
+      if (command === "sandbox_templates") return [baseTemplate]
+      if (command === "sandbox_list") return [] as SandboxInfoDto[]
+      if (command === "sandbox_audit_list") return [] as SandboxAuditEventDto[]
+      if (command === "load_ai_settings") return buildAiSettings([])
+      if (command === "mcp_list_servers") return [] as McpServerStatusDto[]
+      if (command === "opensandbox_status") return baseOpenSandboxStatus
+      if (command === "mcp_server_logs") return [] as string[]
+      return null
+    })
+
+    render(<AiHub t={t} />)
+    await user.click(screen.getByRole("tab", { name: t("models") }))
+
+    const gpuCard = await screen.findByTestId("ollama-gpu-card")
+    expect(within(gpuCard).getByText(t("gpuRuntime"))).toBeInTheDocument()
+    expect(within(gpuCard).getByText("nvidia-smi")).toBeInTheDocument()
+    expect(within(gpuCard).getByText("NVIDIA RTX 4090")).toBeInTheDocument()
+    expect(within(gpuCard).getByText(/62%/)).toBeInTheDocument()
+    expect(within(gpuCard).getByText(/6.0 GB \/ 24.0 GB/)).toBeInTheDocument()
+  })
+
+  it("respects initial tab deep links", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "ollama_status") return { ...baseOllamaStatus, running: false }
+      if (command === "gpu_status") return baseGpuStatus
+      if (command === "ollama_storage_info") return baseOllamaStorage
+      if (command === "sandbox_templates") return [baseTemplate]
+      if (command === "sandbox_list") return [] as SandboxInfoDto[]
+      if (command === "sandbox_audit_list") return [] as SandboxAuditEventDto[]
+      if (command === "load_ai_settings") return buildAiSettings([])
+      if (command === "mcp_list_servers") return baseMcpStatuses
+      if (command === "opensandbox_status") return baseOpenSandboxStatus
+      if (command === "mcp_server_logs") return [] as string[]
+      return null
+    })
+
+    render(<AiHub t={t} initialTab="mcp" />)
+
+    expect(await screen.findByText(t("mcpRegistryTitle"))).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: t("mcp") })).toHaveAttribute("data-state", "active")
+  })
+
   it("supports Ollama pull and delete flows", async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
@@ -110,6 +208,7 @@ describe("AiHub", () => {
 
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "ollama_status") return baseOllamaStatus
+      if (command === "gpu_status") return baseGpuStatus
       if (command === "ollama_storage_info") {
         return { ...baseOllamaStorage, model_count: models.length }
       }
@@ -203,6 +302,7 @@ describe("AiHub", () => {
 
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "ollama_status") return { ...baseOllamaStatus, running: false }
+      if (command === "gpu_status") return baseGpuStatus
       if (command === "ollama_storage_info") return baseOllamaStorage
       if (command === "sandbox_templates") return [baseTemplate]
       if (command === "sandbox_list") return [] as SandboxInfoDto[]
@@ -299,10 +399,26 @@ describe("AiHub", () => {
     await waitFor(() => expect(screen.getByText(/filesystem server ready/)).toBeInTheDocument())
   })
 
-  it("shows OpenSandbox status and cleanup entry", async () => {
+  it("shows OpenSandbox status, sandbox GPU runtime usage, and cleanup entry", async () => {
     const user = userEvent.setup()
 
     let sandboxes: SandboxInfoDto[] = [
+      {
+        id: "sandbox-gpu",
+        short_id: "sandbox-gpu",
+        name: "GPU Sandbox",
+        image: "python:3.12",
+        state: "running",
+        status: "Up 2 minutes",
+        template_id: baseTemplate.id,
+        owner: "test",
+        created_at: "2026-03-06T00:00:00Z",
+        expires_at: "2026-03-06T08:00:00Z",
+        ttl_hours: 8,
+        cpu_cores: 2,
+        memory_mb: 2048,
+        is_expired: false,
+      },
       {
         id: "sandbox-1",
         short_id: "sandbox-1",
@@ -321,8 +437,9 @@ describe("AiHub", () => {
       },
     ]
 
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "ollama_status") return { ...baseOllamaStatus, running: false }
+      if (command === "gpu_status") return baseGpuStatus
       if (command === "ollama_storage_info") return baseOllamaStorage
       if (command === "sandbox_templates") return [baseTemplate]
       if (command === "sandbox_list") return sandboxes
@@ -331,8 +448,30 @@ describe("AiHub", () => {
       if (command === "mcp_list_servers") return [] as McpServerStatusDto[]
       if (command === "opensandbox_status") return baseOpenSandboxStatus
       if (command === "mcp_server_logs") return [] as string[]
+      if (command === "sandbox_inspect") {
+        const { id } = args as { id: string }
+        const sandbox = sandboxes.find((item) => item.id === id)
+        if (!sandbox) return null
+        return {
+          id: sandbox.id,
+          short_id: sandbox.short_id,
+          name: sandbox.name,
+          image: sandbox.image,
+          template_id: sandbox.template_id,
+          owner: sandbox.owner,
+          created_at: sandbox.created_at,
+          expires_at: sandbox.expires_at,
+          ttl_hours: sandbox.ttl_hours,
+          cpu_cores: sandbox.cpu_cores,
+          memory_mb: sandbox.memory_mb,
+          running: sandbox.state === "running",
+          command: "python server.py",
+          env: ["CUDA_VISIBLE_DEVICES=0"],
+        }
+      }
+      if (command === "sandbox_runtime_usage") return baseSandboxRuntimeUsage
       if (command === "sandbox_cleanup_expired") {
-        sandboxes = []
+        sandboxes = sandboxes.filter((item) => !item.is_expired)
         const out: SandboxCleanupResultDto = {
           removed_count: 1,
           removed_names: ["Expired Sandbox"],
@@ -348,6 +487,17 @@ describe("AiHub", () => {
 
     expect(await screen.findByText(baseOpenSandboxStatus.base_url)).toBeInTheDocument()
     expect(screen.getByText(baseOpenSandboxStatus.config_path)).toBeInTheDocument()
+
+    const sandboxRow = screen.getByText("GPU Sandbox").closest("tr")
+    expect(sandboxRow).not.toBeNull()
+    await user.click(within(sandboxRow as HTMLElement).getByRole("button", { name: t("inspect") }))
+
+    const runtimeCard = await screen.findByTestId("sandbox-runtime-card")
+    expect(within(runtimeCard).getByText(t("sandboxRuntimeUsage"))).toBeInTheDocument()
+    expect(within(runtimeCard).getByText(/18.5%/)).toBeInTheDocument()
+    expect(within(runtimeCard).getByText(/256 MB \/ 1024 MB \(25%\)/)).toBeInTheDocument()
+    expect(within(runtimeCard).getAllByText(/2.0 GB/).length).toBeGreaterThan(0)
+    expect(within(runtimeCard).getByText(/python · GPU 0 · 2.0 GB/)).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: t("sandboxCleanupExpired") }))
 

@@ -5,7 +5,6 @@ import { messages } from "./i18n/messages"
 import { I } from "./icons"
 import { useContainers } from "./hooks/useContainers"
 import { useImageSearch } from "./hooks/useImageSearch"
-import { useVms } from "./hooks/useVms"
 import { useVolumes } from "./hooks/useVolumes"
 import { useModal } from "./hooks/useModal"
 import { AppModal } from "./components/AppModal"
@@ -21,15 +20,15 @@ import { APP_VERSION } from "@/lib/appVersion"
 import { Dashboard } from "./pages/Dashboard"
 import { Containers } from "./pages/Containers"
 import { Images } from "./pages/Images"
-import { Vms } from "./pages/Vms"
 import { Volumes } from "./pages/Volumes"
-import { Settings } from "./pages/Settings"
-import { Kubernetes } from "./pages/Kubernetes"
-import { AiHub } from "./pages/AiHub"
-import type { DockerRuntimeSetupResult, NavPage, Theme, VmInfoDto, LocalImageInfo } from "./types"
+import { Settings, type SettingsTab } from "./pages/Settings"
+import { AiHub, type AiHubTab } from "./pages/AiHub"
+import type { DockerRuntimeSetupResult, NavPage, Theme, LocalImageInfo } from "./types"
 
 function App() {
   const [activePage, setActivePage] = useState<NavPage>("dashboard")
+  const [aiTabIntent, setAiTabIntent] = useState<AiHubTab>("sandboxes")
+  const [settingsTabIntent, setSettingsTabIntent] = useState<SettingsTab>("general")
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("theme") as Theme) || "system")
   const normalizeLang = (value: string | null) => (value === "zh" ? "zh" : "en")
   const [lang, setLang] = useState(() => normalizeLang(localStorage.getItem("lang")))
@@ -68,7 +67,6 @@ function App() {
   const modal = useModal(t)
   const containers = useContainers()
   const images = useImageSearch()
-  const vmHook = useVms()
   const volumeHook = useVolumes()
   const [dockerRuntimeSetupRunning, setDockerRuntimeSetupRunning] = useState(false)
   const fetchContainers = containers.fetchContainers
@@ -210,21 +208,73 @@ function App() {
     catch { showToast(t("copyFailed")) }
   }
 
-  const navItems: { page: NavPage; icon: React.ReactNode; count?: number; soon?: boolean }[] = [
+  const primaryNavItems: { page: NavPage; icon: React.ReactNode; count?: number; badgeKey?: "soon" | "experimental" }[] = [
     { page: "dashboard", icon: I.dashboard },
+    { page: "ai", icon: I.aiAssistant },
     { page: "containers", icon: I.box, count: containers.containers.length },
     { page: "images", icon: I.layers },
     { page: "volumes", icon: I.hardDrive, count: volumeHook.volumes.length },
-    { page: "vms", icon: I.server, count: vmHook.vms.length },
-    { page: "kubernetes", icon: I.kubernetes },
-    { page: "ai", icon: I.aiAssistant },
   ]
+
+  const navigateToPage = useCallback((page: NavPage) => {
+    if (page === "ai") setAiTabIntent("sandboxes")
+    if (page === "settings") setSettingsTabIntent("general")
+    setActivePage(page)
+  }, [])
+
+  const openAiTab = useCallback((tab: AiHubTab) => {
+    setAiTabIntent(tab)
+    setActivePage("ai")
+  }, [])
+
+  const openSettingsTab = useCallback((tab: SettingsTab) => {
+    setSettingsTabIntent(tab)
+    setActivePage("settings")
+  }, [])
 
   const pageNames: Record<NavPage, string> = {
     dashboard: t("dashboard"), containers: t("containers"),
     vms: t("vms"), images: t("images"), volumes: t("volumes"),
     kubernetes: t("kubernetes"), ai: t("ai"), settings: t("settings"),
   }
+
+  const renderNavButton = (item: { page: NavPage; icon: React.ReactNode; count?: number; badgeKey?: "soon" | "experimental" }) => (
+    <Button
+      key={item.page}
+      type="button"
+      variant="ghost"
+      size="sm"
+      data-testid={`nav-${item.page}`}
+      className={cn(
+        "w-full justify-start gap-2 px-3 text-sm font-medium text-muted-foreground hover:text-foreground",
+        activePage === item.page && "bg-primary/10 text-primary hover:bg-primary/15"
+      )}
+      onClick={() => navigateToPage(item.page)}
+    >
+      <span className="size-5 shrink-0 flex items-center justify-center [&>svg]:size-[18px] [&>svg]:fill-none [&>svg]:stroke-current [&>svg]:stroke-2 [&>svg]:stroke-linecap-round [&>svg]:stroke-linejoin-round">
+        {item.icon}
+      </span>
+      <span className="flex-1 text-left">
+        {pageNames[item.page]}
+      </span>
+      {item.count != null && item.count > 0 && (
+        <Badge
+          variant="secondary"
+          className="rounded-md border border-brand-cyan/15 bg-brand-cyan/10 px-1.5 py-0 text-[11px] text-brand-cyan"
+        >
+          {item.count}
+        </Badge>
+      )}
+      {item.badgeKey && (
+        <Badge
+          variant="secondary"
+          className="rounded-md px-1.5 py-0 text-[10px] text-muted-foreground"
+        >
+          {t(item.badgeKey)}
+        </Badge>
+      )}
+    </Button>
+  )
 
   const renderPage = () => {
     switch (activePage) {
@@ -233,13 +283,12 @@ function App() {
           <Dashboard
             containers={containers.containers}
             running={containers.running}
-            vmsCount={vmHook.vms.length}
-            vmsRunningCount={vmHook.running.length}
-            runningVms={vmHook.running}
             imgResultsCount={images.imgResults.length}
             installedImagesCount={installedImagesCount}
             volumesCount={volumeHook.volumes.length}
-            onNavigate={setActivePage}
+            onNavigate={navigateToPage}
+            onOpenAiTab={openAiTab}
+            onOpenSettingsTab={openSettingsTab}
             t={t}
           />
         )
@@ -315,81 +364,24 @@ function App() {
         )
       case "vms":
         return (
-          <Vms
-            vms={vmHook.vms}
-            vmLoading={vmHook.vmLoading}
-            vmError={vmHook.vmError}
-            setVmError={vmHook.setVmError}
-            vmName={vmHook.vmName}
-            setVmName={vmHook.setVmName}
-            vmCpus={vmHook.vmCpus}
-            setVmCpus={vmHook.setVmCpus}
-            vmMem={vmHook.vmMem}
-            setVmMem={vmHook.setVmMem}
-            vmDisk={vmHook.vmDisk}
-            setVmDisk={vmHook.setVmDisk}
-            vmRosetta={vmHook.vmRosetta}
-            setVmRosetta={vmHook.setVmRosetta}
-            vmActing={vmHook.vmActing}
-            vmLoginUser={vmHook.vmLoginUser}
-            setVmLoginUser={vmHook.setVmLoginUser}
-            vmLoginHost={vmHook.vmLoginHost}
-            setVmLoginHost={vmHook.setVmLoginHost}
-            vmLoginPort={vmHook.vmLoginPort}
-            setVmLoginPort={vmHook.setVmLoginPort}
-            mountVmId={vmHook.mountVmId}
-            setMountVmId={vmHook.setMountVmId}
-            mountTag={vmHook.mountTag}
-            setMountTag={vmHook.setMountTag}
-            mountHostPath={vmHook.mountHostPath}
-            setMountHostPath={vmHook.setMountHostPath}
-            mountGuestPath={vmHook.mountGuestPath}
-            setMountGuestPath={vmHook.setMountGuestPath}
-            mountReadonly={vmHook.mountReadonly}
-            setMountReadonly={vmHook.setMountReadonly}
-            pfVmId={vmHook.pfVmId}
-            setPfVmId={vmHook.setPfVmId}
-            pfHostPort={vmHook.pfHostPort}
-            setPfHostPort={vmHook.setPfHostPort}
-            pfGuestPort={vmHook.pfGuestPort}
-            setPfGuestPort={vmHook.setPfGuestPort}
-            pfProtocol={vmHook.pfProtocol}
-            setPfProtocol={vmHook.setPfProtocol}
-            onFetchVms={vmHook.fetchVms}
-            onVmAction={vmHook.vmAction}
-            onCreateVm={async () => {
-              const ok = await vmHook.createVm()
-              if (ok) showToast(t("vmCreated"))
-              return Boolean(ok)
-            }}
-            onLoginCmd={async (vm: VmInfoDto) => {
-              const cmd = await vmHook.getLoginCmd(vm)
-              if (cmd) modal.openTextModal(t("loginCommand"), cmd, cmd)
-            }}
-            onAddMount={vmHook.addMount}
-            onRemoveMount={vmHook.removeMount}
-            osImages={vmHook.osImages}
-            selectedOsImage={vmHook.selectedOsImage}
-            setSelectedOsImage={vmHook.setSelectedOsImage}
-            downloadingImage={vmHook.downloadingImage}
-            downloadProgress={vmHook.downloadProgress}
-            onDownloadOsImage={async (imageId: string) => {
-              const ok = await vmHook.downloadOsImage(imageId)
-              if (ok) showToast(t("osImageDownloaded"))
-            }}
-            onDeleteOsImage={async (imageId: string) => {
-              const ok = await vmHook.deleteOsImage(imageId)
-              if (ok) showToast(t("osImageDeleted"))
-            }}
-            onAddPortForward={vmHook.addPortForward}
-            onRemovePortForward={vmHook.removePortForward}
-            t={t}
+          <EmptyState
+            icon={I.server}
+            title={t("comingSoon")}
+            description={t("vmsComingSoonDesc")}
+            code={t("postV1Track")}
           />
         )
       case "kubernetes":
-        return <Kubernetes t={t} />
+        return (
+          <EmptyState
+            icon={I.kubernetes}
+            title={t("comingSoon")}
+            description={t("kubernetesComingSoonDesc")}
+            code={t("postV1Track")}
+          />
+        )
       case "ai":
-        return <AiHub t={t} />
+        return <AiHub t={t} initialTab={aiTabIntent} />
       case "settings":
         return (
           <Settings
@@ -398,6 +390,7 @@ function App() {
             lang={lang}
             setLang={(v) => setLang(normalizeLang(v))}
             t={t}
+            initialTab={settingsTabIntent}
           />
         )
       default:
@@ -443,44 +436,10 @@ function App() {
         </div>
 
         <ScrollArea className="flex-1 px-2 py-3">
-          <nav className="flex flex-col gap-1">
-            {navItems.map((item) => (
-              <Button
-                key={item.page}
-                type="button"
-                variant="ghost"
-                size="sm"
-                data-testid={`nav-${item.page}`}
-                className={cn(
-                  "w-full justify-start gap-2 px-3 text-sm font-medium text-muted-foreground hover:text-foreground",
-                  activePage === item.page && "bg-primary/10 text-primary hover:bg-primary/15"
-                )}
-                onClick={() => setActivePage(item.page)}
-              >
-                <span className="size-5 shrink-0 flex items-center justify-center [&>svg]:size-[18px] [&>svg]:fill-none [&>svg]:stroke-current [&>svg]:stroke-2 [&>svg]:stroke-linecap-round [&>svg]:stroke-linejoin-round">
-                  {item.icon}
-                </span>
-                <span className="flex-1 text-left">
-                  {pageNames[item.page]}
-                </span>
-                {item.count != null && item.count > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="rounded-md border border-brand-cyan/15 bg-brand-cyan/10 px-1.5 py-0 text-[11px] text-brand-cyan"
-                  >
-                    {item.count}
-                  </Badge>
-                )}
-                {item.soon && (
-                  <Badge
-                    variant="secondary"
-                    className="rounded-md px-1.5 py-0 text-[10px] text-muted-foreground"
-                  >
-                    {t("soon")}
-                  </Badge>
-                )}
-              </Button>
-            ))}
+          <nav className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1" data-testid="nav-primary-section">
+              {primaryNavItems.map(renderNavButton)}
+            </div>
           </nav>
         </ScrollArea>
 
@@ -494,7 +453,7 @@ function App() {
               "w-full justify-start gap-2 px-3 text-sm font-medium text-muted-foreground hover:text-foreground",
               activePage === "settings" && "bg-primary/10 text-primary hover:bg-primary/15"
             )}
-            onClick={() => setActivePage("settings")}
+            onClick={() => navigateToPage("settings")}
           >
             <span className="size-5 shrink-0 flex items-center justify-center [&>svg]:size-[18px] [&>svg]:fill-none [&>svg]:stroke-current [&>svg]:stroke-2 [&>svg]:stroke-linecap-round [&>svg]:stroke-linejoin-round">
               {I.settings}
@@ -518,14 +477,6 @@ function App() {
                 className="rounded-md border border-primary/15 bg-primary/10 text-primary"
               >
                 {containers.running.length} {t("runningCount")}
-              </Badge>
-            )}
-            {activePage === "vms" && vmHook.running.length > 0 && (
-              <Badge
-                variant="secondary"
-                className="rounded-md border border-primary/15 bg-primary/10 text-primary"
-              >
-                {vmHook.running.length} {t("runningCount")}
               </Badge>
             )}
           </div>

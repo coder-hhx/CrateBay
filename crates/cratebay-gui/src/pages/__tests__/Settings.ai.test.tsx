@@ -122,6 +122,20 @@ describe("Settings AI section", () => {
     vi.mocked(invoke).mockResolvedValue(null)
   })
 
+  it("respects AI tab deep links", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_ai_settings") return baseAiSettings
+      if (command === "agent_cli_list_presets") return []
+      if (command === "ai_secret_exists") return true
+      return null
+    })
+
+    render(<Settings {...defaultProps} initialTab="ai" />)
+
+    expect(await screen.findByRole("button", { name: t("aiTestConnection") })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: t("settingsAiTab") })).toHaveAttribute("data-state", "active")
+  })
+
   it("tests AI connection with active profile id", async () => {
     const user = userEvent.setup()
     vi.mocked(invoke).mockImplementation(async (command) => {

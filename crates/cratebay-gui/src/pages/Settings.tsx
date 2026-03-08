@@ -18,7 +18,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { APP_VERSION } from "@/lib/appVersion"
 import { defaultSkillInputValue, formatSkillExecutionOutput, skillNeedsConfirmation, skillUsesPromptInput } from "@/lib/aiSkills"
-import { cardActionOutline, cardActionSecondary } from "@/lib/styles"
+import { cardActionOutline, cardActionSecondary, iconStroke } from "@/lib/styles"
 import type {
   AgentCliPreset,
   AgentCliRunResult,
@@ -39,12 +39,15 @@ interface UpdateInfo {
   download_url: string
 }
 
+export type SettingsTab = "general" | "ai"
+
 interface SettingsProps {
   theme: Theme
   setTheme: (v: Theme) => void
   lang: string
   setLang: (v: string) => void
   t: (key: string) => string
+  initialTab?: SettingsTab
 }
 
 const linesToList = (value: string) =>
@@ -55,7 +58,7 @@ const linesToList = (value: string) =>
 
 const listToLines = (list: string[]) => list.join("\n")
 
-export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
+export function Settings({ theme, setTheme, lang, setLang, t, initialTab = "general" }: SettingsProps) {
   const normalizeLang = (value: string) => (value === "zh" ? "zh" : "en")
   const [checking, setChecking] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -84,17 +87,26 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
   const [agentRunning, setAgentRunning] = useState(false)
   const [agentResult, setAgentResult] = useState<AgentCliRunResult | null>(null)
   const [agentError, setAgentError] = useState("")
+
+  useEffect(() => {
+    setSettingsTab(initialTab)
+  }, [initialTab])
   const [skillInputMap, setSkillInputMap] = useState<Record<string, string>>({})
   const [skillDryRunMap, setSkillDryRunMap] = useState<Record<string, boolean>>({})
   const [skillResultMap, setSkillResultMap] = useState<Record<string, string>>({})
   const [skillErrorMap, setSkillErrorMap] = useState<Record<string, string>>({})
   const [skillRunningId, setSkillRunningId] = useState("")
-  const [settingsTab, setSettingsTab] = useState<"general" | "ai">("general")
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialTab)
 
   const sectionTitle = (key: string) => {
     const value = t(key)
     return value.length <= 24 ? value.toUpperCase() : value
   }
+
+  const settingsTabLabel = useMemo(
+    () => (settingsTab === "ai" ? t("settingsAiTab") : t("settingsGeneralTab")),
+    [settingsTab, t]
+  )
 
   const activeProfile = useMemo(() => {
     if (!aiSettings) return null
@@ -463,12 +475,39 @@ export function Settings({ theme, setTheme, lang, setLang, t }: SettingsProps) {
 
   return (
     <div className="space-y-6">
-      <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as "general" | "ai")}>
-        <TabsList variant="line" className="w-full justify-start">
-          <TabsTrigger value="general">{t("settingsGeneralTab")}</TabsTrigger>
-          <TabsTrigger value="ai">{t("settingsAiTab")}</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <Card className="py-0">
+        <CardContent className="py-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className={`size-10 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center [&_svg]:size-5 ${iconStroke}`}>
+              {I.settings}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm font-semibold text-foreground">{t("settings")}</div>
+                <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[11px]">
+                  {settingsTabLabel}
+                </Badge>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {t("settingsGeneralTab")} · {t("settingsAiTab")}
+              </div>
+            </div>
+          </div>
+
+          <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as SettingsTab)}>
+            <TabsList className="w-fit">
+              <TabsTrigger value="general" className="flex-none gap-2 px-3">
+                <span className={`[&_svg]:size-4 ${iconStroke}`}>{I.settings}</span>
+                {t("settingsGeneralTab")}
+              </TabsTrigger>
+              <TabsTrigger value="ai" className="flex-none gap-2 px-3">
+                <span className={`[&_svg]:size-4 ${iconStroke}`}>{I.aiAssistant}</span>
+                {t("settingsAiTab")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </CardContent>
+      </Card>
 
       <section className="space-y-3" hidden={settingsTab !== "general"}>
         <div className="text-xs font-semibold tracking-widest text-muted-foreground">
