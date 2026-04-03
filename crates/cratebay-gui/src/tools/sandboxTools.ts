@@ -81,8 +81,11 @@ interface InstallResult {
 // Tool helpers
 // ---------------------------------------------------------------------------
 
-function textResult(text: string): AgentToolResult {
-  return { content: [{ type: "text", text }] };
+function textResult(text: string): AgentToolResult<undefined> {
+  return {
+    content: [{ type: "text", text }],
+    details: undefined,
+  };
 }
 
 function formatRunCodeResult(result: RunCodeResult): string {

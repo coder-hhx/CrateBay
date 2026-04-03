@@ -200,6 +200,9 @@ export interface Translations {
     batchProgress: string;
     batchFailed: string;
     tags: string;
+    sandboxImages: string;
+    userImages: string;
+    systemBadge: string;
     searchPlaceholder: string;
     searchHint: string;
     official: string;
