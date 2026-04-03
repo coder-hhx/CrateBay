@@ -403,8 +403,8 @@ describe("buildSystemPrompt", () => {
   it("contains behavioral rules section", () => {
     const prompt = buildSystemPrompt(allTools);
 
-    expect(prompt).toContain("Safety First");
-    expect(prompt).toContain("Error Recovery");
+    expect(prompt).toContain("Behavioral Rules");
+    expect(prompt).toContain("Error recovery");
     expect(prompt).toContain("Restrictions");
   });
 });
