@@ -166,7 +166,7 @@ export function Sidebar() {
       {/* Engine status at bottom */}
       <div className="flex items-center gap-1.5 px-4 py-2.5 text-[11px] text-muted-foreground">
         <EngineStatusDot connected={dockerConnected} status={runtimeStatus} />
-        <span>{getEngineLabel(dockerConnected, runtimeStatus)}</span>
+        <span>{getEngineLabel(dockerConnected, runtimeStatus, t)}</span>
       </div>
     </div>
   );
@@ -188,11 +188,11 @@ function EngineStatusDot({ connected, status }: { connected: boolean; status: st
   );
 }
 
-function getEngineLabel(connected: boolean, status: string): string {
-  if (connected) return "引擎就绪";
-  if (status === "starting") return "启动中…";
-  if (status === "error") return "引擎异常";
-  return "未连接";
+function getEngineLabel(connected: boolean, status: string, t: (namespace: string, key: string) => string): string {
+  if (connected) return t("statusbar", "engineReady");
+  if (status === "starting") return t("statusbar", "engineStarting");
+  if (status === "error") return t("statusbar", "engineError");
+  return t("statusbar", "engineDisconnected");
 }
 
 function formatSessionTime(isoString: string): string {

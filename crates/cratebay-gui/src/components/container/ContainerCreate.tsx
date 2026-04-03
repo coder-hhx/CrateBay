@@ -13,15 +13,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Plus, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
 
 /**
  * Format bytes to human-readable size string.
@@ -35,7 +29,6 @@ function formatSize(bytes: number): string {
 export function ContainerCreate() {
   const { t } = useI18n();
   const createContainer = useContainerStore((s) => s.createContainer);
-  const templates = useContainerStore((s) => s.templates);
   const images = useContainerStore((s) => s.images);
   const imagesLoading = useContainerStore((s) => s.imagesLoading);
   const fetchImages = useContainerStore((s) => s.fetchImages);
@@ -44,7 +37,6 @@ export function ContainerCreate() {
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [imageDropdownOpen, setImageDropdownOpen] = useState(false);
-  const [templateId, setTemplateId] = useState("");
   const [cpuCores, setCpuCores] = useState(2);
   const [memoryMb, setMemoryMb] = useState(2048);
 
@@ -74,47 +66,30 @@ export function ContainerCreate() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Flatten all image tags into a flat list and filter by search
+  // Build deduplicated image list: one entry per image, prefer non-cratebay tags
   const imageOptions = useMemo(() => {
-    const allTags: { tag: string; sizeBytes: number }[] = [];
+    const result: { tag: string; sizeBytes: number }[] = [];
     for (const img of images) {
-      for (const tag of img.repoTags) {
-        if (tag && tag !== "<none>:<none>") {
-          allTags.push({ tag, sizeBytes: img.sizeBytes });
-        }
-      }
+      const validTags = img.repoTags.filter(
+        (tag) => tag && tag !== "<none>:<none>",
+      );
+      if (validTags.length === 0) continue;
+      // Prefer the original upstream tag over cratebay-* alias
+      const preferred = validTags.find((t) => !t.startsWith("cratebay-")) ?? validTags[0];
+      result.push({ tag: preferred, sizeBytes: img.sizeBytes });
     }
-    // Sort: exact prefix match first, then alphabetical
     const query = image.trim().toLowerCase();
-    if (query.length === 0) return allTags;
-    return allTags.filter(
-      (item) => item.tag.toLowerCase().includes(query),
-    );
+    if (query.length === 0) return result;
+    return result.filter((item) => item.tag.toLowerCase().includes(query));
   }, [images, image]);
 
   const resetForm = useCallback(() => {
     setName("");
     setImage("");
     setImageDropdownOpen(false);
-    setTemplateId("");
     setCpuCores(2);
     setMemoryMb(2048);
   }, []);
-
-  const selectedTemplate = templates.find((tmpl) => tmpl.id === templateId);
-
-  const handleTemplateChange = useCallback(
-    (id: string) => {
-      setTemplateId(id);
-      const tmpl = templates.find((t2) => t2.id === id);
-      if (tmpl) {
-        setImage(tmpl.image);
-        setCpuCores(tmpl.defaultCpuCores);
-        setMemoryMb(tmpl.defaultMemoryMb);
-      }
-    },
-    [templates],
-  );
 
   const canCreate = image.trim().length > 0;
 
@@ -124,19 +99,15 @@ export function ContainerCreate() {
     const req: ContainerCreateRequest = {
       name: trimmedName || `cratebay-${Date.now().toString(36)}`,
       image: image.trim(),
-      templateId: templateId || undefined,
       cpuCores,
       memoryMb,
       autoStart: true,
     };
-    if (selectedTemplate?.defaultCommand?.trim()) {
-      req.command = selectedTemplate.defaultCommand.trim();
-    }
     // Fire-and-forget: close dialog immediately, store handles optimistic update
     void createContainer(req);
     resetForm();
     setOpen(false);
-  }, [canCreate, templateId, name, image, cpuCores, memoryMb, selectedTemplate, createContainer, resetForm]);
+  }, [canCreate, name, image, cpuCores, memoryMb, createContainer, resetForm]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
@@ -146,7 +117,7 @@ export function ContainerCreate() {
           {t("containers", "create")}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg overflow-hidden">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t("containers", "create")}</DialogTitle>
           <DialogDescription>
@@ -154,26 +125,7 @@ export function ContainerCreate() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 py-4">
-          {/* Template */}
-          {templates.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <Label>{t("containers", "template")}</Label>
-              <Select value={templateId} onValueChange={handleTemplateChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t("containers", "selectTemplate")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {templates.map((tmpl) => (
-                    <SelectItem key={tmpl.id} value={tmpl.id}>
-                      {tmpl.name} — {tmpl.description}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
+        <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto py-4">
           {/* Name */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="container-name">{t("containers", "nameOptional")}</Label>
@@ -187,7 +139,7 @@ export function ContainerCreate() {
 
           {/* Image — searchable dropdown with local images */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="container-image">{t("containers", "image")}</Label>
+            <Label htmlFor="container-image">{t("containers", "selectImage")}</Label>
             <div className="relative">
               <Input
                 ref={imageInputRef}
@@ -198,7 +150,7 @@ export function ContainerCreate() {
                   setImageDropdownOpen(true);
                 }}
                 onFocus={() => setImageDropdownOpen(true)}
-                placeholder={selectedTemplate?.image ?? "ubuntu:latest"}
+                placeholder={t("containers", "selectImage")}
                 className="pr-8"
                 autoComplete="off"
               />
@@ -221,7 +173,7 @@ export function ContainerCreate() {
               {imageDropdownOpen && imageOptions.length > 0 && (
                 <div
                   ref={dropdownRef}
-                  className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
+                  className="mt-1 max-h-40 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
                 >
                   {imageOptions.map((item) => (
                     <button
@@ -249,7 +201,7 @@ export function ContainerCreate() {
               {imageDropdownOpen && imageOptions.length === 0 && !imagesLoading && image.trim().length > 0 && (
                 <div
                   ref={dropdownRef}
-                  className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-3 shadow-md"
+                  className="mt-1 rounded-md border border-border bg-popover p-3 shadow-md"
                 >
                   <p className="text-xs text-muted-foreground">
                     本地无匹配镜像，创建时将自动拉取 <span className="font-mono font-medium text-foreground">{image.trim()}</span>

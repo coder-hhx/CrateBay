@@ -65,6 +65,10 @@ export interface Translations {
     running: string;
     stopped: string;
     runtimeLabel: string;
+    engineReady: string;
+    engineStarting: string;
+    engineError: string;
+    engineDisconnected: string;
   };
   chat: {
     newSession: string;
@@ -132,6 +136,14 @@ export interface Translations {
     memoryMb: string;
     selectTemplate: string;
     builtinRuntimeNotReady: string;
+    pullingImage: string;
+    pullImageTitle: string;
+    pullImageHint: string;
+    pullImageTimeout: string;
+    pullingProgress: string;
+    pullComplete: string;
+    pullFailed: string;
+    selectImage: string;
   };
   mcp: {
     title: string;
