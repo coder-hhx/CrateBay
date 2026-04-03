@@ -67,7 +67,7 @@ describe("AppLayout", () => {
     // Children are rendered
     expect(screen.getByTestId("child-content")).toBeInTheDocument();
     // Version is rendered (appears in both Sidebar bottom and StatusBar)
-    const versionElements = screen.getAllByText(/v2\.0\.0/);
+    const versionElements = screen.getAllByText(/v0\.9\.0/);
     expect(versionElements.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -82,7 +82,7 @@ describe("AppLayout", () => {
     const chatElements = screen.getAllByText("Chat");
     expect(chatElements.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("MCP")).toBeInTheDocument();
+    expect(screen.getByText("Images")).toBeInTheDocument();
     const settingsElements = screen.getAllByText("Settings");
     expect(settingsElements.length).toBeGreaterThanOrEqual(1);
   });
@@ -110,7 +110,7 @@ describe("Sidebar", () => {
 
     expect(screen.getByText("Chat")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("MCP")).toBeInTheDocument();
+    expect(screen.getByText("Images")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
@@ -184,25 +184,25 @@ describe("StatusBar", () => {
 
   it("shows disconnected status by default", () => {
     render(<StatusBar />);
-    expect(screen.getByText("未连接")).toBeInTheDocument();
+    expect(screen.getByText("Not Connected")).toBeInTheDocument();
   });
 
   it("shows engine ready when docker connected", () => {
     useAppStore.setState({ dockerConnected: true, runtimeStatus: "running" });
     render(<StatusBar />);
-    expect(screen.getByText("引擎就绪")).toBeInTheDocument();
+    expect(screen.getByText("Engine Ready")).toBeInTheDocument();
   });
 
   it("shows engine ready when docker connected regardless of runtimeStatus", () => {
     useAppStore.setState({ dockerConnected: true, runtimeStatus: "stopped" });
     render(<StatusBar />);
-    expect(screen.getByText("引擎就绪")).toBeInTheDocument();
+    expect(screen.getByText("Engine Ready")).toBeInTheDocument();
   });
 
   it("shows starting when runtime is starting", () => {
     useAppStore.setState({ runtimeStatus: "starting" });
     render(<StatusBar />);
-    expect(screen.getByText("启动中…")).toBeInTheDocument();
+    expect(screen.getByText("Engine Starting...")).toBeInTheDocument();
   });
 
   it("shows version number", () => {
