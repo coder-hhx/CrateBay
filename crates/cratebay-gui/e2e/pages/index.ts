@@ -50,9 +50,12 @@ export class AppLayoutPage extends BasePage {
   readonly chatNavButton = '[data-testid="nav-chat"], button:has-text("Chat")';
   readonly containersNavButton =
     '[data-testid="nav-containers"], button:has-text("Containers")';
-  readonly mcpNavButton = '[data-testid="nav-mcp"], button:has-text("MCP")';
+  readonly imagesNavButton =
+    '[data-testid="nav-images"], button:has-text("Images")';
   readonly settingsNavButton =
     '[data-testid="nav-settings"], button:has-text("Settings")';
+  readonly mcpNavButton =
+    '[data-testid="settings-tab-mcp"], button:has-text("MCP")';
 
   // 应用标题
   readonly appTitle = '[data-testid="app-title"]';
@@ -67,7 +70,13 @@ export class AppLayoutPage extends BasePage {
     await this.waitForNavigation();
   }
 
+  async navigateToImages() {
+    await this.click(this.imagesNavButton);
+    await this.waitForNavigation();
+  }
+
   async navigateToMcp() {
+    await this.navigateToSettings();
     await this.click(this.mcpNavButton);
     await this.waitForNavigation();
   }
@@ -93,13 +102,22 @@ export class AppLayoutPage extends BasePage {
     );
     if (containersActive) return "containers";
 
-    const mcpActive = await this.isVisible(this.mcpNavButton + "[aria-current]");
-    if (mcpActive) return "mcp";
+    const imagesActive = await this.isVisible(
+      this.imagesNavButton + "[aria-current]"
+    );
+    if (imagesActive) return "images";
 
     const settingsActive = await this.isVisible(
       this.settingsNavButton + "[aria-current]"
     );
-    if (settingsActive) return "settings";
+    if (settingsActive) {
+      const mcpActive = await this.page
+        .locator(this.mcpNavButton)
+        .getAttribute("data-state")
+        .then((value) => value === "active")
+        .catch(() => false);
+      return mcpActive ? "mcp" : "settings";
+    }
 
     return "unknown";
   }

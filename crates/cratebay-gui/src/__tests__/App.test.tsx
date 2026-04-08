@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useAppStore } from "@/stores/appStore";
+import { APP_VERSION } from "@/lib/constants";
 
 // Mock child pages to avoid deep rendering issues (e.g. infinite update loops)
 vi.mock("@/pages/ChatPage", () => ({
@@ -8,9 +9,6 @@ vi.mock("@/pages/ChatPage", () => ({
 }));
 vi.mock("@/pages/ContainersPage", () => ({
   ContainersPage: () => <div data-testid="page-containers">ContainersPage</div>,
-}));
-vi.mock("@/pages/McpPage", () => ({
-  McpPage: () => <div data-testid="page-mcp">McpPage</div>,
 }));
 vi.mock("@/pages/SettingsPage", () => ({
   SettingsPage: () => <div data-testid="page-settings">SettingsPage</div>,
@@ -49,7 +47,7 @@ describe("App", () => {
 
   it("renders the version number", () => {
     render(<App />);
-    const versionElements = screen.getAllByText(/v2\.0\.0/);
+    const versionElements = screen.getAllByText(`v${APP_VERSION}`);
     expect(versionElements.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -60,8 +58,9 @@ describe("App", () => {
 
   it("renders navigation sidebar with all pages", () => {
     render(<App />);
+    expect(screen.getByText("Chat")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("MCP")).toBeInTheDocument();
+    expect(screen.getByText("Images")).toBeInTheDocument();
     const settingsElements = screen.getAllByText("Settings");
     expect(settingsElements.length).toBeGreaterThanOrEqual(1);
   });

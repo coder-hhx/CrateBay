@@ -3,6 +3,7 @@ pub mod image;
 pub mod mcp;
 pub mod runtime;
 pub mod system;
+pub mod volume;
 
 use clap::ValueEnum;
 use serde::Serialize;

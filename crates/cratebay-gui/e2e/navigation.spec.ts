@@ -30,7 +30,7 @@ test.describe("Navigation", () => {
     // 验证所有导航项存在
     await expect(page.locator('[data-testid="nav-chat"]')).toBeVisible();
     await expect(page.locator('[data-testid="nav-containers"]')).toBeVisible();
-    await expect(page.locator('[data-testid="nav-mcp"]')).toBeVisible();
+    await expect(page.locator('[data-testid="nav-images"]')).toBeVisible();
     await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
   });
 
@@ -61,16 +61,14 @@ test.describe("Navigation", () => {
     });
   });
 
-  test("能够从 MCP 导航到 Settings 页面", async ({ page }) => {
+  test("能够从 MCP 标签切换回 Settings General 标签", async ({ page }) => {
     await appLayout.navigateToMcp();
     await page.waitForTimeout(500);
 
-    // 导航到 Settings
-    await appLayout.navigateToSettings();
-
-    // 验证 Settings 页面加载
     const generalTab = page.locator('[data-testid="settings-tab-general"]');
-    await expect(generalTab).toBeVisible({ timeout: 10000 });
+    await generalTab.click();
+
+    await expect(generalTab).toHaveAttribute("data-state", "active");
   });
 
   test("能够从 Settings 返回到 Chat 页面", async ({ page }) => {
@@ -109,8 +107,8 @@ test.describe("Navigation", () => {
   test("快速连续导航不会导致错误", async ({ page }) => {
     // 执行快速导航序列
     await appLayout.navigateToContainers();
+    await appLayout.navigateToImages();
     await appLayout.navigateToMcp();
-    await appLayout.navigateToSettings();
     await appLayout.navigateToChat();
 
     // 验证应用仍然可用
@@ -138,11 +136,20 @@ test.describe("Navigation", () => {
         },
       },
       {
+        name: "Images",
+        navigate: () => appLayout.navigateToImages(),
+        verify: async () => {
+          await page.waitForTimeout(500);
+        },
+      },
+      {
         name: "MCP",
         navigate: () => appLayout.navigateToMcp(),
         verify: async () => {
-          // MCP 页面可能为空
-          await page.waitForTimeout(500);
+          await expect(page.locator('[data-testid="settings-tab-mcp"]')).toHaveAttribute(
+            "data-state",
+            "active",
+          );
         },
       },
       {
