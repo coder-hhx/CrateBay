@@ -1,18 +1,17 @@
 # CrateBay
 
-Open-source local AI sandbox. Run code safely on your machine — no cloud, no cost.
+Open-source, cross-platform container management with built-in AI sandbox.
 
-CrateBay gives any AI agent (Claude, Cursor, Windsurf, your own) a secure sandbox to execute code, install packages, and manage files — all running locally inside a lightweight VM. No Docker installation required.
+CrateBay is an alternative to Docker Desktop and OrbStack — fully open-source, works on macOS/Windows/Linux, and has built-in AI code execution capabilities. Manage containers and images through a desktop GUI, or let AI agents run code safely in local sandboxes via MCP protocol.
 
 ## Why CrateBay?
 
-AI agents need a safe place to run code. Cloud sandboxes (E2B, Modal) charge per minute and send your code off-machine. CrateBay runs everything locally:
-
-- **Zero cost** — no cloud bills, no usage limits
-- **Private** — code never leaves your machine
-- **Fast** — local VM, no network round-trip
-- **Works with any AI** — MCP protocol, works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client
+- **Open source** — MIT licensed, free forever. Docker Desktop is proprietary; OrbStack is macOS-only
+- **Cross-platform** — macOS, Windows, Linux. No platform lock-in
+- **Built-in AI** — Chat with AI that can execute code in sandboxes. No other container tool does this
 - **No Docker required** — built-in VM runtime (macOS: Virtualization.framework, Linux: KVM, Windows: WSL2)
+- **MCP compatible** — connect Claude Desktop, Cursor, Windsurf to run code via MCP protocol
+- **Zero cost** — no cloud bills, no usage limits, code never leaves your machine
 
 ## How It Works
 
@@ -139,18 +138,19 @@ cratebay sandbox stop <id>
 
 ## Compared To
 
-| | CrateBay | E2B | Docker Desktop |
-|---|---|---|---|
-| Runs locally | Yes | No (cloud) | Yes |
-| AI-native (MCP) | Yes | API only | No |
-| Cost | Free | $0.01/min | Free / $5+/mo |
-| Privacy | Code stays local | Code on cloud | Code stays local |
-| No Docker required | Yes (built-in VM) | N/A | Requires Docker |
-| Open source | MIT | Partial | No |
+| | CrateBay | Docker Desktop | OrbStack | E2B |
+|---|---|---|---|---|
+| Open source | MIT | No | No | Partial |
+| Cross-platform | macOS/Win/Linux | macOS/Win/Linux | macOS only | Cloud |
+| Container mgmt | Yes | Yes | Yes | No |
+| AI chat + sandbox | Yes | No | No | API only |
+| MCP support | Yes | No | No | No |
+| Cost | Free | Free / $5+/mo | Free / $8/mo | $0.01/min |
+| No Docker needed | Yes (built-in VM) | Is Docker | Requires Docker | N/A |
 
 ## Status
 
-v0.9.0 — Core sandbox infrastructure complete, working toward v1.0 release.
+v0.9.0 → v1.0.0 — Container management + AI ChatPage with sandbox execution.
 
 See [docs/progress.md](docs/progress.md) for detailed development status and [docs/ROADMAP.md](docs/ROADMAP.md) for the release plan.
 

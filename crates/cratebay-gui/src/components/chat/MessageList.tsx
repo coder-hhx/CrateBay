@@ -3,22 +3,22 @@ import { useChatStore } from "@/stores/chatStore";
 import { useI18n } from "@/lib/i18n";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
-import { Box, Database, Plug, Rocket } from "lucide-react";
+import { Code, Server, TerminalSquare, Cog } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 const EMPTY_MESSAGES: never[] = [];
 
 interface Suggestion {
   icon: LucideIcon;
-  titleKey: "suggestionCreateContainer" | "suggestionQueryDb" | "suggestionManageMcp" | "suggestionDeploy";
-  descKey: "suggestionCreateContainerDesc" | "suggestionQueryDbDesc" | "suggestionManageMcpDesc" | "suggestionDeployDesc";
+  titleKey: "suggestionPythonAnalysis" | "suggestionNodeServer" | "suggestionBashSystem" | "suggestionRustSort";
+  descKey: "suggestionPythonAnalysisDesc" | "suggestionNodeServerDesc" | "suggestionBashSystemDesc" | "suggestionRustSortDesc";
 }
 
 const suggestions: Suggestion[] = [
-  { icon: Box, titleKey: "suggestionCreateContainer", descKey: "suggestionCreateContainerDesc" },
-  { icon: Database, titleKey: "suggestionQueryDb", descKey: "suggestionQueryDbDesc" },
-  { icon: Plug, titleKey: "suggestionManageMcp", descKey: "suggestionManageMcpDesc" },
-  { icon: Rocket, titleKey: "suggestionDeploy", descKey: "suggestionDeployDesc" },
+  { icon: Code, titleKey: "suggestionPythonAnalysis", descKey: "suggestionPythonAnalysisDesc" },
+  { icon: Server, titleKey: "suggestionNodeServer", descKey: "suggestionNodeServerDesc" },
+  { icon: TerminalSquare, titleKey: "suggestionBashSystem", descKey: "suggestionBashSystemDesc" },
+  { icon: Cog, titleKey: "suggestionRustSort", descKey: "suggestionRustSortDesc" },
 ];
 
 function CrateBayLogo({ size = 64 }: { size?: number }) {

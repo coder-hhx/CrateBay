@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bollard::container::{LogOutput, LogsOptions};
+use bollard::container::{InspectContainerOptions, LogOutput, LogsOptions};
 use bollard::errors::Error as BollardError;
 use bollard::Docker;
 use futures_util::StreamExt;
@@ -187,6 +187,67 @@ pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result
         }
         _ => print_structured(&detail, format),
     }
+}
+
+pub async fn run_compat(
+    docker: &Docker,
+    name: String,
+    image: String,
+    env: Vec<String>,
+) -> Result<()> {
+    create(
+        docker,
+        name,
+        image,
+        None,
+        None,
+        None,
+        None,
+        env,
+        false,
+        &OutputFormat::Table,
+    )
+    .await
+}
+
+pub async fn ps_compat(docker: &Docker) -> Result<()> {
+    list(docker, false, &OutputFormat::Table).await
+}
+
+pub async fn print_env(docker: &Docker, id: &str) -> Result<()> {
+    let detail = docker
+        .inspect_container(id, Some(InspectContainerOptions { size: false }))
+        .await?;
+    for env_entry in detail
+        .config
+        .and_then(|config| config.env)
+        .unwrap_or_default()
+    {
+        println!("{}", env_entry);
+    }
+    Ok(())
+}
+
+pub fn print_login_cmd(id: &str) {
+    println!("docker exec -it {} /bin/sh", id);
+}
+
+pub async fn start_compat(docker: &Docker, id: &str) -> Result<()> {
+    container::start(docker, id).await?;
+    println!("Started container {}", id);
+    Ok(())
+}
+
+pub async fn stop_compat(docker: &Docker, id: &str) -> Result<()> {
+    container::stop(docker, id, None).await?;
+    println!("Stopped container {}", id);
+    Ok(())
+}
+
+pub async fn rm_compat(docker: &Docker, id: &str, _force: bool) -> Result<()> {
+    container::delete(docker, id, true).await?;
+    println!("Removed container {}", id);
+    Ok(())
 }
 
 fn is_missing_image_error(err: &AppError) -> bool {

@@ -7,7 +7,10 @@ cd "$repo_root"
 has_virtualization_entitlements() {
   local binary_path="$1"
   command -v codesign >/dev/null 2>&1 || return 1
-  codesign -d --entitlements :- "$binary_path" 2>&1 | grep -Fq "com.apple.security.virtualization"
+  # Try both XML plist (:-) and human-readable (-) formats for macOS compat
+  local output
+  output="$(codesign -d --entitlements :- "$binary_path" 2>&1; codesign -d --entitlements - "$binary_path" 2>&1)"
+  echo "$output" | grep -Fq "com.apple.security.virtualization"
 }
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

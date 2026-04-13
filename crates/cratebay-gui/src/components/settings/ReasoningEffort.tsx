@@ -1,13 +1,7 @@
-import { useSettingsStore } from "@/stores/settingsStore";
+import { useSettingsStore, type ReasoningLevel, REASONING_LEVEL_LABELS } from "@/stores/settingsStore";
 import { cn } from "@/lib/utils";
 
-type ReasoningLevel = "low" | "medium" | "high";
-
-const LEVELS: { value: ReasoningLevel; label: string }[] = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
+const LEVELS = Object.entries(REASONING_LEVEL_LABELS) as [ReasoningLevel, string][];
 
 export function ReasoningEffort() {
   const reasoningEffort = useSettingsStore((s) => s.settings.reasoningEffort);
@@ -17,22 +11,21 @@ export function ReasoningEffort() {
     <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium text-foreground">Reasoning Effort</span>
       <p className="text-xs text-muted-foreground">
-        Controls how much reasoning the model performs. Only applies when using OpenAI Responses API
-        format.
+        Controls how much reasoning the model performs. Applies to models that support reasoning.
       </p>
       <div className="mt-1 inline-flex rounded-md border border-border bg-muted p-0.5">
-        {LEVELS.map((level) => (
+        {LEVELS.map(([value, label]) => (
           <button
-            key={level.value}
-            onClick={() => void updateSettings({ reasoningEffort: level.value })}
+            key={value}
+            onClick={() => void updateSettings({ reasoningEffort: value })}
             className={cn(
               "rounded-sm px-3 py-1 text-xs font-medium transition-colors",
-              reasoningEffort === level.value
+              reasoningEffort === value
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {level.label}
+            {label}
           </button>
         ))}
       </div>

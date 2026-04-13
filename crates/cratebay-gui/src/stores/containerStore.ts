@@ -21,6 +21,7 @@ interface ContainerState {
   error: string | null;
   fetchContainers: () => Promise<void>;
   _fetchAbortController: AbortController | null;
+  _transitionalRefreshTimer: ReturnType<typeof setTimeout> | null;
 
   // Docker images
   images: LocalImageInfo[];
@@ -54,12 +55,18 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
   loading: false,
   error: null,
   _fetchAbortController: null,
+  _transitionalRefreshTimer: null,
 
   fetchContainers: async () => {
     // Cancel previous request if still in progress
     const prevController = get()._fetchAbortController;
     if (prevController) {
       prevController.abort();
+    }
+    const prevTimer = get()._transitionalRefreshTimer;
+    if (prevTimer) {
+      clearTimeout(prevTimer);
+      set({ _transitionalRefreshTimer: null });
     }
 
     // Create new abort controller for this request
@@ -93,13 +100,41 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
         return;
       }
 
-      // Merge with any "creating" placeholders that haven't been replaced yet
-      const placeholders = get().containers.filter((c) => c.id.startsWith("__creating_"));
+      // Merge with any "creating" placeholders that haven't been replaced yet.
+      // Drop placeholders whose name already appears in the real container list
+      // (the backend has created the container, so the placeholder is stale).
+      const realNames = new Set(result.map((c) => c.name));
+      const placeholders = get().containers.filter(
+        (c) => c.id.startsWith("__creating_") && !realNames.has(c.name),
+      );
+
+      // Preserve existing order: reorder result to match previous container list,
+      // then append any new containers at the end.
+      const prev = get().containers;
+      const prevOrder = new Map(prev.map((c, i) => [c.name, i]));
+      const merged = [...result, ...placeholders].sort((a, b) => {
+        const ai = prevOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+        const bi = prevOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+        return ai - bi;
+      });
+      const hasTransitional = merged.some((c) =>
+        c.status === "creating"
+        || c.status === "created"
+        || c.status === "restarting"
+        || c.status === "removing",
+      );
+      const nextTimer = hasTransitional
+        ? setTimeout(() => {
+          void get().fetchContainers();
+        }, 1500)
+        : null;
+
       set({
-        containers: [...result, ...placeholders],
+        containers: merged,
         loading: false,
         error: null,
         _fetchAbortController: null,
+        _transitionalRefreshTimer: nextTimer,
       });
     } catch (err) {
       if (requestController.signal.aborted) {
@@ -275,6 +310,9 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
           c.id === placeholderId ? container : c,
         ),
       }));
+
+      // Auto-refresh the container list to get accurate state from backend
+      void get().fetchContainers();
 
       // Check if auto-start succeeded
       if (container.state === "created" || container.status === "created") {
@@ -452,18 +490,33 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
 
   filteredContainers: () => {
     const { containers, filter } = get();
-    return containers.filter((c) => {
-      if (filter.status !== "all" && c.status !== filter.status) return false;
-      if (filter.templateId !== null && c.labels?.["com.cratebay.template_id"] !== filter.templateId) return false;
-      if (
-        filter.search.length > 0 &&
-        !c.name.toLowerCase().includes(filter.search.toLowerCase()) &&
-        !c.image.toLowerCase().includes(filter.search.toLowerCase())
-      ) {
-        return false;
-      }
-      return true;
-    });
+    return containers
+      .filter((c) => {
+        if (filter.status !== "all" && c.status !== filter.status) return false;
+        if (filter.templateId !== null && c.labels?.["com.cratebay.template_id"] !== filter.templateId) return false;
+        if (
+          filter.search.length > 0 &&
+          !c.name.toLowerCase().includes(filter.search.toLowerCase()) &&
+          !c.image.toLowerCase().includes(filter.search.toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const aTs = Date.parse(a.createdAt);
+        const bTs = Date.parse(b.createdAt);
+        if (Number.isNaN(aTs) && Number.isNaN(bTs)) {
+          return a.name.localeCompare(b.name);
+        }
+        if (Number.isNaN(aTs)) {
+          return 1;
+        }
+        if (Number.isNaN(bTs)) {
+          return -1;
+        }
+        return aTs - bTs;
+      });
   },
 
 }));

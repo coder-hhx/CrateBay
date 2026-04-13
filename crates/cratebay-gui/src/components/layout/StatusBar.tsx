@@ -1,13 +1,15 @@
 import { useAppStore } from "@/stores/appStore";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/constants";
 
 export function StatusBar() {
   const dockerConnected = useAppStore((s) => s.dockerConnected);
   const runtimeStatus = useAppStore((s) => s.runtimeStatus);
+  const { t } = useI18n();
 
   // Derive a single unified engine status
-  const { color, label, pulse } = getEngineStatus(dockerConnected, runtimeStatus);
+  const { color, label, pulse } = getEngineStatus(dockerConnected, runtimeStatus, t);
 
   return (
     <footer className="flex h-7 flex-shrink-0 items-center justify-between border-t border-border px-4 text-[11px] text-muted-foreground">
@@ -29,19 +31,20 @@ export function StatusBar() {
 function getEngineStatus(
   dockerConnected: boolean,
   runtimeStatus: "starting" | "running" | "stopped" | "error",
+  t: (namespace: string, key: string) => string,
 ): { color: "green" | "red" | "yellow" | "gray"; label: string; pulse: boolean } {
   // Docker is connected via built-in runtime
   if (dockerConnected) {
-    return { color: "green", label: "引擎就绪", pulse: false };
+    return { color: "green", label: t("statusbar", "engineReady"), pulse: false };
   }
   // Builtin runtime is trying to start
   if (runtimeStatus === "starting") {
-    return { color: "yellow", label: "启动中…", pulse: true };
+    return { color: "yellow", label: t("statusbar", "engineStarting"), pulse: true };
   }
   if (runtimeStatus === "error") {
-    return { color: "red", label: "引擎异常", pulse: false };
+    return { color: "red", label: t("statusbar", "engineError"), pulse: false };
   }
-  return { color: "gray", label: "未连接", pulse: false };
+  return { color: "gray", label: t("statusbar", "engineDisconnected"), pulse: false };
 }
 
 /**

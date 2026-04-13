@@ -1,6 +1,6 @@
 # AGENTS.md — CrateBay Project Guide
 
-> **Version**: 0.9.0 | **Branch**: `master` | **Last Updated**: 2026-03-29
+> **Version**: 0.9.0 | **Branch**: `feat/chatpage-v1` | **Last Updated**: 2026-04-01
 >
 > This file is the **entry point** for all AI Agents working on this project.
 > Detailed specs are in `docs/specs/` — load them on-demand based on your task (see Spec Loading Protocol below).
@@ -11,17 +11,26 @@
 
 ## Project Identity
 
-**CrateBay** is an open-source **local AI sandbox** — a secure, private container for AI agents to execute code.
+**CrateBay** is an open-source, cross-platform **container management tool with AI sandbox capabilities** — an alternative to Docker Desktop and OrbStack that is fully open-source, works on all platforms, and has built-in AI code execution.
 
-- **MCP Server** (`cratebay-mcp`) — let any AI (Claude, Cursor, Windsurf, your own) run code safely
-- **Zero cost** — runs locally in a lightweight VM, no cloud fees
+- **Desktop App** (`cratebay-gui`) — manage containers, images, and AI chat with code execution
+- **MCP Server** (`cratebay-mcp`) — let any AI (Claude, Cursor, Windsurf) run code safely via MCP protocol
+- **CLI** (`cratebay-cli`) — headless container and sandbox operations
 - **Built-in runtime** — no Docker installation required (macOS: VZ.framework, Linux: KVM, Windows: WSL2)
+- **Zero cost** — runs locally in a lightweight VM, no cloud fees
 - **Platforms**: macOS, Windows, Linux
 - **License**: MIT
 
-**Core value proposition**: CrateBay replaces cloud sandboxes (E2B, Modal) with a local, free, privacy-first alternative specifically designed for AI agents.
+**Core value proposition**: CrateBay combines the container management of Docker Desktop/OrbStack with AI sandbox capabilities (like E2B/Modal) — all open-source, cross-platform, and free.
 
-**User journey**: Install → Configure MCP → Tell Claude "run this code" → CrateBay handles isolation, execution, result delivery.
+**vs Docker Desktop**: open-source, cross-platform, built-in AI
+**vs OrbStack**: open-source, cross-platform (not macOS only), built-in AI
+**vs E2B/Modal**: local execution, zero cost, full privacy
+
+**User journeys**:
+1. **GUI user**: Open CrateBay → Chat with AI → AI runs code in sandboxes → manage containers/images visually
+2. **MCP user**: Configure Claude Desktop/Cursor → AI calls sandbox_run_code → CrateBay handles execution
+3. **CLI user**: `cratebay container create` / `cratebay mcp export` for headless workflows
 
 ---
 
@@ -52,32 +61,48 @@ Non-goals for routine development:
 
 ## Product Direction (CRITICAL — AI Agents MUST follow)
 
-**CrateBay = Local AI Sandbox.** All development decisions must serve this positioning.
+**CrateBay = Open-source container management + AI Sandbox.** Two pillars, both important.
 
-### Primary user flow
+### Pillar 1: Container Management (like Docker Desktop / OrbStack)
 
 ```
-User installs CrateBay → Configures MCP in Claude/Cursor/Windsurf
-→ AI says "sandbox_run_code(python, 'print(1+1)')" → CrateBay returns "2"
+User opens CrateBay → Manages containers, images, volumes
+→ Full lifecycle: create, start, stop, delete, inspect, logs
+→ Built-in runtime: no Docker installation required
+```
+
+### Pillar 2: AI Sandbox (like E2B / Modal, but local)
+
+```
+Route A (GUI): User opens ChatPage → Chats with AI → AI runs code in sandboxes
+Route B (MCP): User configures Claude/Cursor → AI calls sandbox_run_code via MCP
 ```
 
 ### Priority order for all development work
 
-1. **MCP Server (`cratebay-mcp`)** — the primary product interface. `sandbox_run_code` is the #1 feature.
-2. **Built-in Runtime** — zero-config VM that makes the sandbox work without Docker.
-3. **CLI (`cratebay-cli`)** — headless sandbox operations for CI/automation.
-4. **Desktop App (GUI)** — visual dashboard for sandbox monitoring and settings. **NOT the primary interface.**
+1. **Built-in Runtime** — zero-config VM that powers both container management and AI sandbox.
+2. **Desktop App (GUI)** — container management UI + AI ChatPage with code execution.
+3. **MCP Server (`cratebay-mcp`)** — external AI integration via MCP protocol.
+4. **CLI (`cratebay-cli`)** — headless operations for CI/automation.
 
 ### What NOT to do
 
-- Do NOT treat the GUI ChatPage as the core product entry. MCP Server is the entry.
-- Do NOT spend time on GUI polish before MCP tools are complete.
-- Do NOT add features unrelated to code execution (e.g., UI theming, animation, cosmetic changes).
-- Do NOT optimize for "container management" — optimize for "AI runs code safely".
+- Do NOT remove container/image management features — they are core functionality.
+- Do NOT add features unrelated to containers or code execution.
+- Do NOT optimize for a single use case — both container management and AI sandbox matter.
+
+### Navigation structure (4 pages)
+
+```
+Chat       — AI chat with sandbox code execution
+Containers — Container lifecycle management
+Images     — Image management (pull, remove, inspect)
+Settings   — LLM providers, MCP servers, Runtime, Appearance, About
+```
 
 ### Execution plan
 
-See `docs/ROADMAP.md` for the v2.1-Alpha release plan (Phase 1-5).
+See `docs/ROADMAP.md` for the release plan.
 See `docs/progress.md` Quick Resume section for what to do next.
 
 ---
@@ -348,9 +373,9 @@ When a feature is completed, the responsible agent MUST check:
 
 ## Current Development Stage
 
-**Current**: v0.9.0 — MCP Sandbox core complete. Next: ChatPage polish + UI optimization → v1.0.0.
+**Current**: v0.9.0 — ChatPage v1.0 complete (sandbox tools + provider config + UI upgrade). Next: merge to master → v1.0.0.
 
-**Completed**: Phase 1 (docs) + Phase 2 (skeleton + core + frontend + runtime + MCP + tests + GUI polish).
+**Completed**: Phase 1 (docs) + Phase 2 (core + frontend + runtime + MCP + tests) + ChatPage v1.0 (sandbox Agent Tools, provider config, UI components, MCP→Settings merge, system image protection).
 
 See [docs/progress.md](docs/progress.md) for detailed progress and [docs/ROADMAP.md](docs/ROADMAP.md) for the release plan.
 

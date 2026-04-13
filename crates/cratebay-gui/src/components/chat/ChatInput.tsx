@@ -64,12 +64,33 @@ export function ChatInput({ onSend, onStop, disabled, placeholder }: ChatInputPr
   const mcpServers = useMcpStore((s) => s.servers);
   const mcpTools = useMcpStore((s) => s.availableTools);
 
+  const providers = useSettingsStore((s) => s.providers);
+
   const allEnabledModels = useMemo(() => enabledModels(), [enabledModels]);
   const activeModelName = useMemo(() => {
     if (activeModelId === null) return t("chat", "selectModel");
     const model = allEnabledModels.find((m) => m.id === activeModelId);
-    return model?.name ?? t("chat", "selectModel");
+    return model?.name ?? model?.id ?? t("chat", "selectModel");
   }, [activeModelId, allEnabledModels]);
+
+  // Group enabled models by provider
+  const groupedModels = useMemo(() => {
+    const groups: { provider: { id: string; name: string }; models: typeof allEnabledModels }[] = [];
+    const providerMap = new Map<string, typeof allEnabledModels>();
+    for (const model of allEnabledModels) {
+      const list = providerMap.get(model.providerId) ?? [];
+      list.push(model);
+      providerMap.set(model.providerId, list);
+    }
+    for (const [providerId, models] of providerMap) {
+      const provider = providers.find((p) => p.id === providerId);
+      groups.push({
+        provider: { id: providerId, name: provider?.name ?? providerId },
+        models,
+      });
+    }
+    return groups;
+  }, [allEnabledModels, providers]);
 
   const mentionItems: MentionItem[] = useMemo(() => {
     const items: MentionItem[] = [];
@@ -348,30 +369,45 @@ export function ChatInput({ onSend, onStop, disabled, placeholder }: ChatInputPr
                   <ChevronDown className="h-3 w-3" />
                 </button>
 
-                {/* Model dropdown */}
-                {modelDropdownOpen && allEnabledModels.length > 0 && (
-                  <div className="absolute bottom-full left-0 mb-1 max-h-48 min-w-[200px] overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
-                    {allEnabledModels.map((model) => (
-                      <button
-                        key={model.id}
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors",
-                          model.id === activeModelId
-                            ? "bg-primary/10 text-primary"
-                            : "text-foreground hover:bg-muted",
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveProvider(model.providerId);
-                          setActiveModel(model.id);
-                          setModelDropdownOpen(false);
-                        }}
-                      >
-                        <Zap className="h-3 w-3 flex-shrink-0" />
-                        <span className="truncate">{model.name}</span>
-                      </button>
+                {/* Model dropdown — grouped by provider */}
+                {modelDropdownOpen && groupedModels.length > 0 && (
+                  <div className="absolute bottom-full left-0 mb-1 max-h-60 min-w-[240px] overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
+                    {groupedModels.map((group) => (
+                      <div key={group.provider.id}>
+                        <div className="sticky top-0 bg-card px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border">
+                          {group.provider.name}
+                        </div>
+                        {group.models.map((model) => (
+                          <button
+                            key={model.id}
+                            type="button"
+                            className={cn(
+                              "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors",
+                              model.id === activeModelId
+                                ? "bg-primary/10 text-primary"
+                                : "text-foreground hover:bg-muted",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveProvider(model.providerId);
+                              setActiveModel(model.id);
+                              setModelDropdownOpen(false);
+                            }}
+                          >
+                            <Zap className="h-3 w-3 flex-shrink-0" />
+                            <span className="truncate">{model.name || model.id}</span>
+                          </button>
+                        ))}
+                      </div>
                     ))}
+                  </div>
+                )}
+                {/* Empty state */}
+                {modelDropdownOpen && groupedModels.length === 0 && (
+                  <div className="absolute bottom-full left-0 mb-1 min-w-[240px] rounded-lg border border-border bg-card p-3 shadow-lg">
+                    <p className="text-xs text-muted-foreground text-center">
+                      No models available. Add a provider in Settings and fetch models.
+                    </p>
                   </div>
                 )}
               </div>

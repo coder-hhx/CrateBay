@@ -85,10 +85,20 @@ jobs:
             target: x86_64-unknown-linux-gnu
             cli-artifact: cratebay-linux-x86_64
             ext: ""
+          - name: Linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cli-artifact: cratebay-linux-aarch64
+            ext: ""
           - name: Windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             cli-artifact: cratebay-windows-x86_64
+            ext: ".exe"
+          - name: Windows-aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            cli-artifact: cratebay-windows-aarch64
             ext: ".exe"
 
     steps:
@@ -122,6 +132,14 @@ jobs:
           key: release-${{ matrix.target }}
 
       # -- Build CLI --
+      - name: Install cross-compilation dependencies (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
       - name: Build CLI (release)
         run: cargo build --release --target ${{ matrix.target }} -p cratebay-cli
 
@@ -156,10 +174,18 @@ jobs:
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: cratebay-gui-linux-x86_64
+          - name: Linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: cratebay-gui-linux-aarch64
           - name: Windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: cratebay-gui-windows-x86_64
+          - name: Windows-aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: cratebay-gui-windows-aarch64
 
     steps:
       - uses: actions/checkout@v5
@@ -227,6 +253,22 @@ jobs:
             qemu-system-x86 \
             squashfs-tools
 
+      - name: Install cross-compilation dependencies (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libgtk-3-dev:arm64 \
+            libwebkit2gtk-4.1-dev:arm64 \
+            libappindicator3-dev:arm64 \
+            librsvg2-dev:arm64 \
+            patchelf
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+          export PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu
+
       - name: Install Zig (Linux only)
         if: runner.os == 'Linux'
         run: bash scripts/install-zig.sh
@@ -259,27 +301,60 @@ jobs:
         working-directory: crates/cratebay-gui
         run: pnpm install --frozen-lockfile
 
+      # macOS: prepare cratebay-vz external binary with entitlements
+      - name: Prepare external binaries (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/prepare-tauri-external-bins.sh "${{ matrix.target }}"
+
+      # Build sandbox bundle images (requires Docker)
+      - name: Build sandbox bundle images
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        shell: bash
+        run: |
+          if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            bash scripts/build-bundle-images.sh
+          else
+            echo "SKIP: Docker not available, bundle images will not be included"
+          fi
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code signing (Apple Developer ID)
-          # Required secrets: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
-          #                   APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD,
-          #                   APPLE_TEAM_ID
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing (Authenticode / Azure Trusted Signing)
-          # Required secrets: WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD
+          # Windows code signing
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           projectPath: crates/cratebay-gui
           args: --target ${{ matrix.target }}
+
+      # macOS: re-sign cratebay-vz with virtualization entitlements after Tauri bundling
+      - name: Sign cratebay-vz with virtualization entitlements (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VZ_BIN="target/${{ matrix.target }}/release/bundle/macos/CrateBay.app/Contents/MacOS/cratebay-vz"
+          if [ -f "$VZ_BIN" ]; then
+            identity="${APPLE_SIGNING_IDENTITY:--}"
+            codesign --force --sign "$identity" \
+              --options runtime \
+              --entitlements scripts/macos-entitlements.plist \
+              "$VZ_BIN"
+            # Re-sign the outer app bundle
+            APP_BUNDLE="target/${{ matrix.target }}/release/bundle/macos/CrateBay.app"
+            codesign --force --sign "$identity" --options runtime "$APP_BUNDLE"
+            echo "Re-signed cratebay-vz with virtualization entitlements"
+          fi
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
       - name: Verify release bundles
         shell: bash

@@ -30,10 +30,10 @@ export function ContainerCard({ container }: ContainerCardProps) {
   const isRunning = container.status === "running" || container.status === "paused";
   const isStopped =
     container.status === "stopped" ||
-    container.status === "exited" ||
-    container.status === "created";
+    container.status === "exited";
   const isCreating =
     container.status === "creating" ||
+    container.status === "created" ||
     container.status === "restarting" ||
     container.status === "removing";
   const isError = container.status === "dead";

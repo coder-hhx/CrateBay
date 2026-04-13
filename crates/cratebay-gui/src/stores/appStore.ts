@@ -11,7 +11,7 @@ interface Notification {
 
 interface AppState {
   // Navigation
-  currentPage: "chat" | "containers" | "images" | "mcp" | "settings";
+  currentPage: "chat" | "containers" | "images" | "settings";
   setCurrentPage: (page: AppState["currentPage"]) => void;
 
   // Theme

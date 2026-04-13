@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/lib/i18n";
+import { McpPage } from "@/pages/McpPage";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -43,6 +44,7 @@ export function SettingsPage() {
           <TabsTrigger value="providers" data-testid="settings-tab-providers">{t("settings", "providers")}</TabsTrigger>
           <TabsTrigger value="appearance" data-testid="settings-tab-appearance">{t("settings", "appearance")}</TabsTrigger>
           <TabsTrigger value="runtime" data-testid="settings-tab-runtime">{t("settings", "runtime")}</TabsTrigger>
+          <TabsTrigger value="mcp" data-testid="settings-tab-mcp">MCP</TabsTrigger>
           <TabsTrigger value="advanced" data-testid="settings-tab-advanced">{t("settings", "advanced")}</TabsTrigger>
           <TabsTrigger value="about" data-testid="settings-tab-about">{t("settings", "about")}</TabsTrigger>
         </TabsList>
@@ -61,6 +63,10 @@ export function SettingsPage() {
 
         <TabsContent value="runtime" className="mt-4">
           <RuntimeTab />
+        </TabsContent>
+
+        <TabsContent value="mcp" className="mt-4">
+          <McpPage />
         </TabsContent>
 
         <TabsContent value="advanced" className="mt-4">
@@ -787,7 +793,7 @@ function AboutTab() {
 
       {/* Info rows */}
       <SettingRow label={t("common", "version")}>
-        <span className="text-sm font-mono text-muted-foreground">v2.0.0</span>
+        <span className="text-sm font-mono text-muted-foreground">v0.9.0</span>
       </SettingRow>
 
       <SettingRow label={t("settings", "builtWith")}>

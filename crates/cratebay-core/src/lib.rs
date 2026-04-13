@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod models;
 pub mod proxy;
 pub mod runtime;
+pub mod sandbox;
 pub mod storage;
 pub mod validation;
 

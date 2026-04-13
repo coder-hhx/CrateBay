@@ -313,22 +313,35 @@ fn vz_runner_path() -> PathBuf {
 }
 
 /// Check if a binary has the required macOS virtualization entitlements.
+///
+/// Tries both `codesign --entitlements :-` (XML plist, legacy) and
+/// `codesign --entitlements -` (human-readable, macOS 15+) to handle
+/// all macOS versions.  The `:` prefix is deprecated on newer systems
+/// and may produce empty output.
 fn runner_has_virtualization_entitlements(path: &Path) -> bool {
-    let output = Command::new("codesign")
-        .args(["-d", "--entitlements", ":-"])
-        .arg(path)
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
+    // Try XML plist format first (works on older macOS), then
+    // human-readable format (required on macOS 15+ / Sequoia+).
+    for flag in [":-", "-"] {
+        let output = Command::new("codesign")
+            .args(["-d", "--entitlements", flag])
+            .arg(path)
+            .output();
+        let Ok(output) = output else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
 
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    combined.contains("com.apple.security.virtualization")
-        && combined.contains("com.apple.security.hypervisor")
+        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+        if combined.contains("com.apple.security.virtualization")
+            && combined.contains("com.apple.security.hypervisor")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Attempt to sign the VZ runner with required entitlements.

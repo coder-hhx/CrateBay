@@ -616,6 +616,9 @@ fn main() {
             commands::system::runtime_status,
             commands::system::runtime_start,
             commands::system::runtime_stop,
+            // Sandbox
+            commands::sandbox::sandbox_run_code,
+            commands::sandbox::sandbox_install,
             // Debug
             #[cfg(debug_assertions)]
             commands::system::webview_debug_report,

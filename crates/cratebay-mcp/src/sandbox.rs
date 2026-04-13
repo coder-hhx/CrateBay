@@ -409,239 +409,33 @@ pub async fn get_path(
 }
 
 // ---------------------------------------------------------------------------
-// High-level sandbox operations (sandbox_run_code, sandbox_install)
+// High-level sandbox operations — delegated to cratebay-core::sandbox
 // ---------------------------------------------------------------------------
 
-/// Parameters for the run_code high-level operation.
-#[derive(Debug)]
-pub struct RunCodeParams {
-    pub language: String,
-    pub code: String,
-    pub timeout_seconds: Option<u64>,
-    pub environment: Option<HashMap<String, String>>,
-    pub cleanup: Option<bool>,
-}
-
-/// Result of a run_code operation.
-#[derive(Debug, Serialize)]
-pub struct RunCodeResult {
-    pub sandbox_id: String,
-    pub exit_code: i64,
-    pub stdout: String,
-    pub stderr: String,
-    pub duration_ms: u64,
-    pub language: String,
-}
-
-/// Language-specific configuration for code execution.
-struct LangConfig {
-    template_id: &'static str,
-    file_path: &'static str,
-    run_cmd: &'static str,
-}
-
-fn lang_config(language: &str) -> Result<LangConfig, McpError> {
-    match language {
-        "python" => Ok(LangConfig {
-            template_id: "python-dev",
-            file_path: "/app/run.py",
-            run_cmd: "python /app/run.py",
-        }),
-        "javascript" => Ok(LangConfig {
-            template_id: "node-dev",
-            file_path: "/app/run.js",
-            run_cmd: "node /app/run.js",
-        }),
-        "bash" => Ok(LangConfig {
-            template_id: "ubuntu-base",
-            file_path: "/app/run.sh",
-            run_cmd: "bash /app/run.sh",
-        }),
-        "rust" => Ok(LangConfig {
-            template_id: "rust-dev",
-            file_path: "/app/run.rs",
-            run_cmd: "rustc /app/run.rs -o /app/run && /app/run",
-        }),
-        _ => Err(McpError::InvalidParams(format!(
-            "Unsupported language '{}'. Supported: python, javascript, bash, rust",
-            language
-        ))),
-    }
-}
+// Re-export types so existing MCP tool code continues to compile.
+pub use cratebay_core::sandbox::{InstallParams, InstallResult, RunCodeParams, RunCodeResult};
 
 /// Create a sandbox, write code, execute it, and return the result.
 ///
-/// This is the primary high-level tool for AI agents to run code.
+/// Delegates to `cratebay_core::sandbox::run_code`.
 pub async fn run_code(docker: &Docker, params: RunCodeParams) -> Result<RunCodeResult, McpError> {
-    let start = std::time::Instant::now();
-    let config = lang_config(&params.language)?;
-    let timeout_secs = params.timeout_seconds.unwrap_or(60);
-    let should_cleanup = params.cleanup.unwrap_or(true);
-
-    // Build environment variables
-    let env: Option<Vec<String>> = params.environment.map(|map| {
-        map.into_iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect()
-    });
-
-    // 1. Create sandbox
-    let create_params = CreateSandboxParams {
-        template_id: config.template_id.to_string(),
-        name: None,
-        image: None,
-        command: None,
-        env,
-        cpu_cores: Some(2),
-        memory_mb: Some(2048),
-        ttl_hours: Some(1), // auto-expire in 1 hour
-        owner: Some("mcp_run_code".to_string()),
-    };
-
-    let sandbox_info = create_sandbox(docker, create_params).await?;
-    let sandbox_id = sandbox_info.id.clone();
-
-    // 2. Write code to file
-    if let Err(e) =
-        cratebay_core::container::exec_put_text(docker, &sandbox_id, config.file_path, &params.code)
-            .await
-    {
-        if should_cleanup {
-            let _ = delete_sandbox(docker, &sandbox_id).await;
-        }
-        return Err(McpError::Internal(format!(
-            "Failed to write code file: {}",
-            e
-        )));
-    }
-
-    // 3. Execute code
-    let exec_result = cratebay_core::container::exec_with_timeout(
-        docker,
-        &sandbox_id,
-        vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            config.run_cmd.to_string(),
-        ],
-        Some("/app".to_string()),
-        timeout_secs,
-    )
-    .await;
-
-    let exec_result = match exec_result {
-        Ok(r) => r,
-        Err(e) => {
-            if should_cleanup {
-                let _ = delete_sandbox(docker, &sandbox_id).await;
-            }
-            return Err(McpError::Internal(format!("Code execution failed: {}", e)));
-        }
-    };
-
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    // 4. Cleanup if requested
-    if should_cleanup {
-        let _ = delete_sandbox(docker, &sandbox_id).await;
-    }
-
-    Ok(RunCodeResult {
-        sandbox_id: if should_cleanup {
-            sandbox_info.short_id
-        } else {
-            sandbox_id
-        },
-        exit_code: exec_result.exit_code,
-        stdout: exec_result.stdout,
-        stderr: exec_result.stderr,
-        duration_ms,
-        language: params.language,
-    })
-}
-
-/// Parameters for the install operation.
-#[derive(Debug)]
-pub struct InstallParams {
-    pub sandbox_id: String,
-    pub package_manager: String,
-    pub packages: Vec<String>,
-}
-
-/// Result of an install operation.
-#[derive(Debug, Serialize)]
-pub struct InstallResult {
-    pub sandbox_id: String,
-    pub package_manager: String,
-    pub exit_code: i64,
-    pub stdout: String,
-    pub stderr: String,
-    pub duration_ms: u64,
+    Ok(cratebay_core::sandbox::run_code(docker, params).await?)
 }
 
 /// Install packages in an existing sandbox.
+///
+/// Verifies the sandbox is managed and running before delegating to core.
 pub async fn install_packages(
     docker: &Docker,
     params: InstallParams,
 ) -> Result<InstallResult, McpError> {
-    let start = std::time::Instant::now();
-
-    // Verify sandbox is running
+    // Verify sandbox is managed and running (MCP-level check)
     let info = inspect_sandbox(docker, &params.sandbox_id).await?;
     if info.lifecycle_state != "running" {
         return Err(McpError::SandboxNotRunning(params.sandbox_id.clone()));
     }
 
-    // Validate package names (basic sanitization)
-    for pkg in &params.packages {
-        if pkg.contains(';') || pkg.contains('&') || pkg.contains('|') || pkg.contains('`') {
-            return Err(McpError::InvalidParams(format!(
-                "Invalid package name '{}': contains shell metacharacters",
-                pkg
-            )));
-        }
-    }
-
-    let packages_str = params.packages.join(" ");
-
-    // Build the install command
-    let cmd = match params.package_manager.as_str() {
-        "pip" => format!("pip install --no-cache-dir {}", packages_str),
-        "npm" => format!("npm install --no-fund --no-audit {}", packages_str),
-        "cargo" => format!("cargo add {}", packages_str),
-        "apt" => format!(
-            "apt-get update -qq && apt-get install -y -qq {}",
-            packages_str
-        ),
-        other => {
-            return Err(McpError::InvalidParams(format!(
-                "Unsupported package manager '{}'. Supported: pip, npm, cargo, apt",
-                other
-            )));
-        }
-    };
-
-    // 300s timeout for package installation
-    let result = cratebay_core::container::exec_with_timeout(
-        docker,
-        &params.sandbox_id,
-        vec!["/bin/sh".to_string(), "-c".to_string(), cmd],
-        None,
-        300,
-    )
-    .await
-    .map_err(|e| McpError::Internal(format!("Package installation failed: {}", e)))?;
-
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    Ok(InstallResult {
-        sandbox_id: params.sandbox_id,
-        package_manager: params.package_manager,
-        exit_code: result.exit_code,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        duration_ms,
-    })
+    Ok(cratebay_core::sandbox::install_packages(docker, params).await?)
 }
 
 /// Build a SandboxInfo from Docker container labels and state.

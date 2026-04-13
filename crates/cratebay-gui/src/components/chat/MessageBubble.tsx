@@ -4,8 +4,8 @@ import { useI18n } from "@/lib/i18n";
 import { User, Bot } from "lucide-react";
 import { Streamdown } from "streamdown";
 import type { ChatMessage } from "@/types/chat";
-import { AgentThinking } from "./AgentThinking";
-import { ToolCallCard } from "./ToolCallCard";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { ToolCallItem } from "./ToolCallItem";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -15,7 +15,7 @@ interface MessageBubbleProps {
 
 /**
  * Single message bubble with Streamdown rendering for assistant messages.
- * Includes agent thinking display and tool call cards.
+ * Includes ThinkingBlock and ToolCallItem components.
  *
  * Visual design:
  * - User messages: right-aligned, purple translucent bg, rounded-2xl with tr-sm
@@ -75,25 +75,25 @@ export function MessageBubble({ message, isThinking, thinkingContent }: MessageB
         {/* Assistant message: structured content */}
         {!isUser && (
           <div>
-            {/* Agent thinking / reasoning */}
+            {/* Thinking block — replaces AgentThinking */}
             {isAssistant && message.reasoning !== undefined && (
-              <AgentThinking
+              <ThinkingBlock
                 content={message.reasoning}
                 isActive={isThinking ?? false}
               />
             )}
             {isAssistant && isThinking === true && thinkingContent !== undefined && message.reasoning === undefined && (
-              <AgentThinking
+              <ThinkingBlock
                 content={thinkingContent}
                 isActive
               />
             )}
 
-            {/* Tool call cards */}
+            {/* Tool call items — replaces ToolCallCard */}
             {message.toolCalls !== undefined && message.toolCalls.length > 0 && (
-              <div className="my-1">
+              <div className="my-1 space-y-1.5">
                 {message.toolCalls.map((tc) => (
-                  <ToolCallCard key={tc.id} toolCall={tc} />
+                  <ToolCallItem key={tc.id} toolCall={tc} />
                 ))}
               </div>
             )}

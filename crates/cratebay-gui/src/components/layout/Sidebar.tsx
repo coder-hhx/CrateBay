@@ -7,18 +7,17 @@ import {
   MessageSquare,
   Box,
   Layers,
-  Plug,
   Settings,
   Plus,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
 
-type PageId = "chat" | "containers" | "images" | "mcp" | "settings";
+type PageId = "chat" | "containers" | "images" | "settings";
 
 interface NavItem {
   id: PageId;
-  labelKey: "chat" | "containers" | "images" | "mcp" | "settings";
+  labelKey: "chat" | "containers" | "images" | "settings";
   icon: LucideIcon;
 }
 
@@ -26,7 +25,6 @@ const navItems: NavItem[] = [
   { id: "chat", labelKey: "chat", icon: MessageSquare },
   { id: "containers", labelKey: "containers", icon: Box },
   { id: "images", labelKey: "images", icon: Layers },
-  { id: "mcp", labelKey: "mcp", icon: Plug },
   { id: "settings", labelKey: "settings", icon: Settings },
 ];
 
@@ -45,7 +43,7 @@ export function Sidebar() {
   return (
     <div className="flex h-full w-full flex-col bg-card">
       {/* Logo header — aligned with TopBar breadcrumb row */}
-      <div className="flex items-center gap-2.5 px-3 pb-[10px] pt-[34px]" data-tauri-drag-region>
+      <div className="flex items-center gap-2.5 px-3 pb-4 pt-[42px]" data-tauri-drag-region>
         <img
           src="/logo.png"
           alt="CrateBay"
@@ -62,7 +60,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation items */}
-      <nav className="flex flex-col gap-1 px-3">
+      <nav className="flex flex-col gap-1 px-3 pt-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           const label = t("nav", item.labelKey);
@@ -168,7 +166,7 @@ export function Sidebar() {
       {/* Engine status at bottom */}
       <div className="flex items-center gap-1.5 px-4 py-2.5 text-[11px] text-muted-foreground">
         <EngineStatusDot connected={dockerConnected} status={runtimeStatus} />
-        <span>{getEngineLabel(dockerConnected, runtimeStatus)}</span>
+        <span>{getEngineLabel(dockerConnected, runtimeStatus, t)}</span>
       </div>
     </div>
   );
@@ -190,11 +188,11 @@ function EngineStatusDot({ connected, status }: { connected: boolean; status: st
   );
 }
 
-function getEngineLabel(connected: boolean, status: string): string {
-  if (connected) return "引擎就绪";
-  if (status === "starting") return "启动中…";
-  if (status === "error") return "引擎异常";
-  return "未连接";
+function getEngineLabel(connected: boolean, status: string, t: (namespace: string, key: string) => string): string {
+  if (connected) return t("statusbar", "engineReady");
+  if (status === "starting") return t("statusbar", "engineStarting");
+  if (status === "error") return t("statusbar", "engineError");
+  return t("statusbar", "engineDisconnected");
 }
 
 function formatSessionTime(isoString: string): string {

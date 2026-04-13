@@ -8,8 +8,9 @@ import type {
   LlmModelInfo,
   ProviderTestResult,
   AppSettings,
+  ReasoningLevel,
 } from "@/types/settings";
-import { DEFAULT_REGISTRY_MIRRORS } from "@/types/settings";
+import { DEFAULT_REGISTRY_MIRRORS, REASONING_LEVEL_LABELS, normalizeProvider, normalizeBaseUrl } from "@/types/settings";
 
 // Re-export types for backward compatibility
 export type {
@@ -20,7 +21,9 @@ export type {
   LlmModelInfo,
   ProviderTestResult,
   AppSettings,
+  ReasoningLevel,
 };
+export { REASONING_LEVEL_LABELS, normalizeProvider, normalizeBaseUrl };
 
 /** Stable empty references to avoid re-renders from Zustand selectors */
 const EMPTY_MODELS: never[] = [];

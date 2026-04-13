@@ -65,6 +65,10 @@ export interface Translations {
     running: string;
     stopped: string;
     runtimeLabel: string;
+    engineReady: string;
+    engineStarting: string;
+    engineError: string;
+    engineDisconnected: string;
   };
   chat: {
     newSession: string;
@@ -83,14 +87,14 @@ export interface Translations {
     failedToSend: string;
     welcomeTitle: string;
     welcomeDesc: string;
-    suggestionCreateContainer: string;
-    suggestionCreateContainerDesc: string;
-    suggestionQueryDb: string;
-    suggestionQueryDbDesc: string;
-    suggestionManageMcp: string;
-    suggestionManageMcpDesc: string;
-    suggestionDeploy: string;
-    suggestionDeployDesc: string;
+    suggestionPythonAnalysis: string;
+    suggestionPythonAnalysisDesc: string;
+    suggestionNodeServer: string;
+    suggestionNodeServerDesc: string;
+    suggestionBashSystem: string;
+    suggestionBashSystemDesc: string;
+    suggestionRustSort: string;
+    suggestionRustSortDesc: string;
     confirmTitle: string;
   };
   containers: {
@@ -132,6 +136,14 @@ export interface Translations {
     memoryMb: string;
     selectTemplate: string;
     builtinRuntimeNotReady: string;
+    pullingImage: string;
+    pullImageTitle: string;
+    pullImageHint: string;
+    pullImageTimeout: string;
+    pullingProgress: string;
+    pullComplete: string;
+    pullFailed: string;
+    selectImage: string;
   };
   mcp: {
     title: string;
@@ -188,6 +200,9 @@ export interface Translations {
     batchProgress: string;
     batchFailed: string;
     tags: string;
+    sandboxImages: string;
+    userImages: string;
+    systemBadge: string;
     searchPlaceholder: string;
     searchHint: string;
     official: string;

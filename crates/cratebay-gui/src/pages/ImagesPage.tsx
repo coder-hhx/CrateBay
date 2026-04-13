@@ -226,12 +226,13 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
   }, []);
 
   const toggleSelectAll = useCallback(() => {
-    const visibleIds = filteredImages.map((i) => i.id);
-    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+    const userImages = filteredImages.filter((i) => !isSystemImage(i));
+    const userIds = userImages.map((i) => i.id);
+    const allSelected = userIds.length > 0 && userIds.every((id) => selectedIds.has(id));
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(visibleIds));
+      setSelectedIds(new Set(userIds));
     }
   }, [filteredImages, selectedIds]);
 
@@ -256,7 +257,10 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
     setBatchProgress({ done: 0, total: 0, failed: 0 });
   }, [selectedIds, fetchImages]);
 
-  const allVisibleSelected = filteredImages.length > 0 && filteredImages.every((i) => selectedIds.has(i.id));
+  const allVisibleSelected = (() => {
+    const userImages = filteredImages.filter((i) => !isSystemImage(i));
+    return userImages.length > 0 && userImages.every((i) => selectedIds.has(i.id));
+  })();
 
   // Inject toolbar controls into parent
   useEffect(() => {
@@ -334,17 +338,48 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
           <p className="mt-1 text-xs">{t("images", "noImagesHint")}</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {filteredImages.map((img) => (
-            <LocalImageRow
-              key={img.id}
-              image={img}
-              selected={selectedIds.has(img.id)}
-              onToggleSelect={() => toggleSelect(img.id)}
-              onInspect={() => void handleInspect(img.id)}
-              onRemove={() => setRemoveConfirm(img.id)}
-            />
-          ))}
+        <div className="space-y-4">
+          {/* System images */}
+          {filteredImages.some((i) => isSystemImage(i)) && (
+            <div>
+              <h3 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                {t("images", "sandboxImages")}
+              </h3>
+              <div className="space-y-2">
+                {filteredImages.filter((i) => isSystemImage(i)).map((img) => (
+                  <LocalImageRow
+                    key={img.id}
+                    image={img}
+                    selected={false}
+                    onToggleSelect={() => {}}
+                    onInspect={() => void handleInspect(img.id)}
+                    onRemove={() => {}}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* User images */}
+          {filteredImages.some((i) => !isSystemImage(i)) && (
+            <div>
+              <h3 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                {t("images", "userImages")}
+              </h3>
+              <div className="space-y-2">
+                {filteredImages.filter((i) => !isSystemImage(i)).map((img) => (
+                  <LocalImageRow
+                    key={img.id}
+                    image={img}
+                    selected={selectedIds.has(img.id)}
+                    onToggleSelect={() => toggleSelect(img.id)}
+                    onInspect={() => void handleInspect(img.id)}
+                    onRemove={() => setRemoveConfirm(img.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -507,6 +542,11 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
   );
 }
 
+/** Check whether an image is a CrateBay built-in sandbox image. */
+function isSystemImage(image: LocalImageInfo): boolean {
+  return image.repoTags.some((t) => t.startsWith("cratebay-"));
+}
+
 function LocalImageRow({
   image,
   selected,
@@ -522,6 +562,7 @@ function LocalImageRow({
 }) {
   const { t } = useI18n();
   const mainTag = image.repoTags[0] ?? "<none>";
+  const isBuiltin = isSystemImage(image);
   const additionalTags = image.repoTags.length > 1 ? image.repoTags.length - 1 : 0;
   const createdDate = new Date(image.created * 1000);
 
@@ -535,6 +576,7 @@ function LocalImageRow({
         checked={selected}
         onCheckedChange={onToggleSelect}
         className="flex-shrink-0"
+        disabled={isBuiltin}
       />
 
       {/* Icon */}
@@ -551,6 +593,11 @@ function LocalImageRow({
           {additionalTags > 0 && (
             <Badge variant="outline" className="text-[10px]">
               +{additionalTags} {t("images", "tags")}
+            </Badge>
+          )}
+          {isBuiltin && (
+            <Badge variant="secondary" className="text-[10px]">
+              {t("images", "systemBadge")}
             </Badge>
           )}
         </div>
@@ -572,15 +619,17 @@ function LocalImageRow({
         >
           <Eye className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-destructive hover:text-destructive"
-          onClick={onRemove}
-          title={t("images", "removeImage")}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
+        {!isBuiltin && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={onRemove}
+            title={t("images", "removeImage")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   );

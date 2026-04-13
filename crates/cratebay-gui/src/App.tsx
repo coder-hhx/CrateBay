@@ -8,7 +8,6 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { ToastContainer } from "@/components/common/Toast";
 import { ChatPage } from "@/pages/ChatPage";
 import { ContainersPage } from "@/pages/ContainersPage";
-import { McpPage } from "@/pages/McpPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ImagesPage } from "@/pages/ImagesPage";
 
@@ -252,7 +251,6 @@ function App() {
         {currentPage === "chat" && <ChatPage />}
         {currentPage === "containers" && <ContainersPage />}
         {currentPage === "images" && <ImagesPage />}
-        {currentPage === "mcp" && <McpPage />}
         {currentPage === "settings" && <SettingsPage />}
       </AppLayout>
       <ToastContainer />

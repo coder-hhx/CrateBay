@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import {
   useSettingsStore,
+  normalizeProvider,
   type LlmProviderCreateRequest,
   type ApiFormat,
 } from "@/stores/settingsStore";
@@ -40,6 +41,7 @@ export function ProviderForm() {
   const [apiFormat, setApiFormat] = useState<ApiFormat>("openai_completions");
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [formatAutoDetected, setFormatAutoDetected] = useState(false);
 
   const resetForm = useCallback(() => {
     setName("");
@@ -47,19 +49,34 @@ export function ProviderForm() {
     setApiKey("");
     setApiFormat("openai_completions");
     setShowKey(false);
+    setFormatAutoDetected(false);
   }, []);
 
   const canSave = name.trim().length > 0 && apiBase.trim().length > 0;
+
+  const handleBaseUrlBlur = useCallback(() => {
+    if (apiBase.trim().length === 0) return;
+    const normalized = normalizeProvider(apiBase);
+    if (normalized.baseUrl !== apiBase.trim()) {
+      setApiBase(normalized.baseUrl);
+    }
+    // Auto-detect format from URL suffix
+    if (normalized.apiFormat !== apiFormat) {
+      setApiFormat(normalized.apiFormat);
+      setFormatAutoDetected(true);
+    }
+  }, [apiBase, apiFormat]);
 
   const handleSave = useCallback(async () => {
     if (!canSave) return;
     setSaving(true);
     try {
+      const normalized = normalizeProvider(apiBase);
       const request: LlmProviderCreateRequest = {
         name: name.trim(),
-        apiBase: apiBase.trim(),
+        apiBase: normalized.baseUrl,
         apiKey,
-        apiFormat,
+        apiFormat: apiFormat,
       };
       await createProvider(request);
       resetForm();
@@ -104,8 +121,14 @@ export function ProviderForm() {
               id="provider-url"
               value={apiBase}
               onChange={(e) => setApiBase(e.target.value)}
+              onBlur={handleBaseUrlBlur}
               placeholder="https://api.openai.com"
             />
+            {formatAutoDetected && (
+              <p className="text-[10px] text-muted-foreground">
+                API format auto-detected from URL
+              </p>
+            )}
           </div>
 
           {/* API Key */}
@@ -142,7 +165,10 @@ export function ProviderForm() {
             <Label>API Format</Label>
             <Select
               value={apiFormat}
-              onValueChange={(v) => setApiFormat(v as ApiFormat)}
+              onValueChange={(v) => {
+                setApiFormat(v as ApiFormat);
+                setFormatAutoDetected(false);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />

@@ -1,80 +1,9 @@
 //! Sandbox template definitions.
 //!
-//! Templates provide pre-configured development environments per mcp-spec.md §2.3.
+//! Re-exports from `cratebay-core::sandbox` — the canonical source.
 
-use serde::Serialize;
-
-/// A sandbox template definition.
-#[derive(Debug, Clone, Serialize)]
-pub struct SandboxTemplate {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub image: String,
-    pub default_command: String,
-    pub default_cpu_cores: u32,
-    pub default_memory_mb: u64,
-    pub tags: Vec<String>,
-}
-
-/// Return the 4 built-in sandbox templates per mcp-spec.md §2.3.
-pub fn builtin_templates() -> Vec<SandboxTemplate> {
-    vec![
-        SandboxTemplate {
-            id: "node-dev".to_string(),
-            name: "Node.js Development".to_string(),
-            description: "Node.js 20 LTS with npm, yarn, and common dev tools".to_string(),
-            image: "node:20-slim".to_string(),
-            default_command: "sleep infinity".to_string(),
-            default_cpu_cores: 2,
-            default_memory_mb: 2048,
-            tags: vec![
-                "javascript".to_string(),
-                "typescript".to_string(),
-                "node".to_string(),
-            ],
-        },
-        SandboxTemplate {
-            id: "python-dev".to_string(),
-            name: "Python Development".to_string(),
-            description: "Python 3.12 with pip, venv, and common scientific packages".to_string(),
-            image: "python:3.12-slim-bookworm".to_string(),
-            default_command: "sleep infinity".to_string(),
-            default_cpu_cores: 2,
-            default_memory_mb: 2048,
-            tags: vec![
-                "python".to_string(),
-                "data-science".to_string(),
-                "ml".to_string(),
-            ],
-        },
-        SandboxTemplate {
-            id: "rust-dev".to_string(),
-            name: "Rust Development".to_string(),
-            description: "Rust stable with cargo, rustfmt, clippy".to_string(),
-            image: "rust:1-slim-bookworm".to_string(),
-            default_command: "sleep infinity".to_string(),
-            default_cpu_cores: 4,
-            default_memory_mb: 4096,
-            tags: vec!["rust".to_string(), "systems".to_string()],
-        },
-        SandboxTemplate {
-            id: "ubuntu-base".to_string(),
-            name: "Ubuntu Base".to_string(),
-            description: "Clean Ubuntu 24.04 with basic tools".to_string(),
-            image: "ubuntu:24.04".to_string(),
-            default_command: "sleep infinity".to_string(),
-            default_cpu_cores: 1,
-            default_memory_mb: 1024,
-            tags: vec!["general".to_string(), "linux".to_string()],
-        },
-    ]
-}
-
-/// Look up a template by ID.
-pub fn find_template(id: &str) -> Option<SandboxTemplate> {
-    builtin_templates().into_iter().find(|t| t.id == id)
-}
+#[allow(unused_imports)]
+pub use cratebay_core::sandbox::{builtin_templates, find_template, SandboxTemplate};
 
 #[cfg(test)]
 mod tests {

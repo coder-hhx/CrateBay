@@ -401,6 +401,7 @@ async fn handle_run_code(
         timeout_seconds,
         environment,
         cleanup,
+        sandbox_id: None,
     };
 
     let result = sandbox::run_code(docker, params).await?;

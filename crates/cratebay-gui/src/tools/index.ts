@@ -13,6 +13,7 @@ import { filesystemTools } from "./filesystemTools";
 import { shellTools } from "./shellTools";
 import { mcpTools } from "./mcpTools";
 import { systemTools } from "./systemTools";
+import { sandboxTools } from "./sandboxTools";
 import type { RiskLevel } from "@/types/agent";
 
 /**
@@ -24,6 +25,7 @@ import type { RiskLevel } from "@/types/agent";
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const builtinTools: AgentTool<any>[] = [
+  ...sandboxTools,
   ...containerTools,
   ...imageTools,
   ...filesystemTools,
@@ -71,6 +73,10 @@ export const toolRiskLevels: Record<string, RiskLevel> = {
   // MCP tools
   mcp_list_tools: "low",
   mcp_call_tool: "medium",
+
+  // Sandbox tools
+  sandbox_run_code: "low",
+  sandbox_install: "medium",
 
   // System tools
   docker_status: "low",

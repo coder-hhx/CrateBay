@@ -97,13 +97,11 @@ verify_downloaded() {
   [[ -d "$artifacts_root" ]] || fail "Artifacts root not found: $artifacts_root"
 
   require_match "macOS aarch64 CLI artifact" "$artifacts_root/cratebay-macos-aarch64/**/cratebay"
-  require_match "macOS aarch64 daemon artifact" "$artifacts_root/cratebay-daemon-macos-aarch64/**/cratebay-daemon"
   require_match "macOS x86_64 CLI artifact" "$artifacts_root/cratebay-macos-x86_64/**/cratebay"
-  require_match "macOS x86_64 daemon artifact" "$artifacts_root/cratebay-daemon-macos-x86_64/**/cratebay-daemon"
   require_match "Linux x86_64 CLI artifact" "$artifacts_root/cratebay-linux-x86_64/**/cratebay"
-  require_match "Linux x86_64 daemon artifact" "$artifacts_root/cratebay-daemon-linux-x86_64/**/cratebay-daemon"
+  require_match "Linux aarch64 CLI artifact" "$artifacts_root/cratebay-linux-aarch64/**/cratebay"
   require_match "Windows x86_64 CLI artifact" "$artifacts_root/cratebay-windows-x86_64/**/cratebay.exe"
-  require_match "Windows x86_64 daemon artifact" "$artifacts_root/cratebay-daemon-windows-x86_64/**/cratebay-daemon.exe"
+  require_match "Windows aarch64 CLI artifact" "$artifacts_root/cratebay-windows-aarch64/**/cratebay.exe"
 
   require_match "macOS aarch64 app bundle" "$artifacts_root/cratebay-gui-macos-aarch64/**/*.app"
   require_match "macOS aarch64 dmg bundle" "$artifacts_root/cratebay-gui-macos-aarch64/**/*.dmg"
@@ -111,8 +109,12 @@ verify_downloaded() {
   require_match "macOS x86_64 dmg bundle" "$artifacts_root/cratebay-gui-macos-x86_64/**/*.dmg"
   require_match "Linux x86_64 deb bundle" "$artifacts_root/cratebay-gui-linux-x86_64/**/*.deb"
   require_match "Linux x86_64 AppImage bundle" "$artifacts_root/cratebay-gui-linux-x86_64/**/*.AppImage"
+  require_match "Linux aarch64 deb bundle" "$artifacts_root/cratebay-gui-linux-aarch64/**/*.deb"
+  require_match "Linux aarch64 AppImage bundle" "$artifacts_root/cratebay-gui-linux-aarch64/**/*.AppImage"
   require_match "Windows x86_64 msi bundle" "$artifacts_root/cratebay-gui-windows-x86_64/**/*.msi"
   require_match "Windows x86_64 nsis bundle" "$artifacts_root/cratebay-gui-windows-x86_64/**/*.exe"
+  require_match "Windows aarch64 msi bundle" "$artifacts_root/cratebay-gui-windows-aarch64/**/*.msi"
+  require_match "Windows aarch64 nsis bundle" "$artifacts_root/cratebay-gui-windows-aarch64/**/*.exe"
 }
 
 case "$mode" in

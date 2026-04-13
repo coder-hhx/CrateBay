@@ -21,8 +21,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.61.0",
-    "@mariozechner/pi-ai": "^0.61.0",
+    "@mariozechner/pi-agent-core": "^0.63.2",
+    "@mariozechner/pi-ai": "^0.63.2",
     "@sinclair/typebox": "^0.34.48",
     "@tauri-apps/api": "^2.0.0",
     "class-variance-authority": "^0.7.1",

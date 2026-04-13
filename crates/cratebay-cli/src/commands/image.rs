@@ -1,4 +1,6 @@
 use anyhow::Result;
+use bollard::container::Config;
+use bollard::image::CommitContainerOptions;
 use bollard::Docker;
 
 use cratebay_core::container;
@@ -83,4 +85,53 @@ pub async fn delete(docker: &Docker, id: &str) -> Result<()> {
     container::image_remove(docker, id, false).await?;
     println!("Deleted {}", id);
     Ok(())
+}
+
+pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result<()> {
+    let detail = container::image_inspect(docker, id).await?;
+    match format {
+        OutputFormat::Table => {
+            println!("ID: {}", detail.id);
+            println!("RepoTags: {}", detail.repo_tags.join(", "));
+            println!("SizeBytes: {}", detail.size_bytes);
+            println!("Created: {}", detail.created);
+            Ok(())
+        }
+        _ => print_structured(&detail, format),
+    }
+}
+
+pub async fn pack_container(docker: &Docker, container_id: &str, image: &str) -> Result<()> {
+    let (repo, tag) = split_repo_and_tag(image);
+    let options = CommitContainerOptions {
+        container: container_id.to_string(),
+        repo,
+        tag,
+        pause: false,
+        ..Default::default()
+    };
+    docker
+        .commit_container(options, Config::<String>::default())
+        .await?;
+    println!("Packed container {} into {}", container_id, image);
+    Ok(())
+}
+
+fn split_repo_and_tag(reference: &str) -> (String, String) {
+    let last_slash = reference.rfind('/');
+    let last_colon = reference.rfind(':');
+
+    match last_colon {
+        Some(colon_index)
+            if last_slash
+                .map(|slash_index| colon_index > slash_index)
+                .unwrap_or(true) =>
+        {
+            (
+                reference[..colon_index].to_string(),
+                reference[colon_index + 1..].to_string(),
+            )
+        }
+        _ => (reference.to_string(), "latest".to_string()),
+    }
 }

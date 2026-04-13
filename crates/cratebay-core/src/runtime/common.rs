@@ -255,19 +255,12 @@ pub fn runtime_os_image_id() -> &'static str {
                 }
             }
 
-            #[cfg(target_arch = "aarch64")]
-            {
-                "cratebay-runtime-aarch64".to_string()
-            }
-
-            #[cfg(target_arch = "x86_64")]
-            {
-                "cratebay-runtime-x86_64".to_string()
-            }
-
-            #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-            {
-                "cratebay-runtime-aarch64".to_string()
+            // Runtime detection: supports Universal Binary (aarch64 + x86_64 in single app)
+            let arch = std::env::consts::ARCH;
+            match arch {
+                "aarch64" => "cratebay-runtime-aarch64".to_string(),
+                "x86_64" => "cratebay-runtime-x86_64".to_string(),
+                _ => "cratebay-runtime-aarch64".to_string(), // fallback
             }
         })
         .as_str()

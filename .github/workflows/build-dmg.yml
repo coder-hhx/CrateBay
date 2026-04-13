@@ -1,0 +1,59 @@
+name: Build Universal DMG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-universal:
+    name: Build macOS Universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable with both targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: build-universal
+
+      - name: Install frontend dependencies
+        working-directory: crates/cratebay-gui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri Universal app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/cratebay-gui
+          args: --target universal-apple-darwin
+
+      - name: Upload Universal DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: CrateBay-macos-universal
+          path: |
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
