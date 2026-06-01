@@ -9,17 +9,11 @@ pub enum AppError {
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    #[error("LLM proxy error: {0}")]
-    LlmProxy(String),
-
     #[error("Validation error: {0}")]
     Validation(String),
 
     #[error("Not found: {entity} with id {id}")]
     NotFound { entity: String, id: String },
-
-    #[error("MCP error: {0}")]
-    Mcp(String),
 
     #[error("Runtime error: {0}")]
     Runtime(String),

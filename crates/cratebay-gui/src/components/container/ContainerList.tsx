@@ -45,7 +45,20 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
   const selectContainer = useContainerStore((s) => s.selectContainer);
   const isRunning = container.status === "running" || container.status === "paused";
 
-  const statusDot = getStatusDot(container.status);
+  const statusDot = getStatusDot(container.status, {
+    running: t("containers", "running"),
+    paused: t("containers", "paused"),
+    creating: t("containers", "creating"),
+    restarting: t("containers", "restarting"),
+    stopped: t("containers", "stopped"),
+    dead: t("containers", "dead"),
+  });
+
+  const remove = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!window.confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
+    void deleteContainer(container.id);
+  };
 
   return (
     <div
@@ -127,7 +140,7 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
         <Button
           variant="ghost"
           size="icon-xs"
-          onClick={(e) => { e.stopPropagation(); void deleteContainer(container.id); }}
+          onClick={remove}
           data-testid="container-delete"
           title={t("containers", "delete")}
           className="text-destructive hover:text-destructive"
@@ -139,43 +152,43 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
   );
 }
 
-function getStatusDot(status: ContainerInfo["status"]) {
+function getStatusDot(status: ContainerInfo["status"], labels: Record<string, string>) {
   switch (status) {
     case "running":
       return {
-        label: "运行中",
+        label: labels.running,
         dotClass: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
         textClass: "text-emerald-500",
       };
     case "paused":
       return {
-        label: "已暂停",
+        label: labels.paused,
         dotClass: "bg-amber-400",
         textClass: "text-amber-500",
       };
     case "creating":
     case "created":
       return {
-        label: "创建中",
+        label: labels.creating,
         dotClass: "bg-yellow-400 animate-pulse",
         textClass: "text-yellow-500",
       };
     case "restarting":
       return {
-        label: "重启中",
+        label: labels.restarting,
         dotClass: "bg-blue-400 animate-pulse",
         textClass: "text-blue-500",
       };
     case "exited":
     case "stopped":
       return {
-        label: "已停止",
+        label: labels.stopped,
         dotClass: "bg-zinc-400",
         textClass: "text-muted-foreground",
       };
     case "dead":
       return {
-        label: "异常",
+        label: labels.dead,
         dotClass: "bg-red-400",
         textClass: "text-red-500",
       };

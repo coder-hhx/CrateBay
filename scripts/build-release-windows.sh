@@ -4,9 +4,8 @@
 #
 # Produces:
 #   dist/cratebay.exe              — CLI binary
-#   dist/cratebay-daemon.exe       — Daemon binary
-#   dist/CrateBay_<ver>_x64.msi   — MSI installer (GUI + daemon)
-#   dist/CrateBay_<ver>_x64-setup.exe — NSIS installer (GUI + daemon)
+#   dist/CrateBay_<ver>_x64.msi   — MSI installer (GUI + runtime assets)
+#   dist/CrateBay_<ver>_x64-setup.exe — NSIS installer (GUI + runtime assets)
 #
 # Prerequisites:
 #   - Rust stable toolchain (MSVC)
@@ -21,20 +20,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-VERSION="$(
-    grep -E '^version\\s*=\\s*\"' "$REPO_ROOT/crates/cratebay-cli/Cargo.toml" \
-        | head -n 1 \
-        | sed -E 's/.*\"([^\"]+)\".*/\\1/'
-)"
+VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml" | head -n 1)"
 if [[ -z "${VERSION}" ]]; then
-    echo "ERROR: Failed to resolve version from crates/cratebay-cli/Cargo.toml"
+    echo "ERROR: Failed to resolve version from workspace Cargo.toml"
     exit 1
 fi
 ARCH="x86_64"
 RUST_TARGET="x86_64-pc-windows-msvc"
 
 GUI_CRATE="crates/cratebay-gui"
-TAURI_DIR="$GUI_CRATE/src-tauri"
+BUNDLE_IMAGES_DIR="$REPO_ROOT/$GUI_CRATE/src-tauri/bundle-images"
 DIST_DIR="$REPO_ROOT/dist"
 
 ensure_node_runtime() {
@@ -92,51 +87,61 @@ fi
 echo "── [0/5] Building CrateBay WSL Runtime assets ──"
 bash scripts/build-runtime-assets-wsl.sh "$ARCH"
 
-# ── Step 1: Build daemon & CLI ───────────────────────────────────────────────
-echo "── [1/5] Building daemon and CLI (release) ──"
-cargo build --release -p cratebay-daemon -p cratebay-cli
+# ── Step 1: Build CLI ────────────────────────────────────────────────────────
+echo "── [1/6] Building CLI (release) ──"
+cargo build --release -p cratebay-cli
 
 echo "  ✓ target/release/cratebay.exe"
-echo "  ✓ target/release/cratebay-daemon.exe"
 
 # Verify binaries exist
-for bin in cratebay.exe cratebay-daemon.exe; do
+for bin in cratebay.exe; do
     if [[ ! -f "target/release/$bin" ]]; then
         echo "ERROR: target/release/$bin not found"
         exit 1
     fi
 done
 
+echo ""
+echo "── [2/6] Ensuring bundled container images ──"
 if [[ "$SKIP_GUI" == "true" ]]; then
-    echo ""
-    echo "── [2/5] Skipping frontend dependencies (--skip-gui) ──"
-    echo "── [3/5] Skipping Tauri build (--skip-gui) ──"
+    echo "  Skipped (--skip-gui)"
 else
-    # ── Step 2: Install frontend dependencies ────────────────────────────────
-    echo ""
-    echo "── [2/5] Installing frontend dependencies ──"
-    (cd "$GUI_CRATE" && npm ci)
-
-    # ── Step 3: Build Tauri app ──────────────────────────────────────────────
-    echo ""
-    echo "── [3/5] Building Tauri app ──"
-    (cd "$GUI_CRATE" && npx tauri build)
+    if bash scripts/verify-bundle-images.sh "$BUNDLE_IMAGES_DIR"; then
+        echo "  ✓ bundled images already present"
+    else
+        echo "  Building bundled images with CLI + built-in runtime..."
+        CRATEBAY_BIN="$REPO_ROOT/target/release/cratebay.exe" bash scripts/build-bundle-images.sh
+    fi
 fi
 
-# ── Step 4: Collect CLI & daemon binaries ────────────────────────────────────
+if [[ "$SKIP_GUI" == "true" ]]; then
+    echo ""
+    echo "── [3/6] Skipping frontend dependencies (--skip-gui) ──"
+    echo "── [4/6] Skipping Tauri build (--skip-gui) ──"
+else
+    # ── Step 3: Install frontend dependencies ────────────────────────────────
+    echo ""
+    echo "── [3/6] Installing frontend dependencies ──"
+    corepack enable
+    (cd "$GUI_CRATE" && pnpm install --frozen-lockfile)
+
+    # ── Step 4: Build Tauri app ──────────────────────────────────────────────
+    echo ""
+    echo "── [4/6] Building Tauri app ──"
+    (cd "$GUI_CRATE" && pnpm tauri build)
+fi
+
+# ── Step 5: Collect CLI binary ───────────────────────────────────────────────
 echo ""
-echo "── [4/5] Collecting CLI & daemon binaries ──"
+echo "── [5/6] Collecting CLI binary ──"
 mkdir -p "$DIST_DIR"
 
 cp "target/release/cratebay.exe" "$DIST_DIR/cratebay.exe"
 echo "  ✓ $DIST_DIR/cratebay.exe"
 
-cp "target/release/cratebay-daemon.exe" "$DIST_DIR/cratebay-daemon.exe"
-echo "  ✓ $DIST_DIR/cratebay-daemon.exe"
-
-# ── Step 5: Collect GUI installers ───────────────────────────────────────────
+# ── Step 6: Collect GUI installers ───────────────────────────────────────────
 echo ""
-echo "── [5/5] Collecting GUI installers ──"
+echo "── [6/6] Collecting GUI installers ──"
 
 if [[ "$SKIP_GUI" == "true" ]]; then
     echo "  Skipped (--skip-gui)"
@@ -184,8 +189,7 @@ done
 
 echo ""
 echo "Next steps:"
-echo "  1. Test CLI:    ./dist/cratebay.exe status"
-echo "  2. Test daemon: ./dist/cratebay-daemon.exe"
+echo "  1. Test CLI: ./dist/cratebay.exe system info"
 if [[ "$SKIP_GUI" == "false" ]]; then
-    echo "  3. Install GUI: double-click the MSI or NSIS installer"
+    echo "  2. Install GUI: double-click the MSI or NSIS installer"
 fi

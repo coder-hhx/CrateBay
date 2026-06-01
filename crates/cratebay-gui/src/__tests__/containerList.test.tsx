@@ -117,8 +117,7 @@ describe("ContainerList", () => {
     });
     render(<ContainerList />);
 
-    // Status shown as Chinese label in the row
-    expect(screen.getByText("运行中")).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
   it("renders status label for stopped containers", () => {
@@ -127,7 +126,7 @@ describe("ContainerList", () => {
     });
     render(<ContainerList />);
 
-    expect(screen.getByText("已停止")).toBeInTheDocument();
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
   });
 
   it("renders CPU and memory info", () => {

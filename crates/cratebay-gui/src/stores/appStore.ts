@@ -11,7 +11,7 @@ interface Notification {
 
 interface AppState {
   // Navigation
-  currentPage: "chat" | "containers" | "images" | "settings";
+  currentPage: "containers" | "images" | "settings";
   setCurrentPage: (page: AppState["currentPage"]) => void;
 
   // Theme
@@ -30,7 +30,7 @@ interface AppState {
   setDockerConnected: (connected: boolean) => void;
   setRuntimeStatus: (status: AppState["runtimeStatus"]) => void;
 
-  // Built-in runtime status (decoupled from external Docker)
+  // Built-in runtime status (decoupled from explicit Docker host overrides)
   // true only when the CrateBay self-hosted VM runtime is ready.
   builtinRuntimeReady: boolean;
   setBuiltinRuntimeReady: (ready: boolean) => void;
@@ -49,7 +49,7 @@ let notificationId = 0;
 
 export const useAppStore = create<AppState>()((set) => ({
   // Navigation
-  currentPage: "chat",
+  currentPage: "containers",
   setCurrentPage: (page) => set({ currentPage: page }),
 
   // Theme — default dark

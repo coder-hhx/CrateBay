@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@/lib/tauri";
+import {
+  syncRuntimeStoreState,
+  type DockerStatusResponse,
+  type RuntimeStatusResponse,
+} from "@/lib/runtimeStatus";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/lib/i18n";
-import { McpPage } from "@/pages/McpPage";
+import { DEFAULT_REGISTRY_MIRRORS } from "@/types/settings";
+import { APP_VERSION } from "@/lib/constants";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -15,22 +20,16 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ProviderForm } from "@/components/settings/ProviderForm";
-import { ProviderCard } from "@/components/settings/ProviderCard";
-import { ReasoningEffort } from "@/components/settings/ReasoningEffort";
 import {
-  Moon,
-  Sun,
-  Monitor,
-  Cpu,
-  HardDrive,
   ExternalLink,
+  Loader2,
   Package,
   Play,
+  RefreshCw,
+  RotateCcw,
   Square,
   Plus,
   X,
-  RotateCcw,
 } from "lucide-react";
 
 export function SettingsPage() {
@@ -40,37 +39,23 @@ export function SettingsPage() {
     <div className="flex h-full flex-col overflow-auto p-6">
       <Tabs defaultValue="general" className="flex-1">
         <TabsList className="mb-4">
-          <TabsTrigger value="general" data-testid="settings-tab-general">{t("settings", "general")}</TabsTrigger>
-          <TabsTrigger value="providers" data-testid="settings-tab-providers">{t("settings", "providers")}</TabsTrigger>
-          <TabsTrigger value="appearance" data-testid="settings-tab-appearance">{t("settings", "appearance")}</TabsTrigger>
-          <TabsTrigger value="runtime" data-testid="settings-tab-runtime">{t("settings", "runtime")}</TabsTrigger>
-          <TabsTrigger value="mcp" data-testid="settings-tab-mcp">MCP</TabsTrigger>
-          <TabsTrigger value="advanced" data-testid="settings-tab-advanced">{t("settings", "advanced")}</TabsTrigger>
-          <TabsTrigger value="about" data-testid="settings-tab-about">{t("settings", "about")}</TabsTrigger>
+          <TabsTrigger value="general" data-testid="settings-tab-general">
+            {t("settings", "general")}
+          </TabsTrigger>
+          <TabsTrigger value="runtime" data-testid="settings-tab-runtime">
+            {t("settings", "runtime")}
+          </TabsTrigger>
+          <TabsTrigger value="about" data-testid="settings-tab-about">
+            {t("settings", "about")}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="mt-4">
           <GeneralTab />
         </TabsContent>
 
-        <TabsContent value="providers" className="mt-4">
-          <ProvidersTab />
-        </TabsContent>
-
-        <TabsContent value="appearance" className="mt-4">
-          <AppearanceTab />
-        </TabsContent>
-
         <TabsContent value="runtime" className="mt-4">
           <RuntimeTab />
-        </TabsContent>
-
-        <TabsContent value="mcp" className="mt-4">
-          <McpPage />
-        </TabsContent>
-
-        <TabsContent value="advanced" className="mt-4">
-          <AdvancedTab />
         </TabsContent>
 
         <TabsContent value="about" className="mt-4">
@@ -80,8 +65,6 @@ export function SettingsPage() {
     </div>
   );
 }
-
-/* ---------- Setting row helper ---------- */
 
 function SettingRow({
   label,
@@ -93,7 +76,7 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-border">
+    <div className="flex items-center justify-between border-b border-border py-3">
       <div className="flex flex-col gap-0.5">
         <span className="text-sm font-medium">{label}</span>
         {description && (
@@ -104,8 +87,6 @@ function SettingRow({
     </div>
   );
 }
-
-/* ---------- General Tab ---------- */
 
 function GeneralTab() {
   const { t } = useI18n();
@@ -121,12 +102,14 @@ function GeneralTab() {
         >
           <SelectTrigger className="w-48">
             <SelectValue>
-              {settings.language === "zh-CN" ? "简体中文" : "English"}
+              {settings.language === "zh-CN"
+                ? t("settings", "simplifiedChinese")
+                : t("settings", "english")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="en">English</SelectItem>
-            <SelectItem value="zh-CN">简体中文</SelectItem>
+            <SelectItem value="en">{t("settings", "english")}</SelectItem>
+            <SelectItem value="zh-CN">{t("settings", "simplifiedChinese")}</SelectItem>
           </SelectContent>
         </Select>
       </SettingRow>
@@ -154,183 +137,17 @@ function GeneralTab() {
           </SelectContent>
         </Select>
       </SettingRow>
-
-      <SettingRow
-        label={t("settings", "sendOnEnter")}
-        description={t("settings", "sendOnEnterDesc")}
-      >
-        <Switch
-          checked={settings.sendOnEnter}
-          onCheckedChange={(v) => void updateSettings({ sendOnEnter: v })}
-        />
-      </SettingRow>
-
-      <SettingRow
-        label={t("settings", "showAgentThinking")}
-        description={t("settings", "showAgentThinkingDesc")}
-      >
-        <Switch
-          checked={settings.showAgentThinking}
-          onCheckedChange={(v) => void updateSettings({ showAgentThinking: v })}
-        />
-      </SettingRow>
     </div>
   );
 }
-
-/* ---------- Providers Tab ---------- */
-
-function ProvidersTab() {
-  const { t } = useI18n();
-  const providers = useSettingsStore((s) => s.providers);
-
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-medium text-foreground">{t("settings", "llmProviders")}</h2>
-          <p className="text-xs text-muted-foreground">
-            {t("settings", "llmProvidersDesc")}
-          </p>
-        </div>
-        <ProviderForm />
-      </div>
-
-      {/* Provider list */}
-      {providers.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {t("settings", "noProviders")}
-        </div>
-      ) : (
-        <div className="grid gap-4">
-          {providers.map((provider) => (
-            <ProviderCard key={provider.id} provider={provider} />
-          ))}
-        </div>
-      )}
-
-      {/* Reasoning Effort (global setting) */}
-      <div className="border-t border-border pt-4">
-        <ReasoningEffort />
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Appearance Tab ---------- */
-
-const ACCENT_COLORS = [
-  { value: "#7c3aed", label: "Purple" },
-  { value: "#3b82f6", label: "Blue" },
-  { value: "#10b981", label: "Green" },
-  { value: "#f59e0b", label: "Orange" },
-  { value: "#ef4444", label: "Red" },
-  { value: "#ec4899", label: "Pink" },
-] as const;
-
-function AppearanceTab() {
-  const { t } = useI18n();
-  const settings = useSettingsStore((s) => s.settings);
-  const updateSettings = useSettingsStore((s) => s.updateSettings);
-  const [fontSize, setFontSize] = useState(14);
-  const [accentColor, setAccentColor] = useState("#7c3aed");
-
-  const themeOptions = [
-    { key: "dark" as const, icon: Moon, label: t("settings", "themeDark") },
-    { key: "light" as const, icon: Sun, label: t("settings", "themeLight") },
-    { key: "system" as const, icon: Monitor, label: t("settings", "themeSystem") },
-  ];
-
-  return (
-    <div className="flex max-w-2xl flex-col">
-      {/* Theme mode */}
-      <SettingRow
-        label={t("settings", "themeMode")}
-        description={t("settings", "themeModeDesc")}
-      >
-        <div className="flex gap-1.5">
-          {themeOptions.map((opt) => {
-            const Icon = opt.icon;
-            const isActive = settings.theme === opt.key;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => void updateSettings({ theme: opt.key })}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Icon size={14} />
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-      </SettingRow>
-
-      {/* Font size */}
-      <SettingRow
-        label={t("settings", "fontSize")}
-        description={t("settings", "fontSizeDesc")}
-      >
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={12}
-            max={18}
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
-            className="w-32 accent-primary"
-          />
-          <span className="w-10 text-right text-sm font-mono text-muted-foreground">
-            {fontSize}px
-          </span>
-        </div>
-      </SettingRow>
-
-      {/* Accent color */}
-      <SettingRow
-        label={t("settings", "accentColor")}
-        description={t("settings", "accentColorDesc")}
-      >
-        <div className="flex gap-2">
-          {ACCENT_COLORS.map((c) => (
-            <button
-              key={c.value}
-              title={c.label}
-              onClick={() => setAccentColor(c.value)}
-              className="w-6 h-6 rounded-full cursor-pointer border-2 transition-all"
-              style={{
-                backgroundColor: c.value,
-                borderColor:
-                  accentColor === c.value
-                    ? "white"
-                    : "transparent",
-                boxShadow:
-                  accentColor === c.value
-                    ? "0 0 0 2px rgba(255,255,255,0.2)"
-                    : "none",
-              }}
-            />
-          ))}
-        </div>
-      </SettingRow>
-    </div>
-  );
-}
-
-/* ---------- Runtime Tab ---------- */
 
 function RuntimeStatusDot({
   status,
 }: {
-  status: "running" | "starting" | "stopped" | "error" | "connected" | "disconnected";
+  status: "running" | "starting" | "error" | "disconnected";
 }) {
   const colorClass =
-    status === "running" || status === "connected"
+    status === "running"
       ? "bg-green-500"
       : status === "starting"
         ? "bg-yellow-500 animate-pulse"
@@ -338,7 +155,7 @@ function RuntimeStatusDot({
           ? "bg-red-500"
           : "bg-muted-foreground";
 
-  return <span className={`inline-block w-2 h-2 rounded-full ${colorClass}`} />;
+  return <span className={`inline-block h-2 w-2 rounded-full ${colorClass}`} />;
 }
 
 function RuntimeTab() {
@@ -350,30 +167,55 @@ function RuntimeTab() {
   const runtimeLoading = useAppStore((s) => s.runtimeLoading);
   const setRuntimeLoading = useAppStore((s) => s.setRuntimeLoading);
   const addNotification = useAppStore((s) => s.addNotification);
-  const [cpuCores, setCpuCores] = useState(4);
-  const [memoryGB, setMemoryGB] = useState(8);
   const [proxyInput, setProxyInput] = useState(settings.runtimeHttpProxy);
+  const [dockerStatusInfo, setDockerStatusInfo] = useState<DockerStatusResponse | null>(null);
+  const [runtimeStatusInfo, setRuntimeStatusInfo] = useState<RuntimeStatusResponse | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
 
   useEffect(() => {
     setProxyInput(settings.runtimeHttpProxy);
   }, [settings.runtimeHttpProxy]);
 
+  const loadDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    try {
+      const [dockerStatus, runtimeInfo] = await Promise.all([
+        invoke<DockerStatusResponse | null>("docker_status"),
+        invoke<RuntimeStatusResponse | null>("runtime_status"),
+      ]);
+      setDockerStatusInfo(dockerStatus ?? null);
+      setRuntimeStatusInfo(runtimeInfo ?? null);
+      syncRuntimeStoreState(dockerStatus, runtimeInfo);
+    } catch (error) {
+      setDockerStatusInfo(null);
+      setRuntimeStatusInfo(null);
+      setDiagnosticsError(formatError(error));
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDiagnostics();
+  }, [loadDiagnostics]);
+
   const handleRuntimeStart = async () => {
     try {
       setRuntimeLoading(true);
       await invoke("runtime_start");
+      await loadDiagnostics();
       addNotification({
         type: "success",
         title: t("settings", "runtimeStarting"),
-        message: t("settings", "runtimeStarting"),
         dismissable: true,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       addNotification({
         type: "error",
         title: t("common", "error"),
-        message,
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     } finally {
@@ -385,18 +227,17 @@ function RuntimeTab() {
     try {
       setRuntimeLoading(true);
       await invoke("runtime_stop");
+      await loadDiagnostics();
       addNotification({
         type: "success",
         title: t("settings", "runtimeStopped"),
-        message: t("settings", "runtimeStopped"),
         dismissable: true,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       addNotification({
         type: "error",
         title: t("common", "error"),
-        message,
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     } finally {
@@ -411,6 +252,7 @@ function RuntimeTab() {
         await invoke("runtime_stop");
       }
       await invoke("runtime_start");
+      await loadDiagnostics();
       addNotification({
         type: "success",
         title: t("settings", "runtimeRestart"),
@@ -418,11 +260,10 @@ function RuntimeTab() {
         dismissable: true,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       addNotification({
         type: "error",
         title: t("common", "error"),
-        message,
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     } finally {
@@ -431,9 +272,8 @@ function RuntimeTab() {
   };
 
   const handleSaveRuntimeProxy = async () => {
-    const proxy = proxyInput.trim();
     try {
-      await updateSettings({ runtimeHttpProxy: proxy });
+      await updateSettings({ runtimeHttpProxy: proxyInput.trim() });
       addNotification({
         type: "success",
         title: t("settings", "runtimeProxySaveSuccess"),
@@ -441,28 +281,30 @@ function RuntimeTab() {
         dismissable: true,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       addNotification({
         type: "error",
         title: t("common", "error"),
-        message,
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     }
   };
 
   const runtimeProxyDirty = proxyInput.trim() !== settings.runtimeHttpProxy;
+  const displayStatus = dockerConnected
+    ? "running"
+    : runtimeStatus === "starting" || runtimeStatus === "error"
+      ? runtimeStatus
+      : "disconnected";
 
   return (
     <div className="flex max-w-2xl flex-col">
-      {/* VM Status */}
-      {/* Container Engine — unified single status row */}
       <SettingRow
         label={t("settings", "containerEngine")}
         description={t("settings", "containerEngineDesc")}
       >
         <div className="flex items-center gap-2">
-          <RuntimeStatusDot status={dockerConnected ? "connected" : runtimeStatus === "starting" ? "starting" : "disconnected"} />
+          <RuntimeStatusDot status={displayStatus} />
           <span
             className={`text-sm font-medium ${
               dockerConnected
@@ -483,7 +325,6 @@ function RuntimeTab() {
         </div>
       </SettingRow>
 
-      {/* Runtime Control */}
       <SettingRow
         label={t("settings", "runtimeControl")}
         description={t("settings", "runtimeControlDesc")}
@@ -522,6 +363,14 @@ function RuntimeTab() {
         </div>
       </SettingRow>
 
+      <RuntimeDiagnostics
+        dockerStatus={dockerStatusInfo}
+        runtimeInfo={runtimeStatusInfo}
+        loading={diagnosticsLoading}
+        error={diagnosticsError}
+        onRefresh={loadDiagnostics}
+      />
+
       <SettingRow
         label={t("settings", "runtimeHttpProxy")}
         description={t("settings", "runtimeHttpProxyDesc")}
@@ -534,7 +383,7 @@ function RuntimeTab() {
         />
       </SettingRow>
 
-      <div className="flex items-center justify-between py-3 border-b border-border">
+      <div className="flex items-center justify-between border-b border-border py-3">
         <p className="text-xs text-muted-foreground">{t("settings", "runtimeProxyRestartHint")}</p>
         <Button
           size="sm"
@@ -547,50 +396,6 @@ function RuntimeTab() {
         </Button>
       </div>
 
-      {/* CPU Cores */}
-      <SettingRow
-        label={t("settings", "cpuCores")}
-        description={t("settings", "cpuCoresDesc")}
-      >
-        <div className="flex items-center gap-3">
-          <Cpu size={14} className="text-muted-foreground" />
-          <input
-            type="range"
-            min={1}
-            max={16}
-            value={cpuCores}
-            onChange={(e) => setCpuCores(Number(e.target.value))}
-            className="w-32 accent-primary"
-          />
-          <span className="w-6 text-right text-sm font-mono text-muted-foreground">
-            {cpuCores}
-          </span>
-        </div>
-      </SettingRow>
-
-      {/* Memory Allocation */}
-      <SettingRow
-        label={t("settings", "memoryAllocation")}
-        description={t("settings", "memoryAllocationDesc")}
-      >
-        <div className="flex items-center gap-3">
-          <HardDrive size={14} className="text-muted-foreground" />
-          <input
-            type="range"
-            min={2}
-            max={32}
-            step={2}
-            value={memoryGB}
-            onChange={(e) => setMemoryGB(Number(e.target.value))}
-            className="w-32 accent-primary"
-          />
-          <span className="w-10 text-right text-sm font-mono text-muted-foreground">
-            {memoryGB} GB
-          </span>
-        </div>
-      </SettingRow>
-
-      {/* Registry Mirrors */}
       <div className="mt-6 border-t border-border pt-4">
         <RegistryMirrorsSection />
       </div>
@@ -598,13 +403,208 @@ function RuntimeTab() {
   );
 }
 
-/* ---------- Registry Mirrors Section ---------- */
+function RuntimeDiagnostics({
+  dockerStatus,
+  runtimeInfo,
+  loading,
+  error,
+  onRefresh,
+}: {
+  dockerStatus: DockerStatusResponse | null;
+  runtimeInfo: RuntimeStatusResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div
+      className="mt-6 border-t border-border pt-4"
+      data-testid="runtime-diagnostics"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-foreground">
+            {t("settings", "runtimeDiagnostics")}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            {t("settings", "runtimeDiagnosticsDesc")}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="gap-1.5 text-xs"
+          onClick={() => void onRefresh()}
+          disabled={loading}
+        >
+          {loading ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <RefreshCw size={12} />
+          )}
+          {t("settings", "refreshDiagnostics")}
+        </Button>
+      </div>
+
+      {error !== null && (
+        <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+          <div className="text-xs font-medium text-foreground">
+            {t("settings", "dockerDiagnostics")}
+          </div>
+          <div className="mt-2">
+            <DiagnosticsRow
+              label={t("common", "status")}
+              value={
+                dockerStatus === null
+                  ? "—"
+                  : dockerStatus.connected
+                    ? t("common", "connected")
+                    : t("common", "disconnected")
+              }
+            />
+            <DiagnosticsRow
+              label={t("settings", "dockerVersion")}
+              value={valueOrDash(dockerStatus?.version)}
+            />
+            <DiagnosticsRow
+              label={t("settings", "dockerApiVersion")}
+              value={valueOrDash(dockerStatus?.api_version)}
+            />
+            <DiagnosticsRow
+              label={t("settings", "dockerOsArch")}
+              value={formatOsArch(dockerStatus?.os, dockerStatus?.arch)}
+            />
+            <DiagnosticsRow
+              label={t("settings", "dockerSource")}
+              value={formatDockerSource(dockerStatus?.source, t("settings", "dockerSourceBuiltin"))}
+            />
+            <DiagnosticsRow
+              label={t("settings", "dockerSocketPath")}
+              value={valueOrDash(dockerStatus?.socket_path)}
+              monospace
+            />
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+          <div className="text-xs font-medium text-foreground">
+            {t("settings", "dockerSourceBuiltin")}
+          </div>
+          <div className="mt-2">
+            <DiagnosticsRow
+              label={t("common", "status")}
+              value={valueOrDash(runtimeInfo?.state)}
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimePlatform")}
+              value={valueOrDash(runtimeInfo?.platform)}
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimeCpuCores")}
+              value={runtimeInfo?.cpu_cores ?? "—"}
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimeMemoryMb")}
+              value={runtimeInfo?.memory_mb !== undefined && runtimeInfo?.memory_mb !== null ? `${runtimeInfo.memory_mb} MB` : "—"}
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimeDiskGb")}
+              value={runtimeInfo?.disk_gb !== undefined && runtimeInfo?.disk_gb !== null ? `${runtimeInfo.disk_gb} GB` : "—"}
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimeDockerResponsive")}
+              value={
+                runtimeInfo?.docker_responsive === undefined || runtimeInfo?.docker_responsive === null
+                  ? "—"
+                  : runtimeInfo.docker_responsive
+                    ? t("common", "connected")
+                    : t("common", "disconnected")
+              }
+            />
+            <DiagnosticsRow
+              label={t("settings", "runtimeUptime")}
+              value={formatUptime(runtimeInfo?.uptime_seconds)}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticsRow({
+  label,
+  value,
+  monospace = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  monospace?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-2 border-t border-border/60 py-1.5 first:border-t-0">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span
+        className={`min-w-0 break-all text-xs text-foreground ${
+          monospace ? "font-mono" : ""
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function valueOrDash(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "—";
+}
+
+function formatOsArch(os: string | null | undefined, arch: string | null | undefined): string {
+  const parts = [valueOrDash(os), valueOrDash(arch)].filter((part) => part !== "—");
+  return parts.length > 0 ? parts.join(" / ") : "—";
+}
+
+function formatDockerSource(source: string | null | undefined, builtinLabel: string): string {
+  const value = valueOrDash(source);
+  if (value === "—") return value;
+  return /^(builtin|built-in|runtime)$/i.test(value) ? builtinLabel : value;
+}
+
+function formatUptime(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) {
+    return "—";
+  }
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error);
+}
 
 function RegistryMirrorsSection() {
+  const { t } = useI18n();
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const [newMirror, setNewMirror] = useState("");
-
   const mirrors = settings.registryMirrors;
 
   const addMirror = () => {
@@ -618,31 +618,22 @@ function RegistryMirrorsSection() {
   };
 
   const removeMirror = (index: number) => {
-    const updated = mirrors.filter((_, i) => i !== index);
-    void updateSettings({ registryMirrors: updated });
+    void updateSettings({ registryMirrors: mirrors.filter((_, i) => i !== index) });
   };
 
   const resetToDefaults = () => {
-    // Dynamic import to get DEFAULT_REGISTRY_MIRRORS
-    import("@/types/settings").then(({ DEFAULT_REGISTRY_MIRRORS }) => {
-      void updateSettings({ registryMirrors: [...DEFAULT_REGISTRY_MIRRORS] });
-    });
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addMirror();
-    }
+    void updateSettings({ registryMirrors: [...DEFAULT_REGISTRY_MIRRORS] });
   };
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">Docker 镜像加速源</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            {t("settings", "registryMirrors")}
+          </h3>
           <p className="text-xs text-muted-foreground">
-            配置镜像源加速 Docker 镜像拉取，按顺序依次尝试
+            {t("settings", "registryMirrorsDesc")}
           </p>
         </div>
         <Button
@@ -652,15 +643,14 @@ function RegistryMirrorsSection() {
           onClick={resetToDefaults}
         >
           <RotateCcw size={12} />
-          恢复默认
+          {t("settings", "restoreDefaults")}
         </Button>
       </div>
 
-      {/* Mirror list */}
       <div className="flex flex-col gap-1.5">
         {mirrors.length === 0 ? (
           <div className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
-            未配置镜像加速源，将直接从 Docker Hub 拉取
+            {t("settings", "registryMirrorsEmpty")}
           </div>
         ) : (
           mirrors.map((mirror, index) => (
@@ -669,14 +659,15 @@ function RegistryMirrorsSection() {
               className="group flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2"
             >
               <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-muted-foreground w-5">
+                <span className="w-5 font-mono text-xs text-muted-foreground">
                   {index + 1}.
                 </span>
-                <span className="text-sm font-mono text-foreground">{mirror}</span>
+                <span className="font-mono text-sm text-foreground">{mirror}</span>
               </div>
               <button
+                type="button"
                 onClick={() => removeMirror(index)}
-                className="text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
+                className="text-muted-foreground opacity-0 transition-all hover:text-destructive group-hover:opacity-100"
               >
                 <X size={14} />
               </button>
@@ -685,14 +676,18 @@ function RegistryMirrorsSection() {
         )}
       </div>
 
-      {/* Add new mirror */}
       <div className="flex gap-2">
         <Input
           value={newMirror}
           onChange={(e) => setNewMirror(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="输入镜像源地址，如 mirror.example.com"
-          className="flex-1 text-sm font-mono"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addMirror();
+            }
+          }}
+          placeholder={t("settings", "registryMirrorPlaceholder")}
+          className="flex-1 font-mono text-sm"
         />
         <Button
           size="sm"
@@ -702,85 +697,24 @@ function RegistryMirrorsSection() {
           className="gap-1.5"
         >
           <Plus size={14} />
-          添加
+          {t("common", "add")}
         </Button>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        拉取镜像时会按上述顺序尝试加速源，全部失败后回退到 Docker Hub 直连
+        {t("settings", "registryMirrorsHint")}
       </p>
     </div>
   );
 }
-
-/* ---------- Advanced Tab ---------- */
-
-function AdvancedTab() {
-  const { t } = useI18n();
-  const settings = useSettingsStore((s) => s.settings);
-  const updateSettings = useSettingsStore((s) => s.updateSettings);
-
-  return (
-    <div className="flex max-w-2xl flex-col">
-      <SettingRow
-        label={t("settings", "containerTtl")}
-        description={t("settings", "containerTtlDesc")}
-      >
-        <Input
-          type="number"
-          min={1}
-          max={168}
-          value={settings.containerDefaultTtlHours}
-          onChange={(e) =>
-            void updateSettings({
-              containerDefaultTtlHours: Number(e.target.value) || 8,
-            })
-          }
-          className="w-32"
-        />
-      </SettingRow>
-
-      <SettingRow
-        label={t("settings", "maxHistory")}
-        description={t("settings", "maxHistoryDesc")}
-      >
-        <Input
-          type="number"
-          min={10}
-          max={200}
-          value={settings.maxConversationHistory}
-          onChange={(e) =>
-            void updateSettings({
-              maxConversationHistory: Number(e.target.value) || 50,
-            })
-          }
-          className="w-32"
-        />
-      </SettingRow>
-
-      <SettingRow
-        label={t("settings", "confirmDestructive")}
-        description={t("settings", "confirmDestructiveDesc")}
-      >
-        <Switch
-          checked={settings.confirmDestructiveOps}
-          onCheckedChange={(v) => void updateSettings({ confirmDestructiveOps: v })}
-        />
-      </SettingRow>
-    </div>
-  );
-}
-
-/* ---------- About Tab ---------- */
 
 function AboutTab() {
   const { t } = useI18n();
 
   return (
     <div className="flex max-w-2xl flex-col">
-      {/* Logo + branding */}
-      <div className="flex items-center gap-4 pb-6 border-b border-border">
-        <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10">
+      <div className="flex items-center gap-4 border-b border-border pb-6">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
           <Package size={24} className="text-primary" />
         </div>
         <div>
@@ -791,9 +725,8 @@ function AboutTab() {
         </div>
       </div>
 
-      {/* Info rows */}
       <SettingRow label={t("common", "version")}>
-        <span className="text-sm font-mono text-muted-foreground">v0.9.0</span>
+        <span className="font-mono text-sm text-muted-foreground">v{APP_VERSION}</span>
       </SettingRow>
 
       <SettingRow label={t("settings", "builtWith")}>
@@ -806,25 +739,15 @@ function AboutTab() {
         <span className="text-sm text-muted-foreground">MIT License</span>
       </SettingRow>
 
-      {/* Links */}
       <div className="flex gap-3 pt-6">
         <a
-          href="https://github.com/cratebay/cratebay"
+          href="https://github.com/nicepkg/CrateBay"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
           <ExternalLink size={14} />
           {t("settings", "github")}
-        </a>
-        <a
-          href="https://cratebay.io"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ExternalLink size={14} />
-          {t("settings", "website")}
         </a>
       </div>
     </div>

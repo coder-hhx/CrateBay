@@ -3,7 +3,7 @@
 # build-release-macos.sh — Build CrateBay macOS release artifacts
 #
 # Produces:
-#   dist/CrateBay_<version>_<arch>.dmg  — GUI app with embedded daemon
+#   dist/CrateBay_<version>_<arch>.dmg  — GUI app with built-in runtime assets
 #   dist/cratebay                       — CLI binary
 #
 # Usage:
@@ -20,20 +20,16 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-VERSION="$(
-    grep -E '^version\\s*=\\s*\"' "$REPO_ROOT/crates/cratebay-cli/Cargo.toml" \
-        | head -n 1 \
-        | sed -E 's/.*\"([^\"]+)\".*/\\1/'
-)"
+VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml" | head -n 1)"
 if [[ -z "${VERSION}" ]]; then
-    echo "ERROR: Failed to resolve version from crates/cratebay-cli/Cargo.toml"
+    echo "ERROR: Failed to resolve version from workspace Cargo.toml"
     exit 1
 fi
 ARCH="$(uname -m)"                           # aarch64 or x86_64
 RUST_TARGET="$(rustc -vV | grep host | awk '{print $2}')"  # e.g. aarch64-apple-darwin
 
 GUI_CRATE="crates/cratebay-gui"
-TAURI_DIR="$GUI_CRATE/src-tauri"
+BUNDLE_IMAGES_DIR="$REPO_ROOT/$GUI_CRATE/src-tauri/bundle-images"
 
 ensure_node_runtime() {
     if command -v node >/dev/null 2>&1; then
@@ -84,25 +80,35 @@ if [[ "$runtime_arch" == "arm64" ]]; then
     runtime_arch="aarch64"
 fi
 
-echo "── [0/6] Building CrateBay Runtime assets ──"
+echo "── [0/5] Building CrateBay Runtime assets ──"
 bash scripts/build-runtime-assets-alpine.sh "$runtime_arch"
 
-# ── Step 1: Build daemon & CLI ───────────────────────────────────────────────
-echo "── [1/6] Building daemon and CLI (release) ──"
-cargo build --release -p cratebay-daemon -p cratebay-cli
+# ── Step 1: Build CLI ────────────────────────────────────────────────────────
+echo "── [1/6] Building CLI (release) ──"
+cargo build --release -p cratebay-cli
 
-echo "  ✓ target/release/cratebay-daemon"
 echo "  ✓ target/release/cratebay"
 
-# ── Step 2: Install frontend dependencies ────────────────────────────────────
+# ── Step 2: Ensure bundled container images ──────────────────────────────────
 echo ""
-echo "── [2/6] Installing frontend dependencies ──"
-(cd "$GUI_CRATE" && npm ci)
+echo "── [2/6] Ensuring bundled container images ──"
+if bash scripts/verify-bundle-images.sh "$BUNDLE_IMAGES_DIR"; then
+    echo "  ✓ bundled images already present"
+else
+    echo "  Building bundled images with CLI + built-in runtime..."
+    CRATEBAY_BIN="$REPO_ROOT/target/release/cratebay" bash scripts/build-bundle-images.sh
+fi
 
-# ── Step 3: Build Tauri app ──────────────────────────────────────────────────
+# ── Step 3: Install frontend dependencies ────────────────────────────────────
 echo ""
-echo "── [3/6] Building Tauri app ──"
-(cd "$GUI_CRATE" && npx tauri build)
+echo "── [3/6] Installing frontend dependencies ──"
+corepack enable
+(cd "$GUI_CRATE" && pnpm install --frozen-lockfile)
+
+# ── Step 4: Build Tauri app ──────────────────────────────────────────────────
+echo ""
+echo "── [4/6] Building Tauri app ──"
+(cd "$GUI_CRATE" && pnpm tauri build)
 
 # Locate the .app bundle produced by Tauri
 # Workspace builds place bundles under the workspace root target/ directory
@@ -115,18 +121,12 @@ fi
 APP_NAME="$(basename "$APP_BUNDLE")"
 echo "  ✓ $APP_BUNDLE"
 
-# ── Step 4: Inject daemon into .app bundle ───────────────────────────────────
-echo ""
-echo "── [4/6] Injecting daemon into $APP_NAME ──"
-cp "target/release/cratebay-daemon" "$APP_BUNDLE/Contents/MacOS/cratebay-daemon"
-echo "  ✓ $APP_BUNDLE/Contents/MacOS/cratebay-daemon"
-
 # Verify bundle structure
 echo ""
 echo "  Bundle Contents/MacOS/:"
 ls -la "$APP_BUNDLE/Contents/MacOS/"
 
-# ── Step 5: Rebuild DMG ──────────────────────────────────────────────────────
+# ── Step 5: Create DMG ───────────────────────────────────────────────────────
 echo ""
 echo "── [5/6] Creating DMG ──"
 DIST_DIR="$REPO_ROOT/dist"
@@ -138,21 +138,28 @@ DMG_PATH="$DIST_DIR/$DMG_NAME"
 # Remove old DMG if present
 rm -f "$DMG_PATH"
 
-# Create a temporary directory for DMG contents
-DMG_STAGE="$(mktemp -d)"
-cp -R "$APP_BUNDLE" "$DMG_STAGE/"
+TAURI_DMG=""
+if [[ -d "target/release/bundle/dmg" ]]; then
+    TAURI_DMG="$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | head -n 1)"
+fi
 
-# Add a symlink to /Applications for drag-to-install
-ln -s /Applications "$DMG_STAGE/Applications"
+if [[ -n "$TAURI_DMG" ]]; then
+    cp "$TAURI_DMG" "$DMG_PATH"
+else
+    # Create a temporary directory for DMG contents when Tauri did not emit one.
+    DMG_STAGE="$(mktemp -d)"
+    cp -R "$APP_BUNDLE" "$DMG_STAGE/"
+    ln -s /Applications "$DMG_STAGE/Applications"
 
-hdiutil create \
-    -volname "CrateBay $VERSION" \
-    -srcfolder "$DMG_STAGE" \
-    -ov \
-    -format UDZO \
-    "$DMG_PATH"
+    hdiutil create \
+        -volname "CrateBay $VERSION" \
+        -srcfolder "$DMG_STAGE" \
+        -ov \
+        -format UDZO \
+        "$DMG_PATH"
 
-rm -rf "$DMG_STAGE"
+    rm -rf "$DMG_STAGE"
+fi
 echo "  ✓ $DMG_PATH"
 
 # ── Step 6: Collect CLI binary ───────────────────────────────────────────────
@@ -175,4 +182,4 @@ echo ""
 echo "Next steps:"
 echo "  1. Open the DMG and drag CrateBay to Applications"
 echo "  2. Launch CrateBay from Applications"
-echo "  3. Test: ./dist/cratebay status"
+echo "  3. Test CLI: ./dist/cratebay system info"

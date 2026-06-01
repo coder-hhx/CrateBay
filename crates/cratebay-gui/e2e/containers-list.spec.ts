@@ -199,6 +199,31 @@ test.describe("Containers Management", () => {
     }
   });
 
+  test("创建容器时会提交环境变量", async ({ page }) => {
+    await page.getByRole("button", { name: "Create Container" }).first().click();
+
+    await page.getByLabel("Name (optional)").fill("env-box");
+    await page.getByLabel("Select image").fill("node:20-alpine");
+    await page.getByRole("textbox", { name: "Environment variable" }).fill("NODE_ENV=production");
+    await page.getByRole("button", { name: "Create Container" }).last().click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return commands
+            .filter((item: any) => item.command === "container_create")
+            .at(-1)?.args?.request ?? null;
+        }),
+      )
+      .toMatchObject({
+        name: "env-box",
+        image: "node:20-alpine",
+        env: ["NODE_ENV=production"],
+        autoStart: true,
+      });
+  });
+
   test("过滤功能允许按状态过滤", async ({ page }) => {
     // 寻找状态过滤器
     const statusFilter = page
@@ -244,18 +269,95 @@ test.describe("Containers Management", () => {
   });
 
   test("能够查看容器详细信息", async ({ page }) => {
-    // 点击容器卡片
-    const containerCard = page.locator('[data-testid="container-card"]').first();
-    const visible = await containerCard.isVisible({ timeout: 3000 });
+    await page
+      .locator('[data-testid="container-card"]')
+      .filter({ hasText: "node-01" })
+      .first()
+      .click();
 
-    if (visible) {
-      await containerCard.click();
-      await page.waitForTimeout(500);
+    const detailPanel = page.locator('[data-testid="container-detail"]');
+    await expect(detailPanel).toContainText("node-01");
+    await expect(detailPanel).toContainText("node:latest");
+    await expect(page.locator('[data-testid="container-logs"]')).toContainText(
+      "Mock container started",
+    );
+    await expect(page.locator('[data-testid="container-monitoring"]')).toContainText("21.0%");
+    await expect(page.locator('[data-testid="container-inspect"]')).toContainText("172.17.0.2");
+    await expect(page.locator('[data-testid="container-inspect"]')).toContainText("/workspace");
 
-      // 应该显示详细信息面板
-      const detailPanel = page.locator('[data-testid="container-detail"], .detail-panel');
-      // 可能显示详细面板，取决于实现
-    }
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return {
+            inspected: commands.some((item: any) => item.command === "container_inspect"),
+            stats: commands.some((item: any) => item.command === "container_stats"),
+          };
+        }),
+      )
+      .toEqual({ inspected: true, stats: true });
+  });
+
+  test("容器终端通过流式 exec 返回输出", async ({ page }) => {
+    await page
+      .locator('[data-testid="container-card"]')
+      .filter({ hasText: "node-01" })
+      .first()
+      .click();
+
+    await page.getByRole("tab", { name: "Terminal" }).click();
+
+    const terminal = page.locator('[data-testid="container-terminal"]');
+    await expect(terminal).toBeVisible();
+
+    await page.locator('[data-testid="terminal-input"]').fill("echo cratebay");
+    await page.getByRole("button", { name: "Execute command" }).click();
+
+    await expect(terminal).toContainText("$ echo cratebay");
+    await expect(terminal).toContainText("mock exec: echo cratebay");
+    await expect(terminal).toContainText("[exit code: 0]");
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return commands.some((item: any) => item.command === "container_exec_stream");
+        }),
+      )
+      .toBe(true);
+  });
+
+  test("能够将容器打包为本地镜像", async ({ page }) => {
+    const packedImage = "cratebay/node-packed:e2e";
+
+    await page
+      .locator('[data-testid="container-card"]')
+      .filter({ hasText: "node-01" })
+      .first()
+      .click();
+
+    await page.getByRole("button", { name: "Package Image" }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Package Image" })).toBeVisible();
+    await dialog.getByLabel("Image name").fill(packedImage);
+    await dialog.getByRole("button", { name: "Package Image" }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return commands
+            .filter((item: any) => item.command === "image_pack_container")
+            .at(-1)?.args ?? null;
+        }),
+      )
+      .toMatchObject({
+        container: "abc123",
+        image: packedImage,
+      });
+
+    await containersPage.navigateToImages();
+    await expect(page.locator('[data-testid="image-row"]').filter({ hasText: packedImage })).toBeVisible();
   });
 
   test("容器列表应该自动刷新", async ({ page }) => {

@@ -59,7 +59,7 @@ fn macos_build() {
         .join("swift")
         .join("macosx");
 
-    // Ensure clang module cache is writable in sandboxed environments.
+    // Ensure clang module cache is writable in restricted build environments.
     // `swiftc` uses clang to import the bridging header and will try to write
     // its module cache under `$HOME/.cache/clang/ModuleCache` by default,
     // which may not be writable. Override it to a directory under OUT_DIR.

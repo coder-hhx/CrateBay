@@ -1,9 +1,9 @@
 //! Docker connection management.
 //!
 //! All Docker operations use `bollard` with `Arc<Docker>` for shared access.
-//! Supports multi-platform socket detection.
-//! Only connects to the CrateBay built-in runtime — external Docker daemons
-//! (Colima, Docker Desktop, OrbStack, Podman) are not attempted.
+//! The default connection path is the CrateBay built-in runtime. External
+//! Docker-compatible endpoints are only used when explicitly configured via
+//! `DOCKER_HOST` or a caller-provided host string.
 
 use bollard::Docker;
 use std::time::Duration;
@@ -20,6 +20,23 @@ enum DockerHostTarget {
 
 const DOCKER_PING_TIMEOUT_SECS: u64 = 5;
 const DOCKER_DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+fn normalize_explicit_host(raw: Option<String>) -> Option<String> {
+    raw.and_then(|host| {
+        let host = host.trim();
+        (!host.is_empty()).then(|| host.to_string())
+    })
+}
+
+/// Return the explicit Docker-compatible host selected via `DOCKER_HOST`, if any.
+pub fn explicit_host_override() -> Option<String> {
+    normalize_explicit_host(std::env::var("DOCKER_HOST").ok())
+}
+
+/// Returns `true` when the source string represents the built-in runtime.
+pub fn is_builtin_source(source: Option<&str>) -> bool {
+    matches!(source, Some("builtin") | Some("built-in") | Some("runtime"))
+}
 
 fn parse_docker_host_target(raw: &str) -> Option<DockerHostTarget> {
     let host = raw.trim();
@@ -137,25 +154,32 @@ async fn try_connect_target(target: DockerHostTarget) -> Option<Docker> {
     }
 }
 
-/// Create a Docker client connection.
+/// Create a Docker client connection to an explicit Docker-compatible host.
+pub async fn connect_host(host: &str) -> Result<Docker, AppError> {
+    let target = parse_docker_host_target(host).ok_or_else(|| {
+        AppError::Runtime(format!("Unsupported Docker host format: {}", host.trim()))
+    })?;
+
+    try_connect_target(target)
+        .await
+        .ok_or_else(|| AppError::Runtime(format!("Docker host is not reachable: {}", host.trim())))
+}
+
+/// Create a Docker client connection without starting the runtime.
 ///
 /// Attempts connections in priority order:
-/// 1. `DOCKER_HOST` environment variable
-/// 2. Built-in runtime socket
-/// 3. Built-in runtime TCP (Linux/Windows)
-/// 4. Bollard local defaults as fallback
+/// 1. `DOCKER_HOST` environment variable (explicit compatibility override)
+/// 2. Already-running built-in runtime socket
+/// 3. Already-running built-in runtime TCP (Linux/Windows)
+///
+/// This intentionally does not probe Bollard local defaults; CrateBay's
+/// product path is the built-in runtime unless a Docker host was explicit.
 pub async fn connect() -> Result<Docker, AppError> {
     // 1. DOCKER_HOST environment variable (supports unix/tcp/http/npipe)
-    if let Ok(host) = std::env::var("DOCKER_HOST") {
-        if let Some(target) = parse_docker_host_target(&host) {
-            if let Some(docker) = try_connect_target(target).await {
-                tracing::info!("Connected via DOCKER_HOST");
-                return Ok(docker);
-            }
-            tracing::warn!("DOCKER_HOST is set but Docker is not reachable");
-        } else if !host.trim().is_empty() {
-            tracing::warn!("DOCKER_HOST is set but has an unsupported format");
-        }
+    if let Some(host) = explicit_host_override() {
+        let docker = connect_host(&host).await?;
+        tracing::info!("Connected via DOCKER_HOST");
+        return Ok(docker);
     }
 
     // 2. Try built-in runtime socket
@@ -221,15 +245,9 @@ pub async fn connect() -> Result<Docker, AppError> {
         }
     }
 
-    // 4. Try local defaults as a final fallback
-    tracing::debug!("Trying Docker local defaults");
-    let docker = Docker::connect_with_local_defaults()?;
-    if !crate::docker::is_available(&docker).await {
-        return Err(AppError::Runtime(
-            "Docker local defaults detected but daemon is not reachable".to_string(),
-        ));
-    }
-    Ok(docker)
+    Err(AppError::Runtime(
+        "Built-in runtime Docker endpoint is not reachable".to_string(),
+    ))
 }
 
 /// Attempt to connect, returning None if Docker is not available.
@@ -293,5 +311,42 @@ mod tests {
             }
             other => panic!("unexpected target: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_docker_host_target_rejects_context_names() {
+        assert!(parse_docker_host_target("").is_none());
+        assert!(parse_docker_host_target("desktop-linux").is_none());
+        assert!(parse_docker_host_target("orbstack").is_none());
+    }
+
+    #[test]
+    fn normalize_explicit_host_trims_and_ignores_blank_values() {
+        assert_eq!(
+            normalize_explicit_host(Some("  tcp://127.0.0.1:2375  ".to_string())),
+            Some("tcp://127.0.0.1:2375".to_string())
+        );
+        assert_eq!(normalize_explicit_host(Some("   ".to_string())), None);
+        assert_eq!(normalize_explicit_host(None), None);
+    }
+
+    #[test]
+    fn builtin_source_detection_accepts_legacy_labels() {
+        assert!(is_builtin_source(Some("builtin")));
+        assert!(is_builtin_source(Some("built-in")));
+        assert!(is_builtin_source(Some("runtime")));
+        assert!(!is_builtin_source(Some("tcp://127.0.0.1:2375")));
+        assert!(!is_builtin_source(None));
+    }
+
+    #[test]
+    fn default_connection_does_not_probe_bollard_local_defaults() {
+        let source = include_str!("docker.rs");
+        let forbidden = "connect_with_".to_string() + "local_defaults";
+
+        assert!(
+            !source.contains(&forbidden),
+            "default connection must not auto-detect external Docker engines"
+        );
     }
 }

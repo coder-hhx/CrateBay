@@ -113,9 +113,9 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       const prev = get().containers;
       const prevOrder = new Map(prev.map((c, i) => [c.name, i]));
       const merged = [...result, ...placeholders].sort((a, b) => {
-        const ai = prevOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER;
-        const bi = prevOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER;
-        return ai - bi;
+        const aOrder = prevOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+        const bOrder = prevOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+        return aOrder - bOrder;
       });
       const hasTransitional = merged.some((c) =>
         c.status === "creating"

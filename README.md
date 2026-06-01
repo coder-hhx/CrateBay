@@ -1,110 +1,62 @@
 # CrateBay
 
-Open-source, cross-platform container management with built-in AI sandbox.
+Open-source, cross-platform container and image management.
 
-CrateBay is an alternative to Docker Desktop and OrbStack — fully open-source, works on macOS/Windows/Linux, and has built-in AI code execution capabilities. Manage containers and images through a desktop GUI, or let AI agents run code safely in local sandboxes via MCP protocol.
+CrateBay is a desktop alternative to Docker Desktop and OrbStack. It focuses on local container workflows: browse and remove images, search registries, pull new images, create containers, inspect logs, and manage a built-in runtime across macOS, Linux, and Windows.
+
+The CLI and built-in runtime form the minimum usable unit: the desktop app is a
+visual control plane on top of the same core container operations.
+External Docker-compatible endpoints are supported as explicit compatibility
+overrides, but the built-in runtime is the default path.
 
 ## Why CrateBay?
 
-- **Open source** — MIT licensed, free forever. Docker Desktop is proprietary; OrbStack is macOS-only
-- **Cross-platform** — macOS, Windows, Linux. No platform lock-in
-- **Built-in AI** — Chat with AI that can execute code in sandboxes. No other container tool does this
-- **No Docker required** — built-in VM runtime (macOS: Virtualization.framework, Linux: KVM, Windows: WSL2)
-- **MCP compatible** — connect Claude Desktop, Cursor, Windsurf to run code via MCP protocol
-- **Zero cost** — no cloud bills, no usage limits, code never leaves your machine
-
-## How It Works
-
-```
-Your AI Agent                    CrateBay                         Local VM
-(Claude, Cursor, etc.)           (MCP Server)                     (Docker inside VM)
-       │                              │                                │
-       │  "run this Python script"    │                                │
-       ├─────────────────────────────►│                                │
-       │                              │  create sandbox + exec code    │
-       │                              ├───────────────────────────────►│
-       │                              │                                │
-       │                              │  stdout/stderr + exit code     │
-       │       result                 │◄───────────────────────────────┤
-       │◄─────────────────────────────┤                                │
-```
+- **Open source** — MIT licensed and free to use
+- **Cross-platform** — macOS, Linux, and Windows
+- **Built-in runtime** — starts a local VM-backed container engine when needed
+- **Image-first workflow** — search, pull, inspect, tag, and remove images from one UI
+- **Container management** — create, start, stop, inspect, exec, and view logs
+- **Pod grouping** — manage Docker network based pods for related containers
+- **Registry mirrors** — configure mirror hosts for faster Docker Hub pulls
 
 ## Quick Start
 
-### 1. Install
+```bash
+cd crates/cratebay-gui
+pnpm install
+pnpm tauri dev
+```
+
+CLI examples:
 
 ```bash
-# macOS (Apple Silicon & Intel)
-brew install --cask cratebay
-
-# Or download from Releases
+cratebay runtime start
+cratebay image search alpine
+cratebay image pull alpine:latest
+cratebay run alpine:latest -- echo hello
+cratebay run --network none --read-only --memory 512 alpine:latest -- sh -lc "pwd && id"
+cratebay run --entrypoint /bin/sh alpine:latest -- -lc "echo from custom entrypoint"
+cratebay --json run --max-output-bytes 1048576 alpine:latest -- sh -lc "echo bounded output"
+cratebay --json run --no-propagate-exit-code alpine:latest -- sh -lc "exit 42"
+cratebay image preload-bundled
+cratebay image export --output alpine.tar alpine:latest
+cratebay image import alpine.tar
+cratebay pod create demo-pod
+cratebay container create demo --image alpine:latest --entrypoint /bin/sh --command "sleep 3600" --pod demo-pod --publish 8080:80 --volume "$PWD:/workspace:ro"
+cratebay image pack-container demo cratebay/demo:latest
+cratebay image tag cratebay/demo:latest cratebay/demo:dev
+cratebay container list --all
 ```
 
-### 2. Connect to Your AI
-
-Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "cratebay": {
-      "command": "cratebay-mcp"
-    }
-  }
-}
-```
-
-### 3. Use It
-
-Tell your AI:
-
-> "Create a Python sandbox and run: print('Hello from CrateBay')"
-
-CrateBay handles the rest — VM startup, container creation, code execution, result delivery.
-
-## Features
-
-### MCP Server — Let Any AI Run Code
-
-The `cratebay-mcp` binary exposes sandbox tools via the Model Context Protocol:
-
-| Tool | What It Does |
-|------|-------------|
-| `sandbox_run_code` | Create sandbox + execute code + return result (one-shot) |
-| `sandbox_create` | Create a persistent sandbox from template |
-| `sandbox_exec` | Run a command in an existing sandbox |
-| `sandbox_install` | Install packages (pip, npm, apt) |
-| `sandbox_upload` / `sandbox_download` | Transfer files in/out of sandbox |
-| `sandbox_list` | List running sandboxes |
-| `sandbox_stop` / `sandbox_delete` | Lifecycle management |
-
-### Desktop App — Visual Sandbox Management
+## Desktop App
 
 The CrateBay desktop app provides:
 
-- **Chat interface** — talk to an AI assistant that manages sandboxes through natural language
-- **Sandbox dashboard** — see running sandboxes, resource usage, logs
-- **Image management** — search, pull, and manage container images
-- **MCP server management** — connect external MCP tool servers
-- **Settings** — LLM provider config, runtime settings, registry mirrors
-
-### CLI — Headless Operations
-
-```bash
-cratebay sandbox create --template python-dev
-cratebay sandbox exec <id> -- python -c "print('hello')"
-cratebay sandbox list
-cratebay sandbox stop <id>
-```
-
-### Pre-built Sandbox Templates
-
-| Template | Image | Use Case |
-|----------|-------|----------|
-| `python-dev` | Python 3.12 + pip | Data analysis, scripting, ML |
-| `node-dev` | Node.js 20 + npm | Web development, scripting |
-| `rust-dev` | Rust stable + cargo | Systems programming |
-| `ubuntu-base` | Ubuntu 24.04 | General purpose |
+- **Containers** — lifecycle actions, templates, logs, terminal access, and resource details
+- **Images** — local image list, registry search, pull progress, inspect, tag, export, import, and delete
+- **Pods** — network-based container grouping inside Containers
+- **Runtime** — start/stop/restart the built-in engine and configure HTTP proxy settings
+- **Settings** — language, theme, registry mirrors, and runtime connectivity
 
 ## Architecture
 
@@ -112,51 +64,42 @@ cratebay sandbox stop <id>
 ┌─────────────────────────────────────────────────────┐
 │  CrateBay                                            │
 │                                                      │
-│  ┌──────────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │ cratebay-mcp │  │ GUI App  │  │ cratebay-cli  │  │
-│  │ (MCP Server) │  │ (Tauri)  │  │ (CLI)         │  │
-│  └──────┬───────┘  └────┬─────┘  └──────┬────────┘  │
-│         └───────────────┼───────────────┘            │
-│                         │                            │
-│              ┌──────────▼──────────┐                 │
-│              │   cratebay-core     │                 │
-│              │   (Rust library)    │                 │
-│              └──────────┬──────────┘                 │
-│                         │                            │
-│              ┌──────────▼──────────┐                 │
-│              │  Built-in Runtime   │                 │
-│              │  macOS: VZ.framework│                 │
-│              │  Linux: KVM/QEMU   │                 │
-│              │  Windows: WSL2     │                 │
-│              │       ↓            │                 │
-│              │  Docker in VM      │                 │
-│              └─────────────────────┘                 │
+│  ┌──────────────┐        ┌───────────────────────┐  │
+│  │ GUI App      │        │ cratebay-cli           │  │
+│  │ Tauri + React│        │ command line           │  │
+│  └──────┬───────┘        └──────────┬────────────┘  │
+│         └───────────────┬───────────┘               │
+│                         │                           │
+│              ┌──────────▼──────────┐                │
+│              │   cratebay-core     │                │
+│              │ Docker + storage    │                │
+│              └──────────┬──────────┘                │
+│                         │                           │
+│              ┌──────────▼──────────┐                │
+│              │  Built-in Runtime   │                │
+│              │  macOS: VZ          │                │
+│              │  Linux: KVM/QEMU    │                │
+│              │  Windows: WSL2      │                │
+│              └─────────────────────┘                │
 └─────────────────────────────────────────────────────┘
 ```
 
-**Tech stack**: Tauri v2 | React 19 | Rust | bollard | SQLite | pi-agent-core
+**Tech stack**: Tauri v2 | React 19 | Rust | bollard | SQLite
 
 ## Compared To
 
-| | CrateBay | Docker Desktop | OrbStack | E2B |
+| | CrateBay | Docker Desktop | OrbStack | Podman Desktop |
 |---|---|---|---|---|
-| Open source | MIT | No | No | Partial |
-| Cross-platform | macOS/Win/Linux | macOS/Win/Linux | macOS only | Cloud |
-| Container mgmt | Yes | Yes | Yes | No |
-| AI chat + sandbox | Yes | No | No | API only |
-| MCP support | Yes | No | No | No |
-| Cost | Free | Free / $5+/mo | Free / $8/mo | $0.01/min |
-| No Docker needed | Yes (built-in VM) | Is Docker | Requires Docker | N/A |
+| Open source | MIT | No | No | Yes |
+| Cross-platform | macOS/Win/Linux | macOS/Win/Linux | macOS only | macOS/Win/Linux |
+| Built-in runtime | Yes | Yes | Yes | Yes |
+| Image management | Yes | Yes | Yes | Yes |
+| Container logs/exec | Yes | Yes | Yes | Yes |
+| Cost | Free | Free / paid tiers | Free / paid tiers | Free |
 
 ## Status
 
-v0.9.0 → v1.0.0 — Container management + AI ChatPage with sandbox execution.
-
-See [docs/progress.md](docs/progress.md) for detailed development status and [docs/ROADMAP.md](docs/ROADMAP.md) for the release plan.
-
-## Contributing
-
-This project uses [AGENTS.md](AGENTS.md) for AI-assisted development. See [docs/](docs/) for technical specs and workflow guides.
+v0.9.0 focuses on image management, pod grouping, container lifecycle, one-shot CLI runs, and the built-in runtime.
 
 ## License
 

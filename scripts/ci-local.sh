@@ -7,6 +7,12 @@ cd "$repo_root"
 echo "== Local CI: Rust fmt =="
 cargo fmt --check
 
+echo "== Local CI: Product surface guard =="
+./scripts/product-surface-guard.sh
+
+echo "== Local CI: Tauri command surface =="
+./scripts/verify-tauri-command-surface.sh
+
 os_name="$(uname -s)"
 if [[ "$os_name" == "Darwin" ]]; then
   clippy_args=(--workspace --exclude cratebay-gui -- -D warnings)
@@ -26,39 +32,6 @@ ready_runtime_file() {
   fi
   return 0
 }
-
-echo "== Local CI: Rust clippy =="
-cargo clippy "${clippy_args[@]}"
-
-echo "== Local CI: Rust tests =="
-cargo test "${test_args[@]}"
-
-if [[ "$os_name" == "Darwin" ]]; then
-  rust_target="$(rustc -vV | awk '/^host:/ {print $2}' | head -n 1)"
-  tauri_runner="$repo_root/crates/cratebay-gui/src-tauri/bin/cratebay-vz-${rust_target}"
-  if ready_runtime_file "$tauri_runner"; then
-    echo "== Local CI: Tauri external bin already present =="
-  else
-    echo "== Local CI: Prepare Tauri external bin (${rust_target}) =="
-    bash "$repo_root/scripts/prepare-tauri-external-bins.sh" "$rust_target"
-  fi
-fi
-
-echo "== Local CI: GUI backend Rust check =="
-cargo check -p cratebay-gui
-
-echo "== Local CI: GUI backend Rust tests =="
-cargo test -p cratebay-gui
-
-if [[ "$os_name" == "Darwin" ]]; then
-  if [[ "${CRATEBAY_RUN_VZ_TESTS:-0}" == "1" ]]; then
-    echo "== Local CI: cratebay-vz tests =="
-    cargo test -p cratebay-vz -- --test-threads=1
-  else
-    echo "== Local CI: cratebay-vz tests skipped =="
-    echo "Set CRATEBAY_RUN_VZ_TESTS=1 to run cratebay-vz tests locally."
-  fi
-fi
 
 ensure_node_runtime() {
   if command -v node >/dev/null 2>&1; then
@@ -87,6 +60,23 @@ ensure_node_runtime() {
   return 1
 }
 
+echo "== Local CI: Rust clippy =="
+cargo clippy "${clippy_args[@]}"
+
+echo "== Local CI: Rust tests =="
+cargo test "${test_args[@]}"
+
+if [[ "$os_name" == "Darwin" ]]; then
+  rust_target="$(rustc -vV | awk '/^host:/ {print $2}' | head -n 1)"
+  tauri_runner="$repo_root/crates/cratebay-gui/src-tauri/bin/cratebay-vz-${rust_target}"
+  if ready_runtime_file "$tauri_runner"; then
+    echo "== Local CI: Tauri external bin already present =="
+  else
+    echo "== Local CI: Prepare Tauri external bin (${rust_target}) =="
+    bash "$repo_root/scripts/prepare-tauri-external-bins.sh" "$rust_target"
+  fi
+fi
+
 if ! ensure_node_runtime; then
   if command -v node >/dev/null 2>&1; then
     node_version="$(node -v)"
@@ -101,33 +91,68 @@ fi
 node_major="$(node -p "process.versions.node.split('.')[0]")"
 node_version="$(node -v)"
 
+echo "== Local CI: Frontend dist for Tauri =="
+echo "Node runtime: ${node_version}"
+pushd crates/cratebay-gui >/dev/null
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run build
+popd >/dev/null
+
+echo "== Local CI: GUI backend Rust check =="
+cargo check -p cratebay-gui
+
+echo "== Local CI: GUI backend Rust tests =="
+cargo test -p cratebay-gui
+
+if [[ "$os_name" == "Darwin" ]]; then
+  if [[ "${CRATEBAY_RUN_VZ_TESTS:-0}" == "1" ]]; then
+    echo "== Local CI: cratebay-vz tests =="
+    cargo test -p cratebay-vz -- --test-threads=1
+  else
+    echo "== Local CI: cratebay-vz tests skipped =="
+    echo "Set CRATEBAY_RUN_VZ_TESTS=1 to run cratebay-vz tests locally."
+  fi
+fi
+
 echo "== Local CI: Frontend checks =="
 echo "Node runtime: ${node_version}"
 pushd crates/cratebay-gui >/dev/null
-npm ci
-npm run lint
-npm run build
-npm run check:i18n
-npm run test:unit
+pnpm run lint
+pnpm run check:i18n
+pnpm run test:unit
 
 echo "== Local CI: Frontend coverage =="
-npm run test:coverage || echo "Coverage report may have non-zero exit if thresholds not met"
+pnpm run test:coverage || echo "Coverage report may have non-zero exit if thresholds not met"
 
 echo "== Local CI: Playwright browser install =="
-npx playwright install chromium
+pnpm exec playwright install chromium
 echo "== Local CI: Frontend E2E tests =="
-npx playwright test
+pnpm exec playwright test
 popd >/dev/null
 
-echo "== Local CI: AI runtime smoke =="
-./scripts/ai-runtime-smoke.sh
-
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  echo "== Local CI: Docker runtime smoke =="
-  ./scripts/docker-runtime-smoke.sh
+if [[ "${CRATEBAY_RUN_RUNTIME_SMOKE:-0}" == "1" ]]; then
+  echo "== Local CI: CLI + built-in runtime smoke =="
+  ./scripts/runtime-smoke-cli-only.sh
 else
-  echo "== Local CI: Docker runtime smoke skipped =="
-  echo "Docker daemon is not available on this machine."
+  echo "== Local CI: CLI + built-in runtime smoke skipped =="
+  echo "Set CRATEBAY_RUN_RUNTIME_SMOKE=1 to start the built-in runtime and run the smoke test."
+fi
+
+if [[ "${CRATEBAY_RUN_LOCAL_REGISTRY_SMOKE:-0}" == "1" ]]; then
+  echo "== Local CI: CLI + built-in runtime local registry pull smoke =="
+  ./scripts/runtime-smoke-local-registry.sh
+else
+  echo "== Local CI: CLI + built-in runtime local registry pull smoke skipped =="
+  echo "Set CRATEBAY_RUN_LOCAL_REGISTRY_SMOKE=1 to verify pull through a local registry container."
+fi
+
+if [[ "${CRATEBAY_RUN_ONLINE_PULL_SMOKE:-0}" == "1" ]]; then
+  echo "== Local CI: CLI + built-in runtime live registry pull smoke =="
+  ./scripts/runtime-smoke-online-pull.sh
+else
+  echo "== Local CI: CLI + built-in runtime live registry pull smoke skipped =="
+  echo "Set CRATEBAY_RUN_ONLINE_PULL_SMOKE=1 when this host can reach Docker Hub or a configured registry."
 fi
 
 # Performance benchmarks (optional — requires release binaries)
@@ -136,7 +161,7 @@ if [[ -f "${RELEASE_DIR:-target/release}/cratebay" ]]; then
   ./scripts/bench-perf.sh
 else
   echo "== Local CI: Performance benchmarks skipped =="
-  echo "Run 'cargo build --release -p cratebay-cli -p cratebay-daemon' first, then re-run."
+  echo "Run 'cargo build --release -p cratebay-cli' first, then re-run."
 fi
 
 echo "== Local CI complete =="

@@ -56,6 +56,7 @@ pub struct ContainerListFilters {
 pub struct ContainerCreateRequest {
     pub name: String,
     pub image: String,
+    pub entrypoint: Option<String>,
     pub command: Option<String>,
     pub env: Option<Vec<String>>,
     pub ports: Option<Vec<PortMapping>>,
@@ -63,9 +64,51 @@ pub struct ContainerCreateRequest {
     pub cpu_cores: Option<u32>,
     pub memory_mb: Option<u64>,
     pub working_dir: Option<String>,
+    pub pod: Option<String>,
+    pub network: Option<String>,
+    pub user: Option<String>,
+    pub read_only_rootfs: Option<bool>,
     pub auto_start: Option<bool>,
     pub labels: Option<HashMap<String, String>>,
     pub template_id: Option<String>,
+}
+
+/// Request to run a one-shot container and collect its output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerRunRequest {
+    pub name: Option<String>,
+    pub image: String,
+    pub entrypoint: Option<String>,
+    pub command: Vec<String>,
+    pub env: Option<Vec<String>>,
+    pub volumes: Option<Vec<VolumeMount>>,
+    pub cpu_cores: Option<u32>,
+    pub memory_mb: Option<u64>,
+    pub working_dir: Option<String>,
+    pub pod: Option<String>,
+    pub network: Option<String>,
+    pub user: Option<String>,
+    pub read_only_rootfs: Option<bool>,
+    pub pull: bool,
+    pub remove: bool,
+    pub timeout_secs: Option<u64>,
+    pub max_output_bytes: Option<u64>,
+}
+
+/// Result of a one-shot container run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerRunResult {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub exit_code: i64,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub timed_out: bool,
 }
 
 /// Result of a container exec command.
@@ -75,6 +118,9 @@ pub struct ExecResult {
     pub exit_code: i64,
     pub stdout: String,
     pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub timed_out: bool,
 }
 
 /// Exec streaming chunk.
@@ -192,6 +238,28 @@ pub struct ImageInspectInfo {
     pub layers: u32,
 }
 
+/// Pod container membership information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodContainerInfo {
+    pub id: String,
+    pub name: String,
+    pub ipv4_address: Option<String>,
+    pub ipv6_address: Option<String>,
+}
+
+/// Pod / group information backed by a Docker network.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodInfo {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub created_at: Option<String>,
+    pub labels: HashMap<String, String>,
+    pub containers: Vec<PodContainerInfo>,
+}
+
 /// Container lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -206,203 +274,28 @@ pub enum ContainerStatus {
     Created,
 }
 
-// ---------------------------------------------------------------------------
-// LLM / AI models
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Supported LLM API format types.
-///
-/// Determines how the Rust proxy constructs outgoing HTTP requests and
-/// parses the streaming response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ApiFormat {
-    /// Anthropic Messages API (`/v1/messages`).
-    Anthropic,
-    /// OpenAI Responses API (`/v1/responses`) — supports reasoning effort.
-    OpenAiResponses,
-    /// OpenAI Chat Completions API (`/v1/chat/completions`).
-    OpenAiCompletions,
-}
+    #[test]
+    fn exec_result_serializes_timeout_state_with_cli_field_names() {
+        let value = ExecResult {
+            exit_code: 124,
+            stdout: String::new(),
+            stderr: "Execution timed out after 1s".to_string(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            timed_out: true,
+        };
 
-impl ApiFormat {
-    /// Convert to a string representation for database storage.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ApiFormat::Anthropic => "anthropic",
-            ApiFormat::OpenAiResponses => "openai_responses",
-            ApiFormat::OpenAiCompletions => "openai_completions",
-        }
+        let json = serde_json::to_value(value).expect("exec result should serialize");
+
+        assert_eq!(json["exitCode"], 124);
+        assert_eq!(json["stdoutTruncated"], false);
+        assert_eq!(json["stderrTruncated"], false);
+        assert_eq!(json["timedOut"], true);
     }
-
-    /// Parse from a database-stored string.
-    pub fn parse_db(s: &str) -> Option<Self> {
-        s.parse::<ApiFormat>().ok()
-    }
-}
-
-impl std::str::FromStr for ApiFormat {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "anthropic" => Ok(ApiFormat::Anthropic),
-            "openai_responses" => Ok(ApiFormat::OpenAiResponses),
-            "openai_completions" => Ok(ApiFormat::OpenAiCompletions),
-            _ => Err(()),
-        }
-    }
-}
-
-/// LLM provider configuration (stored in SQLite).
-///
-/// The `api_key` is **never** included — it is stored encrypted separately
-/// and only decrypted in-memory during an outgoing request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LlmProvider {
-    pub id: String,
-    pub name: String,
-    pub api_base: String,
-    pub api_format: ApiFormat,
-    pub enabled: bool,
-    /// `true` when an encrypted API key exists for this provider.
-    pub has_api_key: bool,
-    /// Free-form notes about this provider.
-    pub notes: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// A single chat message exchanged between frontend and Rust proxy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCallInfo>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
-/// Describes a tool-call emitted by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallInfo {
-    pub id: String,
-    pub name: String,
-    /// JSON-encoded arguments.
-    pub arguments: String,
-}
-
-/// Tool definition sent alongside a chat request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    /// JSON Schema for the tool's input parameters.
-    pub parameters: serde_json::Value,
-}
-
-/// Optional parameters for an LLM request.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LlmOptions {
-    pub model: Option<String>,
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-    pub top_p: Option<f32>,
-    pub tools: Option<Vec<ToolDefinition>>,
-    /// `"low"`, `"medium"`, or `"high"` — only effective when the provider
-    /// uses `ApiFormat::OpenAiResponses`.
-    pub reasoning_effort: Option<String>,
-}
-
-/// A chunk emitted during LLM response streaming.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum LlmStreamEvent {
-    /// A content token fragment.
-    Token { content: String },
-    /// The model requested a tool call.
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: String,
-    },
-    /// Stream completed successfully.
-    Done { usage: UsageStats },
-    /// An error occurred during streaming.
-    Error { message: String },
-}
-
-/// Token usage statistics returned when the stream is complete.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageStats {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-}
-
-/// Minimal information about a model, as returned by `/v1/models`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub name: String,
-}
-
-/// Extended model info stored in the local database.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmModelInfo {
-    pub id: String,
-    pub provider_id: String,
-    pub name: String,
-    pub is_enabled: bool,
-    pub supports_reasoning: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Conversation models
-// ---------------------------------------------------------------------------
-
-/// Summary of a conversation for list views.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationSummary {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub message_count: u32,
-    pub last_message_preview: Option<String>,
-}
-
-/// Full conversation with all messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationDetail {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub messages: Vec<ChatMessage>,
-}
-
-/// Request to save a message to a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveMessageRequest {
-    pub role: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCallInfo>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -417,17 +310,7 @@ pub enum AuditAction {
     ContainerStop,
     ContainerDelete,
     ContainerExec,
-    ApiKeySave,
-    ApiKeyDelete,
-    ProviderCreate,
-    ProviderUpdate,
-    ProviderDelete,
-    ModelToggle,
-    McpServerStart,
-    McpServerStop,
     SettingsUpdate,
-    ConversationCreate,
-    ConversationDelete,
 }
 
 impl AuditAction {
@@ -439,50 +322,9 @@ impl AuditAction {
             AuditAction::ContainerStop => "container.stop",
             AuditAction::ContainerDelete => "container.delete",
             AuditAction::ContainerExec => "container.exec",
-            AuditAction::ApiKeySave => "api_key.save",
-            AuditAction::ApiKeyDelete => "api_key.delete",
-            AuditAction::ProviderCreate => "provider.create",
-            AuditAction::ProviderUpdate => "provider.update",
-            AuditAction::ProviderDelete => "provider.delete",
-            AuditAction::ModelToggle => "model.toggle",
-            AuditAction::McpServerStart => "mcp_server.start",
-            AuditAction::McpServerStop => "mcp_server.stop",
             AuditAction::SettingsUpdate => "settings.update",
-            AuditAction::ConversationCreate => "conversation.create",
-            AuditAction::ConversationDelete => "conversation.delete",
         }
     }
-}
-
-/// Request to create a new LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LlmProviderCreateRequest {
-    pub name: String,
-    pub api_base: String,
-    pub api_key: String,
-    pub api_format: ApiFormat,
-}
-
-/// Request to update an LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LlmProviderUpdateRequest {
-    pub name: Option<String>,
-    pub api_base: Option<String>,
-    pub api_key: Option<String>,
-    pub api_format: Option<ApiFormat>,
-    pub enabled: Option<bool>,
-}
-
-/// Result from testing provider connectivity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderTestResult {
-    pub success: bool,
-    pub latency_ms: u64,
-    pub model: String,
-    pub error: Option<String>,
 }
 
 /// Docker connection status.
@@ -496,77 +338,6 @@ pub struct DockerStatus {
     pub arch: Option<String>,
     pub source: String,
     pub socket_path: Option<String>,
-}
-
-/// MCP server status with runtime info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpServerStatus {
-    pub id: String,
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<String>,
-    pub enabled: bool,
-    pub running: bool,
-    pub pid: Option<u32>,
-    pub last_started_at: Option<String>,
-    pub last_exit_code: Option<i32>,
-    pub tools: Vec<McpToolInfo>,
-}
-
-/// MCP tool information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpToolInfo {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    pub server_id: String,
-    pub server_name: String,
-}
-
-// ---------------------------------------------------------------------------
-// MCP models
-// ---------------------------------------------------------------------------
-
-/// MCP server connection information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerInfo {
-    pub id: String,
-    pub name: String,
-    pub transport: McpTransport,
-    pub status: McpConnectionStatus,
-}
-
-/// MCP server configuration for adding/updating.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    pub name: String,
-    pub command: String,
-    pub args: Option<Vec<String>>,
-    pub env: Option<Vec<String>>,
-    pub working_dir: Option<String>,
-    pub enabled: Option<bool>,
-    pub notes: Option<String>,
-    pub auto_start: Option<bool>,
-}
-
-/// MCP transport type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum McpTransport {
-    Stdio,
-    Sse,
-}
-
-/// MCP connection status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum McpConnectionStatus {
-    Connected,
-    Disconnected,
-    Error,
 }
 
 // ---------------------------------------------------------------------------

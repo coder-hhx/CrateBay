@@ -17,6 +17,7 @@ declare global {
       cmd: string,
       args?: Record<string, unknown>,
     ) => unknown | Promise<unknown>;
+    __MOCK_TAURI__?: unknown;
   }
 }
 
@@ -33,14 +34,14 @@ export function isTauri(): boolean {
  * when Tauri is not available (browser-only development).
  */
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri()) {
-    return tauriInvoke<T>(cmd, args);
-  }
-
   const mockInvoke =
     typeof window !== "undefined" ? window.__MOCK_TAURI_INVOKE__ : undefined;
   if (typeof mockInvoke === "function") {
     return (await mockInvoke(cmd, args)) as T;
+  }
+
+  if (isTauri()) {
+    return tauriInvoke<T>(cmd, args);
   }
 
   throw new Error(
@@ -56,7 +57,12 @@ export async function listen<T>(
   event: string,
   handler: (payload: T) => void,
 ): Promise<() => void> {
-  if (isTauri()) {
+  const hasMock =
+    typeof window !== "undefined" &&
+    (typeof window.__MOCK_TAURI_INVOKE__ === "function" ||
+      window.__MOCK_TAURI__ !== undefined);
+
+  if (isTauri() && !hasMock) {
     const unlisten = await tauriListen<T>(event, (e) => {
       handler(e.payload);
     });

@@ -1,24 +1,6 @@
 // Type re-exports
 // Auto-generated types from tauri-specta will be added here
 
-// Agent types
-export type {
-  AgentEvent,
-  AgentMessage,
-  AgentState,
-  AgentTool,
-  AgentToolResult,
-  StreamFn,
-  ThinkingLevel,
-  RiskLevel,
-  LlmStreamEvent,
-  UsageStats,
-  ApiFormat as AgentApiFormat,
-} from "./agent";
-
-// Chat types
-export type { ChatSession, ChatMessage, ToolCallInfo, LlmTokenEvent } from "./chat";
-
 // Container types
 export type {
   ContainerInfo,
@@ -30,18 +12,14 @@ export type {
   ContainerLogEvent,
 } from "./container";
 
-// MCP types
-export type { McpServerInfo, McpServerConfig, McpToolInfo } from "./mcp";
+// Image types
+export type { LocalImageInfo, ImageSearchResult, ImageInspectInfo } from "./image";
+
+// Pod types
+export type { PodContainerInfo, PodInfo } from "./pod";
 
 // Settings types
-export type {
-  ApiFormat,
-  LlmProviderInfo,
-  LlmProviderCreateRequest,
-  LlmProviderUpdateRequest,
-  LlmModelInfo,
-  AppSettings,
-} from "./settings";
+export type { AppSettings } from "./settings";
 
 // i18n types
 export type { Translations } from "./i18n";

@@ -1,118 +1,103 @@
 # CrateBay
 
-开源本地 AI 沙盒。在你的机器上安全地运行代码 — 无需云端，零成本。
+开源、跨平台的容器与镜像管理工具。
 
-CrateBay 为任何 AI Agent（Claude、Cursor、Windsurf 等）提供安全的代码执行沙盒 — 全部在本地轻量级虚拟机中运行。无需安装 Docker。
+CrateBay 是 Docker Desktop 和 OrbStack 的桌面替代方案，专注本地容器工作流：浏览和删除镜像、搜索仓库、拉取新镜像、创建容器、查看日志，并在 macOS、Linux、Windows 上管理内置运行时。
+
+CLI 与内置运行时构成最小可用单元；桌面应用是同一套容器能力之上的可视化控制面。
+外部 Docker 兼容端点只作为显式兼容入口支持，默认路径始终是内置运行时。
 
 ## 为什么选 CrateBay？
 
-AI Agent 需要一个安全的地方来运行代码。云端沙盒（E2B、Modal）按分钟计费，且代码会离开你的机器。CrateBay 一切本地运行：
-
-- **零成本** — 无云端账单，无用量限制
-- **隐私安全** — 代码不离开你的电脑
-- **低延迟** — 本地虚拟机，无网络往返
-- **兼容任何 AI** — MCP 协议，支持 Claude Desktop、Cursor、Windsurf 等所有 MCP 客户端
-- **无需 Docker** — 内置虚拟机运行时（macOS: Virtualization.framework, Linux: KVM, Windows: WSL2）
-
-## 工作原理
-
-```
-你的 AI Agent                    CrateBay                         本地 VM
-(Claude, Cursor 等)              (MCP Server)                     (VM 内的 Docker)
-       │                              │                                │
-       │  "运行这段 Python 代码"       │                                │
-       ├─────────────────────────────►│                                │
-       │                              │  创建沙盒 + 执行代码            │
-       │                              ├───────────────────────────────►│
-       │                              │                                │
-       │                              │  stdout/stderr + exit code     │
-       │       返回结果                │◄───────────────────────────────┤
-       │◄─────────────────────────────┤                                │
-```
+- **开源** — MIT 协议，免费使用
+- **跨平台** — 支持 macOS、Linux、Windows
+- **内置运行时** — 需要时自动启动本地 VM 容器引擎
+- **镜像优先** — 在一个界面里完成搜索、拉取、查看、打标签和删除
+- **容器管理** — 创建、启动、停止、查看详情、执行命令和读取日志
+- **Pod 分组** — 用 Docker 网络管理相关容器的分组
+- **镜像加速源** — 可配置 Docker Hub 镜像源，加快拉取速度
 
 ## 快速开始
 
-### 1. 安装
+```bash
+cd crates/cratebay-gui
+pnpm install
+pnpm tauri dev
+```
+
+CLI 示例：
 
 ```bash
-# macOS (Apple Silicon & Intel)
-brew install --cask cratebay
-
-# 或从 Releases 页面下载
+cratebay runtime start
+cratebay image search alpine
+cratebay image pull alpine:latest
+cratebay run alpine:latest -- echo hello
+cratebay run --network none --read-only --memory 512 alpine:latest -- sh -lc "pwd && id"
+cratebay run --entrypoint /bin/sh alpine:latest -- -lc "echo from custom entrypoint"
+cratebay --json run --max-output-bytes 1048576 alpine:latest -- sh -lc "echo bounded output"
+cratebay --json run --no-propagate-exit-code alpine:latest -- sh -lc "exit 42"
+cratebay image preload-bundled
+cratebay image export --output alpine.tar alpine:latest
+cratebay image import alpine.tar
+cratebay pod create demo-pod
+cratebay container create demo --image alpine:latest --entrypoint /bin/sh --command "sleep 3600" --pod demo-pod --publish 8080:80 --volume "$PWD:/workspace:ro"
+cratebay image pack-container demo cratebay/demo:latest
+cratebay image tag cratebay/demo:latest cratebay/demo:dev
+cratebay container list --all
 ```
 
-### 2. 连接你的 AI
+## 桌面应用
 
-将以下配置添加到 Claude Desktop 配置文件（`claude_desktop_config.json`）：
+CrateBay 桌面应用提供：
 
-```json
-{
-  "mcpServers": {
-    "cratebay": {
-      "command": "cratebay-mcp"
-    }
-  }
-}
+- **容器** — 生命周期操作、模板、日志、终端和资源详情
+- **镜像** — 本地镜像列表、仓库搜索、拉取进度、查看详情、打标签、导出、导入和删除
+- **Pod** — 容器页内的网络分组视图
+- **运行时** — 启动、停止、重启内置引擎，并配置 HTTP 代理
+- **设置** — 语言、主题、镜像加速源和运行时连接
+
+## 架构
+
+```
+┌─────────────────────────────────────────────────────┐
+│  CrateBay                                            │
+│                                                      │
+│  ┌──────────────┐        ┌───────────────────────┐  │
+│  │ GUI App      │        │ cratebay-cli           │  │
+│  │ Tauri + React│        │ 命令行                 │  │
+│  └──────┬───────┘        └──────────┬────────────┘  │
+│         └───────────────┬───────────┘               │
+│                         │                           │
+│              ┌──────────▼──────────┐                │
+│              │   cratebay-core     │                │
+│              │ Docker + storage    │                │
+│              └──────────┬──────────┘                │
+│                         │                           │
+│              ┌──────────▼──────────┐                │
+│              │  Built-in Runtime   │                │
+│              │  macOS: VZ          │                │
+│              │  Linux: KVM/QEMU    │                │
+│              │  Windows: WSL2      │                │
+│              └─────────────────────┘                │
+└─────────────────────────────────────────────────────┘
 ```
 
-### 3. 开始使用
+**技术栈**：Tauri v2 | React 19 | Rust | bollard | SQLite
 
-在 Claude 中输入：
+## 对比
 
-> "创建一个 Python 沙盒并运行：print('Hello from CrateBay')"
-
-CrateBay 会自动完成 — 虚拟机启动、容器创建、代码执行、结果返回。
-
-## 功能
-
-### MCP Server — 让任何 AI 运行代码
-
-`cratebay-mcp` 通过 MCP 协议暴露沙盒工具：
-
-| 工具 | 功能 |
-|------|------|
-| `sandbox_run_code` | 创建沙盒 + 执行代码 + 返回结果（一键完成） |
-| `sandbox_install` | 安装依赖包（pip、npm、apt） |
-| `sandbox_create` | 创建持久化沙盒 |
-| `sandbox_exec` | 在已有沙盒中执行命令 |
-| `sandbox_list` | 列出运行中的沙盒 |
-
-### 桌面应用 — 可视化沙盒管理
-
-CrateBay 桌面应用提供：Chat 界面、沙盒仪表盘、镜像管理、MCP 服务器管理、设置页面。
-
-### CLI — 无头操作
-
-```bash
-cratebay sandbox create --template python-dev
-cratebay sandbox exec <id> -- python -c "print('hello')"
-cratebay sandbox list
-```
-
-## 技术栈
-
-Tauri v2 | React 19 | Rust | bollard | SQLite | pi-agent-core
-
-## 竞品对比
-
-| | CrateBay | E2B | Docker Desktop |
-|---|---|---|---|
-| 本地运行 | 是 | 否（云端） | 是 |
-| AI 原生（MCP） | 是 | 仅 API | 否 |
-| 成本 | 免费 | $0.01/分钟 | 免费/$5+/月 |
-| 隐私 | 代码在本地 | 代码在云端 | 代码在本地 |
-| 无需 Docker | 是（内置 VM） | 不适用 | 需要 Docker |
-| 开源 | MIT | 部分 | 否 |
+| | CrateBay | Docker Desktop | OrbStack | Podman Desktop |
+|---|---|---|---|---|
+| 开源 | MIT | 否 | 否 | 是 |
+| 跨平台 | macOS/Win/Linux | macOS/Win/Linux | 仅 macOS | macOS/Win/Linux |
+| 内置运行时 | 是 | 是 | 是 | 是 |
+| 镜像管理 | 是 | 是 | 是 | 是 |
+| 容器日志/终端 | 是 | 是 | 是 | 是 |
+| 成本 | 免费 | 免费 / 付费档 | 免费 / 付费档 | 免费 |
 
 ## 状态
 
-v0.9.0 — 核心沙盒功能完成，正在迈向 v1.0 发布。
-
-详见 [docs/progress.md](docs/progress.md) 和 [docs/ROADMAP.md](docs/ROADMAP.md)。
-
-## 贡献
-
-本项目使用 [AGENTS.md](AGENTS.md) 进行 AI 辅助开发。技术规范和工作流指南见 [docs/](docs/)。
+v0.9.0 聚焦镜像管理、Pod 分组、容器生命周期、CLI 一次性执行和内置运行时。
 
 ## 许可证
 

@@ -1,188 +1,71 @@
 # Getting Started
 
-CrateBay is a local AI sandbox. It lets any AI agent run code safely on your machine through the MCP protocol.
+CrateBay is a local container and image management app with a built-in runtime.
+Use it as a lightweight desktop control plane or as a CLI for repeatable local
+container workflows.
 
-## Prerequisites
+## Requirements
 
-- macOS 12+ (Apple Silicon or Intel), Linux, or Windows 11
-- One of: Claude Desktop, Cursor, Windsurf, or any MCP-compatible AI client
+- macOS, Linux, or Windows
+- Rust toolchain
+- Node.js 20+
+- pnpm
 
-## Install
-
-### macOS
-
-Download from [GitHub Releases](https://github.com/nicepkg/CrateBay/releases) and drag to Applications.
-
-Or build from source:
+## Desktop App
 
 ```bash
-git clone https://github.com/nicepkg/CrateBay.git
-cd CrateBay
+cd crates/cratebay-gui
 pnpm install
-cargo tauri build
+pnpm tauri dev
 ```
 
-### First Launch
+The app starts with the container workflow: images, containers, runtime status,
+and settings.
 
-1. Open CrateBay
-2. Wait for the built-in runtime to start (status bar shows "Ready")
-3. Sandbox images are automatically loaded on first launch
+## CLI
 
-## Connect Your AI
-
-### Claude Desktop
-
-1. Generate the MCP config:
+Build the CLI from the workspace root:
 
 ```bash
-cratebay mcp export claude
+cargo build -p cratebay-cli
 ```
 
-Output:
-```json
-{
-  "mcpServers": {
-    "cratebay": {
-      "command": "cratebay-mcp"
-    }
-  }
-}
-```
+Common commands:
 
-2. Open Claude Desktop config file:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%/Claude/claude_desktop_config.json`
-
-3. Merge the JSON into your existing config (add the `"cratebay"` entry to `"mcpServers"`)
-
-4. Restart Claude Desktop
-
-5. Verify: Claude should now show "CrateBay" in its tools list
-
-### Cursor / Windsurf
-
-```bash
-cratebay mcp export cursor
-```
-
-Add the output to your editor's MCP settings.
-
-## Run Your First Code
-
-In Claude Desktop (or your MCP client), type:
-
-> Run this Python code: print("Hello from CrateBay!")
-
-Claude will:
-1. Call `sandbox_run_code` with language="python" and your code
-2. CrateBay creates a sandbox, writes the code, executes it
-3. Returns the result: `Hello from CrateBay!`
-
-### More Examples
-
-**Install packages and run data analysis:**
-
-> Create a Python sandbox, install pandas and numpy, then generate a summary of random data
-
-**Run JavaScript:**
-
-> Execute this Node.js code: console.log(Array.from({length: 10}, (_, i) => i * i))
-
-**Bash scripting:**
-
-> Run a bash script that lists all files in /etc and counts them
-
-**Multi-step workflow:**
-
-> 1. Create a Python sandbox with cleanup=false
-> 2. Install requests and beautifulsoup4
-> 3. Write a script that fetches example.com and prints the title
-> 4. Run it
-
-## Available MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `sandbox_run_code` | One-shot: create sandbox + write code + execute + return result |
-| `sandbox_install` | Install packages (pip/npm/cargo/apt) in a sandbox |
-| `sandbox_create` | Create a persistent sandbox from template |
-| `sandbox_exec` | Execute a command in an existing sandbox |
-| `sandbox_list` | List running sandboxes |
-| `sandbox_stop` / `sandbox_delete` | Lifecycle management |
-| `sandbox_put_path` / `sandbox_get_path` | File transfer in/out of sandbox |
-| `sandbox_templates` | List available sandbox templates |
-
-## CLI Usage
-
-```bash
-# Runtime management
-cratebay runtime status
-cratebay runtime start
-
-# Container operations
-cratebay container list
-cratebay container create mybox --image python:3.12-slim-bookworm
-cratebay container exec mybox -- python -c "print('hello')"
-
-# Image management
-cratebay image list
-cratebay image pull python:3.12-slim-bookworm
-
-# MCP config
-cratebay mcp export claude
-```
-
-## Troubleshooting
-
-### Runtime won't start
-
-Check status:
 ```bash
 cratebay runtime status
-```
-
-If stuck, try manual start:
-```bash
 cratebay runtime start
+cratebay image search alpine
+cratebay image pull alpine:latest
+cratebay run alpine:latest -- echo hello
+cratebay run --network none --read-only --memory 512 alpine:latest -- sh -lc "pwd && id"
+cratebay run --entrypoint /bin/sh alpine:latest -- -lc "echo from custom entrypoint"
+cratebay --json run --max-output-bytes 1048576 alpine:latest -- sh -lc "echo bounded output"
+cratebay --json run --no-propagate-exit-code alpine:latest -- sh -lc "exit 42"
+cratebay image preload-bundled
+cratebay image export --output alpine.tar alpine:latest
+cratebay image import alpine.tar
+cratebay pod create demo-pod
+cratebay container create demo --image alpine:latest --entrypoint /bin/sh --command "sleep 3600" --pod demo-pod --publish 8080:80 --volume "$PWD:/workspace:ro"
+cratebay image pack-container demo cratebay/demo:latest
+cratebay image tag cratebay/demo:latest cratebay/demo:dev
+cratebay container list --all
 ```
 
-### MCP connection fails
+## Runtime Notes
 
-1. Verify `cratebay-mcp` is in your PATH:
-   ```bash
-   which cratebay-mcp
-   ```
+Container and image commands use the built-in runtime by default. If the runtime
+is not already running, CrateBay provisions and starts it on demand.
 
-2. Test it manually:
-   ```bash
-   echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cratebay-mcp
-   ```
+For compatibility or diagnostics, pass `--docker-host` or set `DOCKER_HOST` to
+target an explicit Docker-compatible endpoint.
 
-3. Check Claude Desktop logs for connection errors
+## Verification
 
-### Sandbox creation fails
-
-Ensure Docker is reachable through the runtime:
 ```bash
-cratebay system docker-status
+cargo check --workspace
+cargo test --workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1
+cd crates/cratebay-gui
+pnpm run build
+pnpm run test:unit
 ```
-
-If images are missing:
-```bash
-cratebay image list
-cratebay image pull python:3.12-slim-bookworm
-```
-
-## Architecture
-
-```
-Your AI (Claude/Cursor)
-    ↓ MCP protocol (stdio)
-cratebay-mcp (MCP Server)
-    ↓ Docker API
-Built-in VM (VZ/KVM/WSL2)
-    ↓
-Docker Engine → Containers
-```
-
-All code runs inside a lightweight VM on your machine. No cloud, no cost, no data leaving your computer.

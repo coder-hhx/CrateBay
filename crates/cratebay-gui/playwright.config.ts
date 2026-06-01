@@ -66,6 +66,7 @@ export default defineConfig({
       timeout: 3 * 60 * 1000, // Tauri 首次启动可能需要 2-3 分钟
       env: {
         TAURI_ENV_DEBUG: "true",
+        CRATEBAY_DISABLE_RUNTIME_AUTO_START: "1",
       },
     },
   ],

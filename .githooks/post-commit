@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# post-commit hook — CI monitoring reminder (prompt type)
+# post-commit hook — CI monitoring reminder
 # Shows helpful CI commands after each commit
 
 echo ""

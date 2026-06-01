@@ -701,6 +701,24 @@ impl MacOSRuntime {
         }
     }
 
+    fn auto_runtime_http_proxy_port() -> u16 {
+        if let Some(port) = Self::first_non_empty_env(&["CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT"])
+            .and_then(|raw| raw.parse::<u16>().ok())
+            .filter(|port| *port > 0)
+        {
+            return port;
+        }
+
+        if let Some(dir) = Self::first_non_empty_env(&["CRATEBAY_DATA_DIR"]) {
+            let hash = dir.bytes().fold(0_u32, |acc, byte| {
+                acc.wrapping_mul(131).wrapping_add(byte as u32)
+            });
+            return (52000 + (hash % 10000)) as u16;
+        }
+
+        3128
+    }
+
     fn resolve_runtime_http_proxy_config() -> Option<RuntimeHttpProxyConfig> {
         let explicit_proxy = Self::first_non_empty_env(&["CRATEBAY_RUNTIME_HTTP_PROXY"]);
         let bridge_enabled = common::env_flag_enabled("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE");
@@ -960,7 +978,7 @@ impl MacOSRuntime {
             let proxy_port = std::env::var("CRATEBAY_RUNTIME_HTTP_PROXY")
                 .ok()
                 .and_then(|v| v.rsplit(':').next().map(|s| s.to_string()))
-                .unwrap_or_else(|| "3128".to_string());
+                .unwrap_or_else(|| Self::auto_runtime_http_proxy_port().to_string());
             cmd.arg("--http-connect-proxy")
                 .arg(format!("0.0.0.0:{}", proxy_port));
             tracing::info!(
@@ -1368,7 +1386,7 @@ impl RuntimeManager for MacOSRuntime {
             // We set the env var here so that build_cmdline() injects the correct
             // `cratebay_http_proxy=` kernel argument for the guest.
             if Self::resolve_runtime_http_proxy_config().is_none() {
-                let proxy_port = 3128u16;
+                let proxy_port = Self::auto_runtime_http_proxy_port();
                 std::env::set_var(
                     "CRATEBAY_RUNTIME_HTTP_PROXY",
                     format!("192.168.64.1:{}", proxy_port),
@@ -1732,6 +1750,7 @@ mod tests {
     struct EnvGuard {
         _lock_guard: std::sync::MutexGuard<'static, ()>,
         old_data_dir: Option<std::ffi::OsString>,
+        old_http_proxy_bind_port: Option<std::ffi::OsString>,
         _temp: tempfile::TempDir,
     }
 
@@ -1741,12 +1760,16 @@ mod tests {
             let lock_guard = lock.lock().expect("ENV_LOCK poisoned");
 
             let old_data_dir = std::env::var_os("CRATEBAY_DATA_DIR");
+            let old_http_proxy_bind_port =
+                std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
             let temp = tempfile::tempdir().expect("create tempdir");
             std::env::set_var("CRATEBAY_DATA_DIR", temp.path());
+            std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
 
             Self {
                 _lock_guard: lock_guard,
                 old_data_dir,
+                old_http_proxy_bind_port,
                 _temp: temp,
             }
         }
@@ -1758,6 +1781,12 @@ mod tests {
                 std::env::set_var("CRATEBAY_DATA_DIR", old);
             } else {
                 std::env::remove_var("CRATEBAY_DATA_DIR");
+            }
+
+            if let Some(old) = self.old_http_proxy_bind_port.clone() {
+                std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT", old);
+            } else {
+                std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
             }
         }
     }
@@ -1882,6 +1911,25 @@ mod tests {
             "cmdline should contain host epoch: {}",
             cmdline
         );
+    }
+
+    #[test]
+    fn auto_runtime_http_proxy_port_uses_temp_data_dir() {
+        let _guard = EnvGuard::with_temp_data_dir();
+        let port = MacOSRuntime::auto_runtime_http_proxy_port();
+        assert!(
+            (52000..62000).contains(&port),
+            "auto proxy port should be derived from the temp data dir: {}",
+            port
+        );
+    }
+
+    #[test]
+    fn auto_runtime_http_proxy_port_honors_bind_port_override() {
+        let _guard = EnvGuard::with_temp_data_dir();
+        std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT", "45678");
+        let port = MacOSRuntime::auto_runtime_http_proxy_port();
+        assert_eq!(port, 45678);
     }
 
     #[test]

@@ -94,8 +94,6 @@ mod tests {
             AuditAction::ContainerStart,
             AuditAction::ContainerStop,
             AuditAction::ContainerDelete,
-            AuditAction::ApiKeySave,
-            AuditAction::ProviderCreate,
             AuditAction::SettingsUpdate,
         ];
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke, listen } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -35,6 +36,7 @@ let lineCounter = 0;
  * - Maintains a simple in-memory history (ArrowUp/ArrowDown)
  */
 export function TerminalView({ containerId, onClose }: TerminalViewProps) {
+  const { t } = useI18n();
   const [lines, setLines] = useState<TerminalLine[]>([]);
   const [command, setCommand] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
@@ -50,6 +52,7 @@ export function TerminalView({ containerId, onClose }: TerminalViewProps) {
   }, [lines]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -189,11 +192,14 @@ export function TerminalView({ containerId, onClose }: TerminalViewProps) {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-zinc-950">
+    <div
+      className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-zinc-950"
+      data-testid="container-terminal"
+    >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
         <span className="text-xs font-medium text-zinc-400">
-          Terminal — {containerId.slice(0, 12)}
+          {t("containers", "terminal")} - {containerId.slice(0, 12)}
         </span>
         {onClose !== undefined && (
           <Button
@@ -210,7 +216,7 @@ export function TerminalView({ containerId, onClose }: TerminalViewProps) {
       {/* Output */}
       <ScrollArea className="max-h-64 p-3 font-mono text-xs leading-5">
         {lines.length === 0 ? (
-          <div className="text-zinc-500">Enter a command to execute inside the container.</div>
+          <div className="text-zinc-500">{t("containers", "terminalHint")}</div>
         ) : (
           lines.map((line) => (
             <div
@@ -235,6 +241,7 @@ export function TerminalView({ containerId, onClose }: TerminalViewProps) {
         <span className="text-xs font-medium text-primary">$</span>
         <Input
           ref={inputRef}
+          data-testid="terminal-input"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -248,7 +255,7 @@ export function TerminalView({ containerId, onClose }: TerminalViewProps) {
           size="icon-xs"
           onClick={() => void executeCommand(command)}
           disabled={isExecuting || command.trim().length === 0}
-          aria-label="Execute command"
+          aria-label={t("containers", "executeCommand")}
         >
           <Send className="h-3 w-3" />
         </Button>

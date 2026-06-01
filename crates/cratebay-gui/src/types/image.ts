@@ -2,7 +2,7 @@
  * Image-related types for CrateBay.
  *
  * Matches the Tauri commands: image_list, image_search, image_pull,
- * image_remove, image_inspect, image_tag.
+ * image_remove, image_inspect, image_tag, image_export, image_import.
  */
 
 export interface LocalImageInfo {
@@ -31,4 +31,13 @@ export interface ImageInspectInfo {
   os: string;
   dockerVersion: string;
   layers: number;
+}
+
+export interface BundleImageLoadResult {
+  imageName: string;
+  tarFilename: string;
+  archivePath?: string | null;
+  loaded: boolean;
+  skipped: boolean;
+  message: string;
 }

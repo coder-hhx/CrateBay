@@ -18,6 +18,8 @@ use bollard::Docker;
 use crate::error::AppError;
 use crate::runtime::{self, RuntimeManager, RuntimeState};
 
+const DISABLE_IMPLICIT_RUNTIME_START_ENV: &str = "CRATEBAY_DISABLE_RUNTIME_AUTO_START";
+
 /// Options for [`ensure_docker`].
 pub struct EnsureOptions {
     /// Maximum time to wait for acquiring the cross-process engine lock.
@@ -69,16 +71,26 @@ pub async fn ensure_docker(
         return Ok(Arc::new(docker));
     }
 
-    // 2. Acquire cross-process lock to avoid concurrent provision/start.
+    // 2. Some callers, notably GUI E2E and read-only diagnostics, need status
+    // checks without implicitly creating a VM. Manual runtime_start still calls
+    // RuntimeManager::start() directly and is unaffected by this guard.
+    if runtime::common::env_flag_enabled(DISABLE_IMPLICIT_RUNTIME_START_ENV) {
+        return Err(AppError::Runtime(format!(
+            "Implicit runtime start disabled by {}",
+            DISABLE_IMPLICIT_RUNTIME_START_ENV
+        )));
+    }
+
+    // 3. Acquire cross-process lock to avoid concurrent provision/start.
     let _lock = acquire_engine_lock(lock_wait_timeout).await?;
 
-    // 3. TOCTOU: re-check after acquiring the lock — another process may have
+    // 4. TOCTOU: re-check after acquiring the lock — another process may have
     //    started the runtime while we were waiting.
     if let Some(docker) = try_connect_builtin(runtime).await {
         return Ok(Arc::new(docker));
     }
 
-    // 4. Provision / start the built-in runtime.
+    // 5. Provision / start the built-in runtime.
     let current = tokio::time::timeout(runtime_detect_timeout, runtime.get_state())
         .await
         .map_err(|_| {
@@ -107,7 +119,7 @@ pub async fn ensure_docker(
             ))
         })??;
 
-    // 5. Wait for Docker to become responsive inside the runtime.
+    // 6. Wait for Docker to become responsive inside the runtime.
     let docker = wait_for_docker(runtime, docker_wait_timeout).await?;
     Ok(Arc::new(docker))
 }

@@ -47,17 +47,7 @@ fn audit_log_all_action_types() {
         (AuditAction::ContainerStop, "container.stop"),
         (AuditAction::ContainerDelete, "container.delete"),
         (AuditAction::ContainerExec, "container.exec"),
-        (AuditAction::ApiKeySave, "api_key.save"),
-        (AuditAction::ApiKeyDelete, "api_key.delete"),
-        (AuditAction::ProviderCreate, "provider.create"),
-        (AuditAction::ProviderUpdate, "provider.update"),
-        (AuditAction::ProviderDelete, "provider.delete"),
-        (AuditAction::ModelToggle, "model.toggle"),
-        (AuditAction::McpServerStart, "mcp_server.start"),
-        (AuditAction::McpServerStop, "mcp_server.stop"),
         (AuditAction::SettingsUpdate, "settings.update"),
-        (AuditAction::ConversationCreate, "conversation.create"),
-        (AuditAction::ConversationDelete, "conversation.delete"),
     ];
 
     for (action, expected_str) in &actions {
@@ -74,7 +64,7 @@ fn audit_log_all_action_types() {
     let count: u32 = conn
         .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(count, 16);
+    assert_eq!(count, 6);
 }
 
 #[test]
@@ -284,9 +274,9 @@ fn audit_log_stores_all_fields() {
 
     audit::log_action(
         &conn,
-        &AuditAction::ApiKeySave,
-        "provider-openai",
-        Some(r#"{"hint":"...1234"}"#),
+        &AuditAction::SettingsUpdate,
+        "theme",
+        Some("dark"),
         "admin",
     )
     .unwrap();
@@ -297,8 +287,8 @@ fn audit_log_stores_all_fields() {
     let log = &logs[0];
     assert!(log["id"].as_str().is_some());
     assert!(log["timestamp"].as_str().is_some());
-    assert_eq!(log["action"].as_str().unwrap(), "api_key.save");
-    assert_eq!(log["target"].as_str().unwrap(), "provider-openai");
-    assert_eq!(log["details"].as_str().unwrap(), r#"{"hint":"...1234"}"#);
+    assert_eq!(log["action"].as_str().unwrap(), "settings.update");
+    assert_eq!(log["target"].as_str().unwrap(), "theme");
+    assert_eq!(log["details"].as_str().unwrap(), "dark");
     assert_eq!(log["user"].as_str().unwrap(), "admin");
 }

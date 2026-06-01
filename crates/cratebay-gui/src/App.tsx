@@ -1,84 +1,32 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useChatStore } from "@/stores/chatStore";
-import { useMcpStore } from "@/stores/mcpStore";
 import { invoke, listen } from "@/lib/tauri";
+import {
+  deriveRuntimeStoreState,
+  mapRuntimeState,
+  isBuiltinDockerSource,
+  type DockerStatusResponse,
+  type RuntimeHealthPayload,
+  type RuntimeStatusResponse,
+} from "@/lib/runtimeStatus";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ToastContainer } from "@/components/common/Toast";
-import { ChatPage } from "@/pages/ChatPage";
 import { ContainersPage } from "@/pages/ContainersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ImagesPage } from "@/pages/ImagesPage";
 
-/** Backend DockerStatus shape (matches api-spec.md). */
-interface DockerStatusResponse {
-  connected: boolean;
-  version?: string | null;
-  api_version?: string | null;
-  os?: string | null;
-  arch?: string | null;
-  source: string;
-  socket_path?: string | null;
-}
-
-/** Backend RuntimeStatusInfo shape (matches api-spec.md). */
-interface RuntimeStatusResponse {
-  state: string;
-  platform: string;
-  cpu_cores: number;
-  memory_mb: number;
-  disk_gb: number;
-  docker_responsive: boolean;
-  uptime_seconds: number | null;
-  resource_usage?: unknown;
-}
-
-/** Payload emitted by runtime:health Tauri event (from start_health_monitor). */
-interface RuntimeHealthPayload {
-  /** Serde-serialized RuntimeState enum: "None" | "Ready" | {"Error":"msg"} etc. */
-  runtime_state: string | Record<string, string>;
-  docker_responsive: boolean;
-  docker_version: string | null;
-  uptime_seconds: number | null;
-  last_check: string;
-  /** Which Docker backend is connected (always "builtin" in v2) */
-  docker_source: string | null;
-}
-
 const RUNTIME_HEALTH_DOWNGRADE_GRACE_MS = 90_000;
-
-/**
- * Map backend runtime state to the AppState runtimeStatus union.
- *
- * Two formats are accepted:
- * - String from runtime_status command (format_runtime_state output):
- *   "none", "provisioning", "ready", "stopped", "error: ..."
- * - Serde enum from runtime:health event (RuntimeState):
- *   "None", "Ready", "Starting", {"Error": "msg"}, etc.
- */
-function mapRuntimeState(state: string | Record<string, string>): "starting" | "running" | "stopped" | "error" {
-  // Handle serde enum object form: {"Error": "message"}
-  if (typeof state === "object" && state !== null) {
-    if ("Error" in state) return "error";
-    return "stopped";
-  }
-  const s = state.toLowerCase();
-  if (s === "ready") return "running";
-  if (s === "starting" || s === "provisioning") return "starting";
-  if (s.startsWith("error")) return "error";
-  return "stopped";
-}
 
 function setEngineState(
   runtimeStatus: "starting" | "running" | "stopped" | "error",
   dockerConnected: boolean,
+  builtinRuntimeReady: boolean = dockerConnected,
 ) {
   useAppStore.setState({
     runtimeStatus,
     dockerConnected,
-    // builtinRuntimeReady = true when docker is responsive
-    builtinRuntimeReady: dockerConnected,
+    builtinRuntimeReady,
   });
 }
 
@@ -88,11 +36,11 @@ function setEngineState(
  * Both commands have 5-second timeout to prevent UI from hanging.
  */
 async function initRuntimeStatus() {
-  let dockerOk = false;
+  let dockerStatus: DockerStatusResponse | null = null;
 
   // 5-second timeout for docker_status
   try {
-    const dockerStatus = await Promise.race([
+    dockerStatus = await Promise.race([
       invoke<DockerStatusResponse>("docker_status"),
       new Promise<DockerStatusResponse>((_, reject) =>
         setTimeout(
@@ -101,9 +49,8 @@ async function initRuntimeStatus() {
         ),
       ),
     ]);
-    dockerOk = dockerStatus.connected;
   } catch {
-    dockerOk = false;
+    dockerStatus = null;
   }
 
   // 5-second timeout for runtime_status
@@ -117,22 +64,9 @@ async function initRuntimeStatus() {
         ),
       ),
     ]);
-
-    // If Docker is connected and responsive, force status to "running"
-    // regardless of what runtime_status thinks (avoids "starting" flicker)
-    if (dockerOk || rtStatus.docker_responsive) {
-      setEngineState("running", true);
-    } else {
-      setEngineState(mapRuntimeState(rtStatus.state), rtStatus.docker_responsive);
-    }
+    useAppStore.setState(deriveRuntimeStoreState(dockerStatus, rtStatus));
   } catch {
-    // Runtime status check failed or timed out
-    // If Docker was already confirmed connected, set running anyway
-    if (dockerOk) {
-      setEngineState("running", true);
-    } else {
-      setEngineState("stopped", false);
-    }
+    useAppStore.setState(deriveRuntimeStoreState(dockerStatus, null));
   }
 }
 
@@ -149,12 +83,6 @@ function App() {
   useEffect(() => {
     // Load persisted settings (language, theme, etc.)
     void useSettingsStore.getState().fetchSettings();
-    // Load LLM providers + stored models for chat selector
-    void useSettingsStore.getState().fetchProviders();
-    // Load persisted sessions
-    void useChatStore.getState().loadSessions();
-    // Load MCP servers
-    void useMcpStore.getState().fetchServers();
 
     // Query initial Docker & Runtime status
     void initRuntimeStatus();
@@ -173,7 +101,11 @@ function App() {
 
         // Any confirmed Docker responsiveness means engine is effectively ready.
         if (nextDockerConnected) {
-          setEngineState("running", true);
+          setEngineState(
+            "running",
+            true,
+            isBuiltinDockerSource(payload.docker_source),
+          );
           markHealthy();
           return;
         }
@@ -189,7 +121,7 @@ function App() {
           return;
         }
 
-        setEngineState(nextRuntimeStatus, nextDockerConnected);
+        setEngineState(nextRuntimeStatus, nextDockerConnected, false);
       },
     ).then((unsub) => {
       unlisten = unsub;
@@ -248,7 +180,6 @@ function App() {
   return (
     <>
       <AppLayout>
-        {currentPage === "chat" && <ChatPage />}
         {currentPage === "containers" && <ContainersPage />}
         {currentPage === "images" && <ImagesPage />}
         {currentPage === "settings" && <SettingsPage />}

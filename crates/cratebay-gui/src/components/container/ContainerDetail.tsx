@@ -1,11 +1,27 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@/lib/tauri";
 import { useContainerStore, type ContainerInfo } from "@/stores/containerStore";
 import { useI18n } from "@/lib/i18n";
 import { useAppStore } from "@/stores/appStore";
+import { ContainerLogs } from "@/components/container/ContainerLogs";
+import { ContainerMonitoring } from "@/components/container/ContainerMonitoring";
+import { TerminalView } from "@/components/container/TerminalView";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Play, Square, Trash2, Copy, Check, X, Terminal } from "lucide-react";
+import { Play, Square, Trash2, Copy, Check, X, PackagePlus, Loader2 } from "lucide-react";
 
 /**
  * Container detail panel — fixed-positioned overlay on the right side.
@@ -13,6 +29,21 @@ import { Play, Square, Trash2, Copy, Check, X, Terminal } from "lucide-react";
  * positioned relative to the <main> content area.
  */
 const PANEL_WIDTH = 400;
+
+type ContainerInspectDetail = {
+  info: ContainerInfo;
+  networkSettings: unknown;
+  mounts: unknown[];
+  state: {
+    status: string;
+    running: boolean;
+    startedAt: string | null;
+    finishedAt: string | null;
+    exitCode: number | null;
+    error: string | null;
+    pid: number | null;
+  };
+};
 
 export function ContainerDetail() {
   const selectedContainerId = useContainerStore((s) => s.selectedContainerId);
@@ -63,6 +94,7 @@ export function ContainerDetail() {
 
       {/* Panel — slides in from the right */}
       <div
+        data-testid="container-detail"
         className={cn(
           "absolute bottom-0 right-0 top-0 z-50 flex flex-col border-l border-border bg-card shadow-2xl transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "translate-x-full",
@@ -88,10 +120,18 @@ function DetailHeader({
   container: ContainerInfo;
   onClose: () => void;
 }) {
-  const { startContainer, stopContainer, deleteContainer, selectContainer } = useContainerStore();
+  const { startContainer, stopContainer, deleteContainer, selectContainer, fetchImages } = useContainerStore();
+  const { t } = useI18n();
   const { addNotification } = useAppStore();
   const isRunning = container.status === "running" || container.status === "paused";
   const [operating, setOperating] = useState(false);
+  const [packDialogOpen, setPackDialogOpen] = useState(false);
+  const [packImage, setPackImage] = useState(defaultPackImageName(container.name));
+  const [packing, setPacking] = useState(false);
+
+  useEffect(() => {
+    setPackImage(defaultPackImageName(container.name));
+  }, [container.name]);
 
   const handleAction = async (action: () => Promise<void>, successMsg: string, errorTitle: string) => {
     setOperating(true);
@@ -102,7 +142,7 @@ function DetailHeader({
       addNotification({
         type: "error",
         title: errorTitle,
-        message: error instanceof Error ? error.message : "未知错误",
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     } finally {
@@ -111,17 +151,17 @@ function DetailHeader({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`确定要删除容器 "${container.name}" 吗？`)) return;
+    if (!confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
     setOperating(true);
     try {
       await deleteContainer(container.id);
       selectContainer(null);
-      addNotification({ type: "success", title: "容器已删除", message: container.name, dismissable: true });
+      addNotification({ type: "success", title: t("containers", "deleteSuccess"), message: container.name, dismissable: true });
     } catch (error) {
       addNotification({
         type: "error",
-        title: "删除失败",
-        message: error instanceof Error ? error.message : "未知错误",
+        title: t("containers", "deleteFailed"),
+        message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
     } finally {
@@ -129,57 +169,152 @@ function DetailHeader({
     }
   };
 
+  const handlePack = async () => {
+    const image = packImage.trim();
+    if (image.length === 0) return;
+
+    setPacking(true);
+    try {
+      await invoke<string>("image_pack_container", {
+        container: container.id,
+        image,
+      });
+      await fetchImages();
+      addNotification({
+        type: "success",
+        title: t("containers", "packImageSuccess"),
+        message: image,
+        dismissable: true,
+      });
+      setPackDialogOpen(false);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        title: t("containers", "packImageFailed"),
+        message: error instanceof Error ? error.message : String(error),
+        dismissable: true,
+      });
+    } finally {
+      setPacking(false);
+    }
+  };
+
   return (
-    <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-      <h2 className="flex-1 truncate text-sm font-semibold text-foreground">
-        {container.name}
-      </h2>
+    <>
+      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <h2 className="flex-1 truncate text-sm font-semibold text-foreground">
+          {container.name}
+        </h2>
 
-      {isRunning ? (
+        {isRunning ? (
+          <button
+            onClick={() => void handleAction(() => stopContainer(container.id), t("containers", "stopSuccess"), t("containers", "stopFailed"))}
+            disabled={operating}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            title="停止"
+          >
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button
+            onClick={() => void handleAction(() => startContainer(container.id), t("containers", "startSuccess"), t("containers", "startFailed"))}
+            disabled={operating}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-emerald-600 disabled:opacity-40"
+            title="启动"
+          >
+            <Play className="h-3.5 w-3.5" />
+          </button>
+        )}
+
         <button
-          onClick={() => void handleAction(() => stopContainer(container.id), "容器已停止", "停止失败")}
-          disabled={operating}
+          onClick={() => setPackDialogOpen(true)}
+          disabled={operating || packing}
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-          title="停止"
+          title={t("containers", "packImage")}
         >
-          <Square className="h-3.5 w-3.5" />
+          <PackagePlus className="h-3.5 w-3.5" />
         </button>
-      ) : (
+
         <button
-          onClick={() => void handleAction(() => startContainer(container.id), "容器已启动", "启动失败")}
+          onClick={() => void handleDelete()}
           disabled={operating}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-emerald-600 disabled:opacity-40"
-          title="启动"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+          title="删除"
         >
-          <Play className="h-3.5 w-3.5" />
+          <Trash2 className="h-3.5 w-3.5" />
         </button>
-      )}
 
-      <button
-        onClick={() => void handleDelete()}
-        disabled={operating}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-        title="删除"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+        <div className="mx-1 h-4 w-px bg-border" />
+        <button
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
 
-      <div className="mx-1 h-4 w-px bg-border" />
-      <button
-        onClick={onClose}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        <X className="h-4 w-4" />
-      </button>
-    </div>
+      <Dialog open={packDialogOpen} onOpenChange={setPackDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("containers", "packImage")}</DialogTitle>
+            <DialogDescription>{t("containers", "packImageDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="pack-image-name">{t("containers", "imageName")}</Label>
+            <Input
+              id="pack-image-name"
+              value={packImage}
+              onChange={(event) => setPackImage(event.target.value)}
+              placeholder="cratebay/my-container:latest"
+              className="font-mono text-xs"
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPackDialogOpen(false)} disabled={packing}>
+              {t("common", "cancel")}
+            </Button>
+            <Button onClick={() => void handlePack()} disabled={packing || packImage.trim().length === 0}>
+              {packing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackagePlus className="h-3.5 w-3.5" />}
+              {t("containers", "packImage")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
 function DetailContent({ container }: { container: ContainerInfo }) {
   const { t } = useI18n();
   const isRunning = container.status === "running" || container.status === "paused";
+  const [inspectDetail, setInspectDetail] = useState<ContainerInspectDetail | null>(null);
+  const [inspectError, setInspectError] = useState<string | null>(null);
 
-  const execCmd = `docker exec -it ${container.shortId} /bin/sh`;
+  useEffect(() => {
+    let cancelled = false;
+
+    setInspectDetail(null);
+    setInspectError(null);
+
+    void invoke<ContainerInspectDetail>("container_inspect", { id: container.id })
+      .then((detail) => {
+        if (!cancelled) setInspectDetail(detail);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setInspectError(error instanceof Error ? error.message : String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [container.id]);
+
+  const runtimeState = inspectDetail?.state;
+  const networkAddresses = collectNetworkAddresses(inspectDetail?.networkSettings);
+  const mountTargets = collectMountTargets(inspectDetail?.mounts);
 
   return (
     <div className="flex flex-col gap-5 p-4">
@@ -212,6 +347,44 @@ function DetailContent({ container }: { container: ContainerInfo }) {
         </div>
       </section>
 
+      <section>
+        <SectionTitle>{t("containers", "resources")}</SectionTitle>
+        <ContainerMonitoring
+          containerId={container.id}
+          cpuCores={container.cpuCores}
+          memoryMb={container.memoryMb}
+          enabled={isRunning}
+        />
+      </section>
+
+      <section data-testid="container-inspect">
+        <SectionTitle>{t("containers", "runtimeDetails")}</SectionTitle>
+        {inspectError !== null ? (
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            {t("containers", "inspectUnavailable")}: {inspectError}
+          </div>
+        ) : inspectDetail === null ? (
+          <div className="text-xs text-muted-foreground">{t("common", "loading")}</div>
+        ) : (
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            <DetailField label={t("containers", "state")}>
+              {runtimeState?.status || container.state || "—"}
+            </DetailField>
+            <DetailField label={t("containers", "pid")}>
+              {runtimeState?.pid !== null && runtimeState?.pid !== undefined
+                ? String(runtimeState.pid)
+                : "—"}
+            </DetailField>
+            <DetailField label={t("containers", "network")}>
+              {networkAddresses.length > 0 ? networkAddresses.join(", ") : "—"}
+            </DetailField>
+            <DetailField label={t("containers", "mounts")}>
+              {mountTargets.length > 0 ? mountTargets.join(", ") : t("containers", "noMounts")}
+            </DetailField>
+          </div>
+        )}
+      </section>
+
       {/* Ports */}
       {container.ports.length > 0 && (
         <section>
@@ -242,31 +415,84 @@ function DetailContent({ container }: { container: ContainerInfo }) {
         </section>
       )}
 
-      {/* Terminal — show exec command */}
+      {/* Logs and terminal */}
       <section>
-        <SectionTitle>终端</SectionTitle>
-        {isRunning ? (
-          <div className="rounded-md bg-zinc-900 p-3">
-            <div className="mb-2 flex items-center gap-1.5 text-[10px] text-zinc-400">
-              <Terminal className="h-3 w-3" />
-              连接终端
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <code className="flex-1 truncate font-mono text-xs text-emerald-400">
-                {execCmd}
-              </code>
-              <CopyButton value={execCmd} />
-            </div>
-          </div>
-        ) : (
-          <div className="text-xs text-muted-foreground">容器未运行</div>
-        )}
+        <SectionTitle>{t("containers", "operations")}</SectionTitle>
+        <Tabs defaultValue="logs" className="gap-3">
+          <TabsList className="w-full">
+            <TabsTrigger value="logs" className="text-xs">
+              {t("containers", "logs")}
+            </TabsTrigger>
+            <TabsTrigger value="terminal" className="text-xs">
+              {t("containers", "terminal")}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="logs">
+            <ContainerLogs containerId={container.id} tail={200} />
+          </TabsContent>
+          <TabsContent value="terminal">
+            {isRunning ? (
+              <TerminalView containerId={container.id} />
+            ) : (
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                {t("containers", "terminalUnavailable")}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </section>
     </div>
   );
 }
 
 /* ─── Helper Components ─── */
+
+function defaultPackImageName(containerName: string): string {
+  const name = containerName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return `cratebay/${name || "container"}:latest`;
+}
+
+function collectNetworkAddresses(networkSettings: unknown): string[] {
+  const root = toRecord(networkSettings);
+  const networks = toRecord(root?.Networks ?? root?.networks);
+  if (!networks) return [];
+
+  return Object.values(networks)
+    .flatMap((network) => {
+      const record = toRecord(network);
+      if (!record) return [];
+      return [
+        stringValue(record.IPAddress ?? record.ipAddress),
+        stringValue(record.GlobalIPv6Address ?? record.globalIPv6Address),
+      ];
+    })
+    .filter((address): address is string => address !== null && address.length > 0);
+}
+
+function collectMountTargets(mounts: unknown[] | undefined): string[] {
+  if (!Array.isArray(mounts)) return [];
+
+  return mounts
+    .map((mount) => {
+      const record = toRecord(mount);
+      return stringValue(record?.Destination ?? record?.destination);
+    })
+    .filter((target): target is string => target !== null && target.length > 0);
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (

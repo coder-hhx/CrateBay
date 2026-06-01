@@ -3,7 +3,7 @@ name = "cratebay-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CrateBay CLI — command-line interface for container and workflow management"
+description = "CrateBay CLI — command-line interface for container and image management"
 
 [[bin]]
 name = "cratebay"

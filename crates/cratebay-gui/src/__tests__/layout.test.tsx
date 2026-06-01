@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
@@ -7,7 +7,6 @@ import { StatusBar } from "@/components/layout/StatusBar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAppStore } from "@/stores/appStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useChatStore } from "@/stores/chatStore";
 
 // Mock @tauri-apps/api to avoid native module errors
 vi.mock("@tauri-apps/api/core", () => ({
@@ -25,17 +24,13 @@ function WithTooltip({ children }: { children: React.ReactNode }) {
   return <TooltipProvider>{children}</TooltipProvider>;
 }
 
-function resetLocaleAndChat() {
+function resetLocale() {
   useSettingsStore.setState((state) => ({
     settings: {
       ...state.settings,
       language: "en",
     },
   }));
-  useChatStore.setState({
-    sessions: [],
-    activeSessionId: null,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -43,9 +38,9 @@ function resetLocaleAndChat() {
 // ---------------------------------------------------------------------------
 describe("AppLayout", () => {
   beforeEach(() => {
-    resetLocaleAndChat();
+    resetLocale();
     useAppStore.setState({
-      currentPage: "chat",
+      currentPage: "containers",
       sidebarOpen: true,
       sidebarWidth: 260,
       dockerConnected: false,
@@ -78,11 +73,10 @@ describe("AppLayout", () => {
       </AppLayout>,
     );
 
-    // "Chat" appears in both Sidebar nav and TopBar breadcrumb, use getAllByText
-    const chatElements = screen.getAllByText("Chat");
-    expect(chatElements.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("Images")).toBeInTheDocument();
+    const imageElements = screen.getAllByText("Images");
+    expect(imageElements.length).toBeGreaterThanOrEqual(1);
+    const containerElements = screen.getAllByText("Containers");
+    expect(containerElements.length).toBeGreaterThanOrEqual(1);
     const settingsElements = screen.getAllByText("Settings");
     expect(settingsElements.length).toBeGreaterThanOrEqual(1);
   });
@@ -93,9 +87,9 @@ describe("AppLayout", () => {
 // ---------------------------------------------------------------------------
 describe("Sidebar", () => {
   beforeEach(() => {
-    resetLocaleAndChat();
+    resetLocale();
     useAppStore.setState({
-      currentPage: "chat",
+      currentPage: "containers",
       sidebarOpen: true,
       sidebarWidth: 260,
     });
@@ -108,7 +102,6 @@ describe("Sidebar", () => {
       </WithTooltip>,
     );
 
-    expect(screen.getByText("Chat")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
     expect(screen.getByText("Images")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
@@ -127,8 +120,8 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByText("Containers"));
     expect(useAppStore.getState().currentPage).toBe("containers");
 
-    fireEvent.click(screen.getByText("Chat"));
-    expect(useAppStore.getState().currentPage).toBe("chat");
+    fireEvent.click(screen.getByText("Images"));
+    expect(useAppStore.getState().currentPage).toBe("images");
   });
 });
 
@@ -137,25 +130,27 @@ describe("Sidebar", () => {
 // ---------------------------------------------------------------------------
 describe("TopBar", () => {
   beforeEach(() => {
-    resetLocaleAndChat();
+    resetLocale();
     useAppStore.setState({
-      currentPage: "chat",
+      currentPage: "containers",
       sidebarOpen: true,
     });
   });
 
-  it("shows chat session title on chat page", () => {
+  it("shows the current page breadcrumb", () => {
     render(<TopBar />);
-    const newChatElements = screen.getAllByText("New Chat");
-    expect(newChatElements.length).toBeGreaterThanOrEqual(1);
+    const containerElements = screen.getAllByText("Containers");
+    expect(containerElements.length).toBeGreaterThanOrEqual(1);
   });
 
   it("updates header content when page changes", () => {
     const { rerender } = render(<TopBar />);
-    const newChatElements = screen.getAllByText("New Chat");
-    expect(newChatElements.length).toBeGreaterThanOrEqual(1);
+    const containerElements = screen.getAllByText("Containers");
+    expect(containerElements.length).toBeGreaterThanOrEqual(1);
 
-    useAppStore.setState({ currentPage: "settings" });
+    act(() => {
+      useAppStore.setState({ currentPage: "settings" });
+    });
     rerender(<TopBar />);
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
@@ -175,7 +170,7 @@ describe("TopBar", () => {
 // ---------------------------------------------------------------------------
 describe("StatusBar", () => {
   beforeEach(() => {
-    resetLocaleAndChat();
+    resetLocale();
     useAppStore.setState({
       dockerConnected: false,
       runtimeStatus: "stopped",

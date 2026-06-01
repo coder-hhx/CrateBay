@@ -4,7 +4,6 @@ members = [
     "crates/cratebay-core",
     "crates/cratebay-gui/src-tauri",
     "crates/cratebay-cli",
-    "crates/cratebay-mcp",
     "crates/cratebay-vz",
     "crates/cratebay-guest-agent",
 ]
@@ -18,7 +17,6 @@ repository = "https://github.com/nicepkg/CrateBay"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-tokio-util = "0.7"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

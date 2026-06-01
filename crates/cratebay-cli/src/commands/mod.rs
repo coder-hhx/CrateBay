@@ -1,6 +1,6 @@
 pub mod container;
 pub mod image;
-pub mod mcp;
+pub mod pod;
 pub mod runtime;
 pub mod system;
 pub mod volume;

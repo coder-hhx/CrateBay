@@ -22,6 +22,7 @@ import type {
   LocalImageInfo,
   ImageSearchResult,
   ImageInspectInfo,
+  BundleImageLoadResult,
 } from "@/types/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +49,9 @@ import {
   Globe,
   Star,
   ArrowDownToLine,
+  PackageOpen,
+  Upload,
+  Tag,
 } from "lucide-react";
 
 export function ImagesPage() {
@@ -68,12 +72,13 @@ export function ImagesPage() {
   }, [tasks]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" data-testid="images-page">
       {/* Unified toolbar */}
       <div className="flex items-center gap-3 border-b border-border px-6 py-2.5">
         {/* Tab pills */}
         <button
           onClick={() => setActiveTab("local")}
+          data-testid="images-tab-local"
           className={cn(
             "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none",
             activeTab === "local"
@@ -86,6 +91,7 @@ export function ImagesPage() {
         </button>
         <button
           onClick={() => setActiveTab("search")}
+          data-testid="images-tab-search"
           className={cn(
             "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none",
             activeTab === "search"
@@ -132,6 +138,17 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
   const [batchRemoveConfirm, setBatchRemoveConfirm] = useState(false);
   const [batchRemoving, setBatchRemoving] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0, failed: 0 });
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportPath, setExportPath] = useState("cratebay-images.tar");
+  const [exporting, setExporting] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importPath, setImportPath] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [preloadingBundled, setPreloadingBundled] = useState(false);
+  const [archiveMessage, setArchiveMessage] = useState<string | null>(null);
+  const [tagTarget, setTagTarget] = useState<LocalImageInfo | null>(null);
+  const [tagValue, setTagValue] = useState("");
+  const [tagging, setTagging] = useState(false);
 
   const fetchImages = useCallback(async () => {
     setLoading(true);
@@ -257,6 +274,111 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
     setBatchProgress({ done: 0, total: 0, failed: 0 });
   }, [selectedIds, fetchImages]);
 
+  const selectedImageRefs = useMemo(() => {
+    return images
+      .filter((image) => selectedIds.has(image.id))
+      .map((image) => image.repoTags[0] ?? image.id)
+      .filter((reference) => reference.length > 0);
+  }, [images, selectedIds]);
+
+  const handleExport = useCallback(async () => {
+    const output = exportPath.trim();
+    if (output.length === 0 || selectedImageRefs.length === 0) return;
+    setExporting(true);
+    setArchiveMessage(null);
+    try {
+      const bytes = await invoke<number>("image_export", {
+        images: selectedImageRefs,
+        output,
+      });
+      setArchiveMessage(
+        t("images", "exportSuccess")
+          .replace("{count}", String(selectedImageRefs.length))
+          .replace("{bytes}", String(bytes)),
+      );
+      setExportDialogOpen(false);
+    } catch (err) {
+      setArchiveMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  }, [exportPath, selectedImageRefs, t]);
+
+  const handleImport = useCallback(async () => {
+    const input = importPath.trim();
+    if (input.length === 0) return;
+    setImporting(true);
+    setArchiveMessage(null);
+    try {
+      const loaded = await invoke<string[]>("image_import", { input });
+      setArchiveMessage(
+        t("images", "importSuccess").replace("{count}", String(loaded.length)),
+      );
+      setImportDialogOpen(false);
+      await fetchImages();
+    } catch (err) {
+      setArchiveMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImporting(false);
+    }
+  }, [fetchImages, importPath, t]);
+
+  const handlePreloadBundled = useCallback(async () => {
+    setPreloadingBundled(true);
+    setArchiveMessage(null);
+    try {
+      const results = await invoke<BundleImageLoadResult[]>("image_preload_bundled");
+      const loaded = results.filter((result) => result.loaded).length;
+      const skipped = results.filter((result) => result.skipped).length;
+      const failed = results.filter((result) => !result.loaded && !result.skipped).length;
+      const summary = t("images", "preloadSummary")
+        .replace("{loaded}", String(loaded))
+        .replace("{skipped}", String(skipped))
+        .replace("{failed}", String(failed));
+      const failedDetails = results
+        .filter((result) => !result.loaded && !result.skipped)
+        .map((result) => `${result.imageName}: ${result.message}`)
+        .join("; ");
+      setArchiveMessage(failedDetails.length > 0 ? `${summary} ${failedDetails}` : summary);
+      await fetchImages();
+    } catch (err) {
+      setArchiveMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreloadingBundled(false);
+    }
+  }, [fetchImages, t]);
+
+  const openTagDialog = useCallback((image: LocalImageInfo) => {
+    setTagTarget(image);
+    setTagValue(suggestImageTag(image));
+    setArchiveMessage(null);
+  }, []);
+
+  const handleTag = useCallback(async () => {
+    if (tagTarget === null) return;
+    const source = primaryImageReference(tagTarget);
+    const target = tagValue.trim();
+    if (source.length === 0 || target.length === 0) return;
+
+    setTagging(true);
+    setArchiveMessage(null);
+    try {
+      await invoke("image_tag", { source, target });
+      setArchiveMessage(
+        t("images", "tagSuccess")
+          .replace("{source}", source)
+          .replace("{target}", target),
+      );
+      setTagTarget(null);
+      setTagValue("");
+      await fetchImages();
+    } catch (err) {
+      setArchiveMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTagging(false);
+    }
+  }, [fetchImages, tagTarget, tagValue, t]);
+
   const allVisibleSelected = (() => {
     const userImages = filteredImages.filter((i) => !isSystemImage(i));
     return userImages.length > 0 && userImages.every((i) => selectedIds.has(i.id));
@@ -272,6 +394,7 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t("images", "filterPlaceholder")}
+            data-testid="image-filter-input"
             className="h-8 pl-8 text-xs"
           />
         </div>
@@ -282,15 +405,46 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
             size="sm"
             onClick={() => void fetchImages()}
             disabled={loading}
+            data-testid="image-refresh"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             {t("common", "refresh")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handlePreloadBundled()}
+            disabled={preloadingBundled}
+            data-testid="image-preload-bundled"
+          >
+            {preloadingBundled ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            {t("images", "preloadBundled")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportDialogOpen(true)}
+            data-testid="image-import-open"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {t("images", "importImages")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={selectedImageRefs.length === 0}
+            onClick={() => setExportDialogOpen(true)}
+            data-testid="image-export-open"
+          >
+            <PackageOpen className="h-3.5 w-3.5" />
+            {t("images", "exportImages")}
           </Button>
           <Button
             variant="destructive"
             size="sm"
             disabled={selectedIds.size === 0}
             onClick={() => setBatchRemoveConfirm(true)}
+            data-testid="image-batch-remove-open"
           >
             <Trash2 className="h-3.5 w-3.5" />
             {t("images", "batchRemove")}
@@ -304,11 +458,17 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
       </>
     );
     return () => onToolbar(null);
-  }, [filter, loading, selectedIds, t, fetchImages, onToolbar]);
+  }, [filter, loading, selectedIds, selectedImageRefs.length, t, fetchImages, handlePreloadBundled, preloadingBundled, onToolbar]);
 
   return (
     <div className="px-6 py-4">
       {/* Image count with select all */}
+      {archiveMessage !== null && (
+        <div className="mb-3 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
+          {archiveMessage}
+        </div>
+      )}
+
       <div className="mb-3 flex items-center gap-2">
         <Checkbox
           checked={allVisibleSelected}
@@ -343,7 +503,7 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
           {filteredImages.some((i) => isSystemImage(i)) && (
             <div>
               <h3 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {t("images", "sandboxImages")}
+                {t("images", "systemImages")}
               </h3>
               <div className="space-y-2">
                 {filteredImages.filter((i) => isSystemImage(i)).map((img) => (
@@ -353,6 +513,7 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
                     selected={false}
                     onToggleSelect={() => {}}
                     onInspect={() => void handleInspect(img.id)}
+                    onTag={() => openTagDialog(img)}
                     onRemove={() => {}}
                   />
                 ))}
@@ -374,6 +535,7 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
                     selected={selectedIds.has(img.id)}
                     onToggleSelect={() => toggleSelect(img.id)}
                     onInspect={() => void handleInspect(img.id)}
+                    onTag={() => openTagDialog(img)}
                     onRemove={() => setRemoveConfirm(img.id)}
                   />
                 ))}
@@ -435,6 +597,58 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
           <DialogFooter>
             <Button variant="outline" onClick={() => setInspectInfo(null)}>
               {t("common", "close")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tag Dialog */}
+      <Dialog
+        open={tagTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !tagging) {
+            setTagTarget(null);
+            setTagValue("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>{t("images", "tagImage")}</DialogTitle>
+            <DialogDescription>{t("images", "tagImageDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="text-xs font-medium text-muted-foreground">{t("images", "sourceImage")}</div>
+              <div className="rounded-md border bg-muted px-2 py-1 font-mono text-xs break-all">
+                {tagTarget !== null ? primaryImageReference(tagTarget) : ""}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-xs font-medium text-muted-foreground">{t("images", "targetTag")}</div>
+              <Input
+                value={tagValue}
+                onChange={(event) => setTagValue(event.target.value)}
+                placeholder="repo/name:tag"
+                className="font-mono text-xs"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={tagging}
+              onClick={() => {
+                setTagTarget(null);
+                setTagValue("");
+              }}
+            >
+              {t("common", "cancel")}
+            </Button>
+            <Button onClick={() => void handleTag()} disabled={tagging || tagValue.trim().length === 0}>
+              {tagging ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Tag className="h-3.5 w-3.5" />}
+              {t("images", "tagImage")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -538,13 +752,99 @@ function LocalImagesTab({ onRefreshRef, onToolbar }: { onRefreshRef: React.Mutab
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Export Dialog */}
+      <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>{t("images", "exportImages")}</DialogTitle>
+            <DialogDescription>
+              {t("images", "exportSelected").replace("{count}", String(selectedImageRefs.length))}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input
+              value={exportPath}
+              onChange={(event) => setExportPath(event.target.value)}
+              placeholder={t("images", "exportPath")}
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">{t("images", "archivePathHint")}</p>
+            <ScrollArea className="max-h-[160px]">
+              <div className="space-y-1">
+                {selectedImageRefs.map((reference) => (
+                  <div key={reference} className="rounded-md border bg-muted px-2 py-1 font-mono text-xs">
+                    {reference}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExportDialogOpen(false)}>
+              {t("common", "cancel")}
+            </Button>
+            <Button onClick={() => void handleExport()} disabled={exporting || exportPath.trim().length === 0}>
+              {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackageOpen className="h-3.5 w-3.5" />}
+              {t("images", "exportImages")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Dialog */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>{t("images", "importImages")}</DialogTitle>
+            <DialogDescription>{t("images", "archivePathHint")}</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={importPath}
+            onChange={(event) => setImportPath(event.target.value)}
+            placeholder={t("images", "importPath")}
+            className="font-mono text-xs"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
+              {t("common", "cancel")}
+            </Button>
+            <Button onClick={() => void handleImport()} disabled={importing || importPath.trim().length === 0}>
+              {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              {t("images", "importArchive")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-/** Check whether an image is a CrateBay built-in sandbox image. */
+/** Check whether an image is bundled with CrateBay. */
 function isSystemImage(image: LocalImageInfo): boolean {
   return image.repoTags.some((t) => t.startsWith("cratebay-"));
+}
+
+function primaryImageReference(image: LocalImageInfo): string {
+  return image.repoTags.find((tag) => tag && tag !== "<none>:<none>") ?? image.id;
+}
+
+function suggestImageTag(image: LocalImageInfo): string {
+  const reference = primaryImageReference(image);
+  if (reference.startsWith("sha256:")) {
+    return "cratebay/image:latest";
+  }
+
+  const slashIndex = reference.lastIndexOf("/");
+  const colonIndex = reference.lastIndexOf(":");
+  const hasTag = colonIndex > slashIndex;
+  if (!hasTag) {
+    return `${reference}:copy`;
+  }
+
+  const repo = reference.slice(0, colonIndex);
+  const tag = reference.slice(colonIndex + 1);
+  return `${repo}:${tag}-copy`;
 }
 
 function LocalImageRow({
@@ -552,12 +852,14 @@ function LocalImageRow({
   selected,
   onToggleSelect,
   onInspect,
+  onTag,
   onRemove,
 }: {
   image: LocalImageInfo;
   selected: boolean;
   onToggleSelect: () => void;
   onInspect: () => void;
+  onTag: () => void;
   onRemove: () => void;
 }) {
   const { t } = useI18n();
@@ -567,10 +869,13 @@ function LocalImageRow({
   const createdDate = new Date(image.created * 1000);
 
   return (
-    <div className={cn(
-      "flex items-center gap-3 rounded-lg border bg-card px-4 py-3 transition-colors hover:border-primary/30",
-      selected ? "border-primary/40 bg-primary/5" : "border-border",
-    )}>
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-lg border bg-card px-4 py-3 transition-colors hover:border-primary/30",
+        selected ? "border-primary/40 bg-primary/5" : "border-border",
+      )}
+      data-testid="image-row"
+    >
       {/* Checkbox */}
       <Checkbox
         checked={selected}
@@ -616,8 +921,19 @@ function LocalImageRow({
           className="h-7 w-7"
           onClick={onInspect}
           title={t("images", "inspectImage")}
+          data-testid="image-inspect-action"
         >
           <Eye className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={onTag}
+          title={t("images", "tagImage")}
+          data-testid="image-tag-action"
+        >
+          <Tag className="h-3.5 w-3.5" />
         </Button>
         {!isBuiltin && (
           <Button
@@ -626,6 +942,7 @@ function LocalImageRow({
             className="h-7 w-7 text-destructive hover:text-destructive"
             onClick={onRemove}
             title={t("images", "removeImage")}
+            data-testid="image-remove-action"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -722,6 +1039,7 @@ function SearchImagesTab({ onToolbar }: { onToolbar: (node: React.ReactNode) => 
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t("images", "searchPlaceholder")}
+            data-testid="image-search-input"
             className="h-8 pl-8 text-xs"
           />
         </div>
@@ -731,6 +1049,7 @@ function SearchImagesTab({ onToolbar }: { onToolbar: (node: React.ReactNode) => 
             size="sm"
             onClick={() => void handleSearch()}
             disabled={searching || query.trim().length === 0}
+            data-testid="image-search-submit"
           >
             {searching ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -760,7 +1079,7 @@ function SearchImagesTab({ onToolbar }: { onToolbar: (node: React.ReactNode) => 
         <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
           <Globe className="mb-3 h-12 w-12 opacity-20" />
           <h3 className="text-sm font-medium">{t("images", "searchHint")}</h3>
-          <p className="mt-1 text-xs">Docker Hub &middot; Quay.io &middot; GitHub Container Registry</p>
+          <p className="mt-1 text-xs">Docker Hub</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
@@ -787,7 +1106,10 @@ function SearchResultCard({
   const { t } = useI18n();
 
   return (
-    <div className="flex flex-col justify-between rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/30">
+    <div
+      className="flex flex-col justify-between rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/30"
+      data-testid="image-search-result"
+    >
       <div>
         <div className="flex items-center gap-2">
           <Badge
@@ -828,6 +1150,7 @@ function SearchResultCard({
           variant="outline"
           className="h-7 gap-1 px-2 text-xs"
           onClick={onPull}
+          data-testid="image-search-pull"
         >
           <Download className="h-3 w-3" />
           {t("images", "pull")}

@@ -5,14 +5,8 @@ import { setupTauriMocks, mockInvokeResponses, mockListen, resetTauriMocks } fro
 
 setupTauriMocks();
 
-vi.mock("@/pages/ChatPage", () => ({
-  ChatPage: () => <div data-testid="page-chat">ChatPage</div>,
-}));
 vi.mock("@/pages/ContainersPage", () => ({
   ContainersPage: () => <div data-testid="page-containers">ContainersPage</div>,
-}));
-vi.mock("@/pages/McpPage", () => ({
-  McpPage: () => <div data-testid="page-mcp">McpPage</div>,
 }));
 vi.mock("@/pages/SettingsPage", () => ({
   SettingsPage: () => <div data-testid="page-settings">SettingsPage</div>,
@@ -31,7 +25,7 @@ describe("runtime:health handling", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     resetTauriMocks();
     useAppStore.setState({
-      currentPage: "chat",
+      currentPage: "images",
       sidebarOpen: true,
       sidebarWidth: 260,
       dockerConnected: true,

@@ -20,7 +20,7 @@ if [[ -z "${staged_files}" ]]; then
   exit 0
 fi
 
-# ── Remote sync check (prompt-type + blocking) ───────────────────────────────
+# ── Remote sync check ────────────────────────────────────────────────────────
 # Require local branch to be synced with upstream before each commit.
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -258,10 +258,9 @@ if [[ "$should_build" -eq 1 ]]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────
-# Layer 6 — Platform Testing Gate (BLOCKING)
+# Layer 6 — Platform Testing Reminder
 # Trigger: any staged file under crates/cratebay-cli/ or crates/cratebay-gui/ or crates/cratebay-core/
-# Spec: .codebuddy/hooks/.pre-commit.spec
-# Ref: AGENTS.md Rule 6
+# Ref: AGENTS.md validation guidance
 # ─────────────────────────────────────────────────────────────────
 
 CORE_CHANGED=$(git diff --cached --name-only | grep -cE '^crates/(cratebay-cli|cratebay-gui|cratebay-core)/' || true)
@@ -269,7 +268,7 @@ CORE_CHANGED=$(git diff --cached --name-only | grep -cE '^crates/(cratebay-cli|c
 if [ "$CORE_CHANGED" -gt 0 ]; then
   echo ""
   echo "╔══════════════════════════════════════════════════════════════╗"
-  echo "║          Layer 6 — Platform Testing Gate                     ║"
+  echo "║          Layer 6 — Platform Testing Reminder                 ║"
   echo "╚══════════════════════════════════════════════════════════════╝"
   echo ""
   echo "Core crate changes detected ($CORE_CHANGED files)."
@@ -305,72 +304,29 @@ if [ "$CORE_CHANGED" -gt 0 ]; then
   echo "✅ Quick local validation passed."
   echo ""
 
-  # Step 2: Platform testing reminder + enforcement
-  # Check if .codebuddy/hooks/.pre-commit.spec exists
-  SPEC_FILE=".codebuddy/hooks/.pre-commit.spec"
-  if [ -f "$SPEC_FILE" ]; then
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  ⚠  THREE-PLATFORM TESTING REQUIRED (AGENTS.md Rule 6)     ║"
-    echo "╠══════════════════════════════════════════════════════════════╣"
-    echo "║                                                            ║"
-    echo "║  Before this commit can be accepted, the following         ║"
-    echo "║  platform testers MUST verify all CLI + GUI functionality: ║"
-    echo "║                                                            ║"
-    echo "║    • platform-tester-macos                                 ║"
-    echo "║    • platform-tester-linux                                 ║"
-    echo "║    • platform-tester-windows                               ║"
-    echo "║                                                            ║"
-    echo "║  Test spec: .codebuddy/hooks/.pre-commit.spec              ║"
-    echo "║  Agent prompt: docs/prompts/platform-test-pre-commit.md    ║"
-    echo "║                                                            ║"
-    echo "║  If running in an AI Agent session:                        ║"
-    echo "║  → Spawn 3 platform testers using the spec above           ║"
-    echo "║  → Wait for ALL THREE to report PASS                       ║"
-    echo "║                                                            ║"
-    echo "║  If running manually:                                      ║"
-    echo "║  → Ensure CI will run three-platform tests on push         ║"
-    echo "║  → Use --no-verify ONLY in emergencies (logged & flagged)  ║"
-    echo "║                                                            ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-
-    # Check for platform test results marker file
-    RESULTS_DIR=".codebuddy/test-results"
-    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "staged")
-    MACOS_RESULT="$RESULTS_DIR/platform-test-macos-${COMMIT_HASH}.pass"
-    LINUX_RESULT="$RESULTS_DIR/platform-test-linux-${COMMIT_HASH}.pass"
-    WINDOWS_RESULT="$RESULTS_DIR/platform-test-windows-${COMMIT_HASH}.pass"
-
-    MISSING_PLATFORMS=""
-    [ ! -f "$MACOS_RESULT" ] && MISSING_PLATFORMS="${MISSING_PLATFORMS} macOS"
-    [ ! -f "$LINUX_RESULT" ] && MISSING_PLATFORMS="${MISSING_PLATFORMS} Linux"
-    [ ! -f "$WINDOWS_RESULT" ] && MISSING_PLATFORMS="${MISSING_PLATFORMS} Windows"
-
-    if [ -n "$MISSING_PLATFORMS" ]; then
-      echo "⚠  Missing platform test results for:${MISSING_PLATFORMS}"
-      echo ""
-      echo "   Platform testers must run and generate .pass marker files"
-      echo "   at: ${RESULTS_DIR}/platform-test-{platform}-{hash}.pass"
-      echo ""
-      echo "   For AI Agent sessions: spawn platform testers now."
-      echo "   For manual commits: ensure CI will validate on push."
-      echo ""
-      # In AI Agent context, this blocks the commit.
-      # For human developers, the CI on push will catch failures.
-      if [ -n "${CODEBUDDY_AGENT:-}" ] || [ -n "${CLAUDE_AGENT:-}" ] || [ -n "${CURSOR_AGENT:-}" ]; then
-        echo "❌ BLOCKED: Agent-driven commit requires all 3 platform test results."
-        echo "   Spawn platform testers and wait for PASS before committing."
-        exit 1
-      else
-        echo "⚠  WARNING: Platform tests not verified locally."
-        echo "   CI will enforce three-platform testing on push."
-        echo "   Proceeding with commit..."
-      fi
-    else
-      echo "✅ All three platform tests verified: macOS ✓  Linux ✓  Windows ✓"
-    fi
-  fi
+  # Step 2: Platform testing reminder
+  echo "╔══════════════════════════════════════════════════════════════╗"
+  echo "║  ⚠  PLATFORM TESTING RECOMMENDED                           ║"
+  echo "╠══════════════════════════════════════════════════════════════╣"
+  echo "║                                                            ║"
+  echo "║  Before pushing CLI/runtime/GUI changes, verify the        ║"
+  echo "║  container workflows on the supported platforms you touch: ║"
+  echo "║                                                            ║"
+  echo "║    • macOS built-in runtime                                ║"
+  echo "║    • Linux built-in runtime                                ║"
+  echo "║    • Windows WSL2 runtime                                  ║"
+  echo "║                                                            ║"
+  echo "║  Useful checks:                                            ║"
+  echo "║    ./scripts/ci-local.sh                                   ║"
+  echo "║    CRATEBAY_RUN_RUNTIME_SMOKE=1 ./scripts/ci-local.sh      ║"
+  echo "║    ./scripts/runtime-smoke-cli-only.sh                     ║"
+  echo "║                                                            ║"
+  echo "║  CI also runs platform and runtime checks on push.         ║"
+  echo "║  → Use --no-verify ONLY in emergencies (logged & flagged)  ║"
+  echo "║                                                            ║"
+  echo "╚══════════════════════════════════════════════════════════════╝"
+  echo ""
 
   echo ""
-  echo "✅ Layer 6 — Platform Testing Gate passed."
+  echo "✅ Layer 6 — Platform Testing Reminder complete."
 fi

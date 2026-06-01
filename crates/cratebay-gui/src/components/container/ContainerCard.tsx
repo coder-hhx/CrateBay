@@ -45,7 +45,11 @@ export function ContainerCard({ container }: ContainerCardProps) {
   /** Wrap action handlers to prevent card click */
   const stop = (e: React.MouseEvent) => { e.stopPropagation(); void stopContainer(container.id); };
   const start = (e: React.MouseEvent) => { e.stopPropagation(); void startContainer(container.id); };
-  const remove = (e: React.MouseEvent) => { e.stopPropagation(); void deleteContainer(container.id); };
+  const remove = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
+    void deleteContainer(container.id);
+  };
   const openDetail = (e: React.MouseEvent) => { e.stopPropagation(); selectContainer(container.id); };
 
   return (
@@ -181,7 +185,6 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
         };
       case "exited":
       case "stopped":
-      case "dead":
         return {
           label: t("containers", "stopped"),
           dotClass: "bg-zinc-400",
@@ -196,15 +199,21 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
         };
       case "paused":
         return {
-          label: "Paused",
+          label: t("containers", "paused"),
           dotClass: "bg-amber-400",
           textClass: "text-amber-500",
         };
       case "restarting":
         return {
-          label: "Restarting",
+          label: t("containers", "restarting"),
           dotClass: "bg-blue-400 animate-pulse",
           textClass: "text-blue-500",
+        };
+      case "dead":
+        return {
+          label: t("containers", "dead"),
+          dotClass: "bg-red-400 shadow-[0_0_4px_1px_rgba(248,113,113,0.5)]",
+          textClass: "text-red-500",
         };
       default:
         return {

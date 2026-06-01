@@ -1,6 +1,6 @@
 //! Container management Tauri commands.
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::AppState;
 use cratebay_core::error::AppError;
@@ -10,7 +10,7 @@ use cratebay_core::models::{
     ExecResult, ImageInspectInfo, ImageSearchResult, LocalImageInfo, LogEntry, LogOptions,
 };
 use cratebay_core::MutexExt;
-use cratebay_core::{audit, container, storage, validation};
+use cratebay_core::{audit, bundle_images, container, storage, validation};
 
 /// List available container templates.
 #[tauri::command]
@@ -192,13 +192,19 @@ pub async fn image_search(
     let term = query.trim();
     let limit = limit.map(u64::from);
 
-    // Prefer Docker Engine search when Docker is already reachable. Avoid
-    // provisioning/starting the runtime just for image search — fallback to
-    // Docker Hub HTTP API if Docker isn't available.
+    // Prefer Docker Engine search when an explicit host or already-running
+    // built-in runtime is reachable. Avoid provisioning/starting the runtime
+    // just for image search. When DOCKER_HOST is explicit, surface connection
+    // failures instead of silently falling back to Docker Hub.
     if let Ok(docker) = state.require_docker() {
         if cratebay_core::docker::is_available(&docker).await {
             return container::image_search(&docker, term, limit).await;
         }
+    }
+
+    if let Some(host) = cratebay_core::docker::explicit_host_override() {
+        let docker = cratebay_core::docker::connect_host(&host).await?;
+        return container::image_search(&docker, term, limit).await;
     }
 
     if let Some(docker) = cratebay_core::docker::try_connect().await {
@@ -238,6 +244,62 @@ pub async fn image_tag(
 ) -> Result<(), AppError> {
     let docker = state.ensure_docker_once().await?;
     container::image_tag(&docker, &source, &target).await
+}
+
+/// Commit a container into a new local image tag.
+#[tauri::command]
+pub async fn image_pack_container(
+    state: State<'_, AppState>,
+    container: String,
+    image: String,
+) -> Result<String, AppError> {
+    let docker = state.ensure_docker_once().await?;
+    container::image_commit_container(&docker, &container, &image).await
+}
+
+/// Export one or more local images to a tar archive.
+#[tauri::command]
+pub async fn image_export(
+    state: State<'_, AppState>,
+    images: Vec<String>,
+    output: String,
+) -> Result<u64, AppError> {
+    let docker = state.ensure_docker_once().await?;
+    container::image_export_to_tar(&docker, &images, &output).await
+}
+
+/// Import images from a tar archive.
+#[tauri::command]
+pub async fn image_import(
+    state: State<'_, AppState>,
+    input: String,
+) -> Result<Vec<String>, AppError> {
+    let docker = state.ensure_docker_once().await?;
+    container::image_load_from_tar(&docker, &input).await
+}
+
+/// Load bundled CrateBay container images into the built-in runtime.
+#[tauri::command]
+pub async fn image_preload_bundled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<bundle_images::BundleImageLoadResult>, AppError> {
+    let docker = state.ensure_docker_once().await?;
+    let bundle_dir = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("bundle-images"))
+        .filter(|dir| dir.is_dir())
+        .or_else(bundle_images::find_bundle_image_dir)
+        .ok_or_else(|| {
+            AppError::Runtime(
+                "No bundle-images directory found. Set CRATEBAY_BUNDLE_IMAGES_DIR or include bundle-images in the app resources."
+                    .to_string(),
+            )
+        })?;
+
+    Ok(bundle_images::load_bundle_images_from_dir(&docker, &bundle_dir).await)
 }
 
 /// Pull a Docker image (non-blocking).
@@ -359,8 +421,8 @@ fn translate_pull_status(status: &str) -> String {
     // "Pull complete", "Pulling fs layer", "Verifying Checksum", "Download complete",
     // "Already exists", "Waiting", "Digest: sha256:...", "Pulling from library/xxx"
     let s = status.trim();
-    if s.starts_with("Pulling from ") {
-        return format!("正在拉取 {}", &s["Pulling from ".len()..]);
+    if let Some(image) = s.strip_prefix("Pulling from ") {
+        return format!("正在拉取 {}", image);
     }
     if s.starts_with("Digest:") {
         return s.to_string(); // Keep digest as-is
@@ -377,97 +439,4 @@ fn translate_pull_status(status: &str) -> String {
         "Retrying" => "重试中".to_string(),
         _ => s.to_string(),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Bundle image preloading
-// ---------------------------------------------------------------------------
-
-/// Definition of a bundle image that can be preloaded.
-pub struct BundleImageDef {
-    pub tar_filename: &'static str,
-    pub image_name: &'static str,
-}
-
-/// The set of images we bundle with the application.
-pub const BUNDLE_IMAGES: &[BundleImageDef] = &[
-    BundleImageDef {
-        tar_filename: "python-dev.tar.gz",
-        image_name: "cratebay-python-dev:v1",
-    },
-    BundleImageDef {
-        tar_filename: "node-dev.tar.gz",
-        image_name: "cratebay-node-dev:v1",
-    },
-    BundleImageDef {
-        tar_filename: "rust-dev.tar.gz",
-        image_name: "cratebay-rust-dev:v1",
-    },
-    BundleImageDef {
-        tar_filename: "ubuntu-base.tar.gz",
-        image_name: "cratebay-ubuntu-base:v1",
-    },
-];
-
-/// Load pre-packaged Docker images from the application bundle.
-///
-/// Checks each bundle image — if not already present in Docker, loads from the
-/// tar.gz file in the app's resource directory. Runs in the background on startup.
-pub async fn load_bundle_images(
-    docker: &bollard::Docker,
-    resource_dir: &std::path::Path,
-) -> Vec<String> {
-    let mut loaded = Vec::new();
-    let bundle_dir = resource_dir.join("bundle-images");
-
-    if !bundle_dir.exists() {
-        tracing::debug!(
-            "No bundle-images directory found at {:?}, skipping preload",
-            bundle_dir
-        );
-        return loaded;
-    }
-
-    for def in BUNDLE_IMAGES {
-        // Check if image already exists
-        match cratebay_core::container::image_exists(docker, def.image_name).await {
-            Ok(true) => {
-                tracing::debug!("Bundle image {} already present, skipping", def.image_name);
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!("Failed to check image {}: {}", def.image_name, e);
-                continue;
-            }
-        }
-
-        let tar_path = bundle_dir.join(def.tar_filename);
-        if !tar_path.exists() {
-            tracing::debug!("Bundle image file {:?} not found, skipping", tar_path);
-            continue;
-        }
-
-        tracing::info!(
-            "Loading bundle image {} from {:?}",
-            def.image_name,
-            tar_path
-        );
-        match cratebay_core::container::image_load_from_tar(
-            docker,
-            tar_path.to_string_lossy().as_ref(),
-        )
-        .await
-        {
-            Ok(names) => {
-                tracing::info!("Loaded bundle image: {:?}", names);
-                loaded.extend(names);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load bundle image {:?}: {}", tar_path, e);
-            }
-        }
-    }
-
-    loaded
 }

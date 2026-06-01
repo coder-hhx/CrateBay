@@ -55,7 +55,7 @@ export function createI18n(locale: string): I18nInstance {
  *
  * @example
  * const { t } = useI18n();
- * t("chat", "placeholder"); // TypeScript validates both namespace and key
+ * t("images", "title"); // TypeScript validates both namespace and key
  */
 export function useI18n(): I18nInstance {
   const language = useSettingsStore((s) => s.settings.language);

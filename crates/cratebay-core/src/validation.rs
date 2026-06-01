@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_validate_url() {
-        assert!(validate_url("https://api.openai.com").is_ok());
+        assert!(validate_url("https://registry-1.docker.io").is_ok());
         assert!(validate_url("http://localhost:8080").is_ok());
         assert!(validate_url("ftp://bad.com").is_err());
         assert!(validate_url("not-a-url").is_err());

@@ -1,6 +1,6 @@
 # Built-in Container Runtime Specification
 
-> Version: 1.3.0 | Last Updated: 2026-03-26 | Author: runtime-dev
+> Version: 1.3.1 | Last Updated: 2026-05-31 | Author: runtime-dev
 
 ---
 
@@ -15,7 +15,7 @@
 7. [Resource Management](#7-resource-management)
 8. [First-Run Experience](#8-first-run-experience)
 9. [Runtime Health Check](#9-runtime-health-check)
-10. [Fallback: External Docker Detection](#10-fallback-external-docker-detection)
+10. [Explicit Docker Host Compatibility](#10-explicit-docker-host-compatibility)
 11. [Platform-Specific Implementation](#11-platform-specific-implementation)
 
 ---
@@ -26,21 +26,20 @@
 
 CrateBay ships a **built-in container runtime** so that users can install the application and immediately start creating and managing containers — without installing Docker Desktop, Colima, or any other external tool.
 
-**Note:** If Podman is already installed, CrateBay may optionally use it as a
-Docker-compatible engine fallback to keep the product usable when the built-in
-runtime is temporarily unavailable.
+**Note:** External Docker-compatible endpoints can be used for compatibility
+and diagnostics, but only when explicitly selected by the operator.
 
 ### 1.1 Product Runtime Strategy
 
 CrateBay has a **single runtime roadmap**:
 
 - The **built-in runtime** is the **primary product path** across macOS, Linux, and Windows.
-- **Podman is a fallback / escape hatch**, not a co-equal roadmap track.
+- External Docker-compatible hosts are a compatibility override, not a co-equal roadmap track.
 - Container and image management MUST continue to target the **Docker-compatible API boundary** (`bollard`, Docker socket/host semantics).
-- When runtime-related issues occur, contributors SHOULD fix the built-in runtime path first before expanding Podman-specific behavior.
-- Podman-specific product features, product flows, or architectural branches are **out of scope** unless explicitly approved by a human maintainer.
+- When runtime-related issues occur, contributors SHOULD fix the built-in runtime path first before expanding external-host behavior.
+- External-engine-specific product features, product flows, or architectural branches are **out of scope** unless explicitly approved by a human maintainer.
 
-Podman remains useful for:
+Explicit Docker-compatible hosts remain useful for:
 
 1. temporary recovery when the built-in runtime is unavailable,
 2. development or CI environments needing a quick Docker-compatible engine,
@@ -54,37 +53,37 @@ This strategy keeps CrateBay aligned with its zero-dependency product goal while
 |-------------|-------------|
 | **Zero external dependencies** | No Docker, no Colima, no manual configuration |
 | **Automatic provisioning** | First launch downloads and configures the runtime automatically |
-| **Transparent to users** | Users interact with containers through the Chat UI; the runtime layer is invisible |
+| **Transparent to users** | Users interact with images, containers, pods, and runtime controls through the desktop app or CLI |
 | **Native performance** | Use platform-native virtualization (VZ.framework, KVM, WSL2) for near-native speed |
 | **Small footprint** | VM image < 500 MB download, < 1 GB disk after provisioning |
-| **Graceful coexistence** | If external Docker is already installed, use it instead of the built-in runtime |
+| **Explicit compatibility** | Use external Docker-compatible endpoints only when `DOCKER_HOST` or `--docker-host` is set |
 
 ### Architecture Overview
 
 ```
 CrateBay App
      │
-     ├── Detect existing Docker? ──→ Yes ──→ Use external Docker
-     │                                        (no runtime needed)
+     ├── Explicit DOCKER_HOST / --docker-host? ──→ Use that endpoint
+     │                                             (compatibility mode)
      │
-     └── No external Docker ──→ Start built-in runtime
-                                  │
-                    ┌─────────────┼─────────────┐
-                    │             │             │
-                macOS          Linux        Windows
-                    │             │             │
-             VZ.framework     KVM/QEMU       WSL2
-                    │             │             │
-              Linux VM       Linux VM     WSL2 Distro
-                    │             │             │
-             Docker Engine   Docker Engine  Docker Engine
-                    │             │             │
-              Unix Socket    Unix Socket    Socket/Pipe
-                    │             │             │
-                    └─────────────┼─────────────┘
-                                  │
-                         bollard connects
-                         via socket
+     └── Default path ──→ Start / reuse built-in runtime
+                           │
+             ┌─────────────┼─────────────┐
+             │             │             │
+         macOS          Linux        Windows
+             │             │             │
+      VZ.framework     KVM/QEMU       WSL2
+             │             │             │
+       Linux VM       Linux VM     WSL2 Distro
+             │             │             │
+      Docker Engine   Docker Engine  Docker Engine
+             │             │             │
+       Unix Socket    TCP/Socket     TCP/Pipe
+             │             │             │
+             └─────────────┼─────────────┘
+                           │
+                  bollard connects
+                  via built-in endpoint
 ```
 
 ---
@@ -273,8 +272,8 @@ App Launch / First Docker Operation (GUI or CLI)
     │
     ├── engine::ensure_docker()
     │   ├── Cross-process lock (engine.lock)
-    │   ├── Try external Docker first (no VM needed)
-    │   └── If not available → start built-in runtime
+    │   ├── Reuse already-running built-in runtime if responsive
+    │   └── Otherwise provision/start built-in runtime
     │
     ├── runtime.detect()
     │   ├── RuntimeState::None → runtime.provision() → runtime.start()
@@ -287,13 +286,10 @@ App Launch / First Docker Operation (GUI or CLI)
         └── Timeout / error → surface error to user
 ```
 
-**Provider override:** `CRATEBAY_ENGINE_PROVIDER` can override engine selection:
-
-- `auto` (default): external Docker → built-in runtime → (best-effort) Podman fallback
-- `builtin`: force built-in runtime only
-- `podman`: force Podman only
-
-`CRATEBAY_ENGINE_PROVIDER` exists for compatibility, recovery, testing, and explicit operator choice. It does **not** change the product strategy: the built-in runtime remains the default roadmap path, and Podman remains a secondary fallback mode.
+`engine::ensure_docker()` is intentionally built-in-runtime-only. Compatibility
+with external Docker-compatible engines is handled outside this path by explicit
+host selection (`--docker-host` or `DOCKER_HOST`), so the default product
+behavior remains deterministic.
 
 ### 3.4 Concurrency & Lifetime
 
@@ -804,81 +800,47 @@ pub fn start_health_monitor(
 
 ---
 
-## 10. Fallback: External Docker Detection
+## 10. Explicit Docker Host Compatibility
 
-### 10.1 Detection Priority
+### 10.1 Default Resolution
 
-Before starting the built-in runtime, CrateBay checks for existing Docker installations:
+CrateBay does not auto-detect Docker Desktop, Colima, OrbStack, Podman, or
+platform default sockets before starting its own runtime. The default engine
+resolution is:
 
 ```
-Priority 1: DOCKER_HOST environment variable
-Priority 2: Platform-specific known socket paths
-Priority 3: Built-in runtime socket
-Priority 4: Start built-in runtime
+Priority 1: Already-running built-in runtime endpoint
+Priority 2: Provision/start built-in runtime
 ```
 
-### 10.2 Known Socket Paths
+This keeps the CLI and desktop app aligned with the self-contained runtime
+strategy and avoids accidentally managing containers from a different host
+engine.
 
-CrateBay supports the common `DOCKER_HOST` formats:
+### 10.2 Explicit Overrides
+
+CrateBay supports common Docker host formats when the operator explicitly passes
+`--docker-host` or sets `DOCKER_HOST`:
 
 - `unix:///path/to/docker.sock` (macOS/Linux)
+- `/path/to/docker.sock` (macOS/Linux shorthand)
 - `tcp://host:port` (treated as `http://host:port`)
 - `http://host:port` / `https://host:port`
 - `npipe:////./pipe/docker_engine` (Windows)
 
-If `DOCKER_HOST` is set but Docker is not reachable, CrateBay logs a warning and
-continues with known socket paths.
-
-```rust
-fn detect_external_docker() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-
-    #[cfg(target_os = "macos")]
-    {
-        let paths = [
-            home.join(".colima/default/docker.sock"),
-            home.join(".orbstack/run/docker.sock"),
-            PathBuf::from("/var/run/docker.sock"),
-            home.join(".docker/run/docker.sock"),
-        ];
-        for path in paths {
-            if path.exists() { return Some(path); }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let paths = [
-            PathBuf::from("/var/run/docker.sock"),
-            home.join(".docker/run/docker.sock"),
-        ];
-        for path in paths {
-            if path.exists() { return Some(path); }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Check named pipe
-        if PathBuf::from(r"\\.\pipe\docker_engine").exists() {
-            return Some(PathBuf::from(r"\\.\pipe\docker_engine"));
-        }
-    }
-
-    None
-}
-```
+If an explicit host is set but is not reachable, CrateBay surfaces that failure
+instead of silently falling back to a different engine.
 
 ### 10.3 Coexistence Strategy
 
 | Scenario | Behavior |
 |----------|----------|
-| Docker Desktop running | Use Docker Desktop, skip runtime |
-| Colima running (macOS) | Use Colima socket, skip runtime |
-| OrbStack running (macOS) | Use OrbStack socket, skip runtime |
-| No Docker found | Start built-in runtime |
-| External Docker + built-in runtime | Prefer external, offer switch in settings |
-| External Docker stopped | Detect change, offer to start built-in runtime |
+| No explicit host | Start or reuse the built-in runtime |
+| Built-in runtime already running | Reuse the built-in runtime socket/host |
+| Docker Desktop / Colima / OrbStack running but no override set | Ignore it and keep using the built-in runtime path |
+| `--docker-host` or `DOCKER_HOST` set | Use that explicit Docker-compatible endpoint |
+| Explicit host stopped or unreachable | Surface the connection error; user can unset the override to return to built-in runtime |
+| External host + built-in runtime both running | Prefer the explicit host only while the override is set |
 
 ---
 

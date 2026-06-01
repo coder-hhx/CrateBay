@@ -14,8 +14,6 @@ tauri = { workspace = true, features = [] }
 tauri-specta = { workspace = true }
 specta = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
-reqwest = { workspace = true }
 bollard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -77,13 +77,17 @@ fn start_runtime_health_monitor(
             // ── Fast path: shared client is alive ──────────────────────────
             if let Some(_docker) = get_responsive_shared_docker(&app_handle).await {
                 tracing::debug!("Health monitor: shared Docker client responsive — emitting Ready");
+                let state = app_handle.state::<AppState>();
+                let source = state
+                    .docker_source()
+                    .unwrap_or_else(|| "builtin".to_string());
                 let health = cratebay_core::runtime::HealthStatus {
                     runtime_state: cratebay_core::runtime::RuntimeState::Ready,
                     docker_responsive: true,
                     docker_version: None,
                     uptime_seconds: None,
                     last_check: Utc::now().to_rfc3339(),
-                    docker_source: Some("builtin".to_string()),
+                    docker_source: Some(source),
                 };
                 let _ = app_handle.emit(events::event_names::RUNTIME_HEALTH, &health);
                 continue;
@@ -267,10 +271,10 @@ fn main() {
         Arc::from(cratebay_core::runtime::create_runtime_manager());
     tracing::info!("Runtime manager initialized for {}", std::env::consts::OS);
 
-    // Attempt Docker connection (non-blocking, optional)
-    // Try external Docker first; if unavailable, the runtime auto-start
-    // in Tauri setup will handle it.
-    let docker = {
+    // Attempt an existing CrateBay runtime connection (or an explicit
+    // DOCKER_HOST override) without blocking app launch. If unavailable, the
+    // runtime auto-start in Tauri setup will handle it.
+    let (docker, docker_source) = {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -281,14 +285,16 @@ fn main() {
         };
         match rt.block_on(cratebay_core::docker::try_connect()) {
             Some(d) => {
-                tracing::info!("Docker connected (external or existing runtime)");
-                Some(Arc::new(d))
+                let source = cratebay_core::docker::explicit_host_override()
+                    .unwrap_or_else(|| "builtin".to_string());
+                tracing::info!("Docker connected (existing runtime or explicit host)");
+                (Some(Arc::new(d)), Some(source))
             }
             None => {
                 tracing::info!(
                     "Docker not available yet — runtime auto-start will attempt connection"
                 );
-                None
+                (None, None)
             }
         }
     };
@@ -298,84 +304,13 @@ fn main() {
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf();
 
-    // Initialize MCP Manager
-    // Load .mcp.json from project root and merge with SQLite-stored servers
-    let mcp_manager = {
-        use cratebay_core::mcp::{load_mcp_json, merge_server_configs, McpServerDbRow};
-
-        let mcp_json = match load_mcp_json(std::path::Path::new(".")) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                tracing::warn!("Failed to load .mcp.json: {}", e);
-                None
-            }
-        };
-
-        // Load user-configured servers from SQLite
-        let db_rows: Vec<McpServerDbRow> = (|| -> Vec<McpServerDbRow> {
-            let mut stmt = match conn.prepare(
-                "SELECT id, name, command, args, env, working_dir, enabled, notes, auto_start \
-                 FROM mcp_servers ORDER BY name",
-            ) {
-                Ok(stmt) => stmt,
-                Err(e) => {
-                    tracing::warn!("Failed to prepare MCP servers query: {}", e);
-                    return Vec::new();
-                }
-            };
-
-            stmt.query_map([], |row| {
-                let args_json: String = row.get(3)?;
-                let env_json: String = row.get(4)?;
-                let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
-                let env: Vec<String> = serde_json::from_str(&env_json).unwrap_or_default();
-
-                Ok(McpServerDbRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    command: row.get(2)?,
-                    args,
-                    env,
-                    working_dir: row.get(5)?,
-                    enabled: row.get::<_, i32>(6)? != 0,
-                    notes: row.get(7)?,
-                    auto_start: row.get::<_, i32>(8)? != 0,
-                })
-            })
-            .map(|r| r.filter_map(|row| row.ok()).collect())
-            .unwrap_or_default()
-        })();
-
-        let configs = merge_server_configs(mcp_json.as_ref(), &db_rows);
-        let manager = Arc::new(cratebay_core::mcp::McpManager::new());
-
-        // Load configs and auto-start in a blocking tokio context
-        let mgr_clone = manager.clone();
-        let mcp_rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!("Failed to create tokio runtime for MCP: {}", e);
-                eprintln!("Fatal: Failed to create tokio runtime for MCP: {}", e);
-                std::process::exit(1);
-            }
-        };
-        mcp_rt.block_on(async {
-            mgr_clone.load_configs(configs).await;
-            mgr_clone.auto_start_servers().await;
-        });
-
-        tracing::info!("MCP manager initialized with {} servers", db_rows.len());
-        manager
-    };
-
     let app_state = AppState {
-        docker: Arc::new(Mutex::new(docker.clone())),
-        docker_init: Arc::new(tokio::sync::OnceCell::new()),
+        docker: Arc::new(Mutex::new(docker)),
+        docker_source: Arc::new(Mutex::new(docker_source)),
+        docker_init_lock: Arc::new(tokio::sync::Mutex::new(())),
         db: Arc::new(Mutex::new(conn)),
         data_dir,
-        llm_cancel_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
         runtime: runtime.clone(),
-        mcp_manager,
     };
 
     tauri::Builder::default()
@@ -402,104 +337,132 @@ fn main() {
             start_runtime_health_monitor(app_handle, health_runtime);
             tracing::info!("Runtime health monitor started");
 
-            // ── Runtime auto-start (background, non-blocking) ────────
-            // If Docker is not yet connected, try to start the built-in
-            // runtime and then reconnect Docker through the runtime socket.
-            let auto_start_handle = app.handle().clone();
-            let auto_start_runtime = runtime.clone();
-            std::thread::Builder::new()
-                .name("runtime-auto-start".to_string())
-                .spawn(move || {
-                    let rt = match tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            tracing::error!("Failed to create runtime auto-start tokio runtime: {}", e);
-                            return;
-                        }
-                    };
-
-                    rt.block_on(async {
-                        // Check if Docker is already available
+            if cratebay_core::runtime::common::env_flag_enabled(
+                "CRATEBAY_DISABLE_RUNTIME_AUTO_START",
+            ) {
+                tracing::info!("Runtime auto-start disabled by CRATEBAY_DISABLE_RUNTIME_AUTO_START");
+            } else {
+                // ── Runtime auto-start (background, non-blocking) ────────
+                // If Docker is not yet connected, try to start the built-in
+                // runtime and then reconnect Docker through the runtime socket.
+                let auto_start_handle = app.handle().clone();
+                let auto_start_runtime = runtime.clone();
+                std::thread::Builder::new()
+                    .name("runtime-auto-start".to_string())
+                    .spawn(move || {
+                        let rt = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
                         {
-                            let state = auto_start_handle.state::<AppState>();
-                            if state.has_docker() {
-                                tracing::info!(
-                                    "Docker already connected, skipping runtime auto-start"
-                                );
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                tracing::error!("Failed to create runtime auto-start tokio runtime: {}", e);
                                 return;
                             }
-                        }
-
-                        tracing::info!("Starting container engine auto-start sequence...");
-
-                        // Apply persisted runtime HTTP proxy settings so the VM can reach registries
-                        // when started automatically (without the user clicking "Start Runtime").
-                        apply_runtime_http_proxy_env(&auto_start_handle);
-
-                        // Provision progress callback that emits Tauri events
-                        let handle_clone = auto_start_handle.clone();
-                        let progress_cb: Box<
-                            dyn Fn(cratebay_core::runtime::ProvisionProgress) + Send,
-                        > = Box::new(move |progress| {
-                            tracing::info!(
-                                "Provision progress: {} - {:.1}% - {}",
-                                progress.stage,
-                                progress.percent,
-                                progress.message
-                            );
-                            let _ = handle_clone.emit(events::event_names::RUNTIME_PROVISION, &progress);
-                            // Backward-compatible alias (deprecated)
-                            let _ = handle_clone.emit("runtime:provision-progress", &progress);
-                        });
-
-                        let options = cratebay_core::engine::EnsureOptions {
-                            on_provision_progress: Some(progress_cb),
-                            ..Default::default()
                         };
 
-                        match cratebay_core::engine::ensure_docker(
-                            auto_start_runtime.as_ref(),
-                            options,
-                        )
-                        .await
-                        {
-                            Ok(docker) => {
-                                tracing::info!("Docker connected via ensured container engine");
+                        rt.block_on(async {
+                            // Check if Docker is already available
+                            {
                                 let state = auto_start_handle.state::<AppState>();
-                                state.set_docker(Some(docker.clone()));
-                                let _ = auto_start_handle.emit("docker:connected", true);
+                                if state.has_docker() {
+                                    tracing::info!(
+                                        "Docker already connected, skipping runtime auto-start"
+                                    );
+                                    return;
+                                }
+                            }
 
-                                // Preload bundle images in background
-                                let resource_dir = auto_start_handle
-                                    .path()
-                                    .resource_dir()
-                                    .unwrap_or_default();
-                                let preload_docker = docker.clone();
-                                tokio::spawn(async move {
-                                    let loaded = commands::container::load_bundle_images(
-                                        &preload_docker,
-                                        &resource_dir,
-                                    )
-                                    .await;
-                                    if !loaded.is_empty() {
-                                        tracing::info!(
-                                            "Preloaded {} bundle images: {:?}",
-                                            loaded.len(),
-                                            loaded
+                            tracing::info!("Starting container engine auto-start sequence...");
+
+                            // Apply persisted runtime HTTP proxy settings so the VM can reach registries
+                            // when started automatically (without the user clicking "Start Runtime").
+                            apply_runtime_http_proxy_env(&auto_start_handle);
+
+                            // Provision progress callback that emits Tauri events
+                            let handle_clone = auto_start_handle.clone();
+                            let progress_cb: Box<
+                                dyn Fn(cratebay_core::runtime::ProvisionProgress) + Send,
+                            > = Box::new(move |progress| {
+                                tracing::info!(
+                                    "Provision progress: {} - {:.1}% - {}",
+                                    progress.stage,
+                                    progress.percent,
+                                    progress.message
+                                );
+                                let _ = handle_clone
+                                    .emit(events::event_names::RUNTIME_PROVISION, &progress);
+                                // Backward-compatible alias (deprecated)
+                                let _ = handle_clone.emit("runtime:provision-progress", &progress);
+                            });
+
+                            let options = cratebay_core::engine::EnsureOptions {
+                                on_provision_progress: Some(progress_cb),
+                                ..Default::default()
+                            };
+
+                            match cratebay_core::engine::ensure_docker(
+                                auto_start_runtime.as_ref(),
+                                options,
+                            )
+                            .await
+                            {
+                                Ok(docker) => {
+                                    tracing::info!("Docker connected via ensured container engine");
+                                    let state = auto_start_handle.state::<AppState>();
+                                    state.set_docker(
+                                        Some(docker.clone()),
+                                        Some("builtin".to_string()),
+                                    );
+                                    let _ = auto_start_handle.emit("docker:connected", true);
+
+                                    // Preload bundled images on this background thread.
+                                    let bundle_dir = auto_start_handle
+                                        .path()
+                                        .resource_dir()
+                                        .ok()
+                                        .map(|dir| dir.join("bundle-images"))
+                                        .filter(|dir| dir.is_dir())
+                                        .or_else(cratebay_core::bundle_images::find_bundle_image_dir);
+                                    let preload_docker = docker.clone();
+                                    let results = match bundle_dir {
+                                        Some(bundle_dir) => {
+                                            cratebay_core::bundle_images::load_bundle_images_from_dir(
+                                                &preload_docker,
+                                                &bundle_dir,
+                                            )
+                                            .await
+                                        }
+                                        None => Vec::new(),
+                                    };
+                                    let loaded_count =
+                                        results.iter().filter(|result| result.loaded).count();
+                                    for result in results
+                                        .iter()
+                                        .filter(|result| !result.loaded && !result.skipped)
+                                    {
+                                        tracing::warn!(
+                                            "Failed to preload bundle image {}: {}",
+                                            result.image_name,
+                                            result.message
                                         );
                                     }
-                                });
+                                    if loaded_count > 0 {
+                                        tracing::info!(
+                                            "Preloaded {} bundle images: {:?}",
+                                            loaded_count,
+                                            results
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Engine auto-start failed: {}", e);
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!("Engine auto-start failed: {}", e);
-                            }
-                        }
-                    });
-                })
-                .ok(); // JoinHandle is dropped — the thread runs independently.
+                        });
+                    })
+                    .ok(); // JoinHandle is dropped — the thread runs independently.
+            }
 
             // Debug: check WebView status
             #[cfg(debug_assertions)]
@@ -578,47 +541,27 @@ fn main() {
             commands::container::image_inspect,
             commands::container::image_remove,
             commands::container::image_tag,
+            commands::container::image_pack_container,
+            commands::container::image_export,
+            commands::container::image_import,
+            commands::container::image_preload_bundled,
             commands::container::image_pull,
-            // LLM
-            commands::llm::llm_proxy_stream,
-            commands::llm::llm_proxy_cancel,
-            commands::llm::llm_provider_list,
-            commands::llm::llm_provider_create,
-            commands::llm::llm_provider_update,
-            commands::llm::llm_provider_delete,
-            commands::llm::llm_provider_test,
-            commands::llm::llm_models_fetch,
-            commands::llm::llm_models_list,
-            commands::llm::llm_models_toggle,
+            // Pods
+            commands::pod::pod_list,
+            commands::pod::pod_create,
+            commands::pod::pod_inspect,
+            commands::pod::pod_delete,
+            commands::pod::pod_add_container,
+            commands::pod::pod_remove_container,
             // Storage
             commands::storage::settings_get,
             commands::storage::settings_update,
-            commands::storage::api_key_save,
-            commands::storage::api_key_delete,
-            commands::storage::conversation_list,
-            commands::storage::conversation_get_messages,
-            commands::storage::conversation_create,
-            commands::storage::conversation_delete,
-            commands::storage::conversation_save_message,
-            commands::storage::conversation_update_title,
-            // MCP
-            commands::mcp::mcp_server_list,
-            commands::mcp::mcp_server_add,
-            commands::mcp::mcp_server_remove,
-            commands::mcp::mcp_server_start,
-            commands::mcp::mcp_server_stop,
-            commands::mcp::mcp_client_call_tool,
-            commands::mcp::mcp_client_list_tools,
-            commands::mcp::mcp_export_client_config,
             // System
             commands::system::system_info,
             commands::system::docker_status,
             commands::system::runtime_status,
             commands::system::runtime_start,
             commands::system::runtime_stop,
-            // Sandbox
-            commands::sandbox::sandbox_run_code,
-            commands::sandbox::sandbox_install,
             // Debug
             #[cfg(debug_assertions)]
             commands::system::webview_debug_report,

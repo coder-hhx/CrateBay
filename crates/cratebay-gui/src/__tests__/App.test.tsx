@@ -4,11 +4,11 @@ import { useAppStore } from "@/stores/appStore";
 import { APP_VERSION } from "@/lib/constants";
 
 // Mock child pages to avoid deep rendering issues (e.g. infinite update loops)
-vi.mock("@/pages/ChatPage", () => ({
-  ChatPage: () => <div data-testid="page-chat">ChatPage</div>,
-}));
 vi.mock("@/pages/ContainersPage", () => ({
   ContainersPage: () => <div data-testid="page-containers">ContainersPage</div>,
+}));
+vi.mock("@/pages/ImagesPage", () => ({
+  ImagesPage: () => <div data-testid="page-images">ImagesPage</div>,
 }));
 vi.mock("@/pages/SettingsPage", () => ({
   SettingsPage: () => <div data-testid="page-settings">SettingsPage</div>,
@@ -29,7 +29,7 @@ import App from "../App";
 describe("App", () => {
   beforeEach(() => {
     useAppStore.setState({
-      currentPage: "chat",
+      currentPage: "containers",
       sidebarOpen: true,
       sidebarWidth: 260,
       dockerConnected: false,
@@ -51,17 +51,34 @@ describe("App", () => {
     expect(versionElements.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders the default Chat page", () => {
+  it("renders the default Containers page", () => {
     render(<App />);
-    expect(screen.getByTestId("page-chat")).toBeInTheDocument();
+    expect(screen.getByTestId("page-containers")).toBeInTheDocument();
   });
 
   it("renders navigation sidebar with all pages", () => {
     render(<App />);
-    expect(screen.getByText("Chat")).toBeInTheDocument();
-    expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("Images")).toBeInTheDocument();
-    const settingsElements = screen.getAllByText("Settings");
-    expect(settingsElements.length).toBeGreaterThanOrEqual(1);
+    const navButtons = Array.from(
+      document.querySelectorAll('[data-testid^="nav-"]'),
+    ).map((el) => el.getAttribute("data-testid"));
+
+    expect(navButtons).toEqual([
+      "nav-containers",
+      "nav-images",
+      "nav-settings",
+    ]);
+  });
+
+  it.each([
+    ["containers", "page-containers"],
+    ["images", "page-images"],
+    ["settings", "page-settings"],
+  ] as const)("renders only the %s page", (currentPage, pageTestId) => {
+    useAppStore.setState({ currentPage });
+
+    render(<App />);
+
+    expect(screen.getByTestId(pageTestId)).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-testid^="page-"]')).toHaveLength(1);
   });
 });

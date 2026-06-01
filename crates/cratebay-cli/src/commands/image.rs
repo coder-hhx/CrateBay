@@ -1,8 +1,9 @@
 use anyhow::Result;
-use bollard::container::Config;
-use bollard::image::CommitContainerOptions;
 use bollard::Docker;
+use cratebay_core::bundle_images::BundleImageLoadResult;
+use std::path::PathBuf;
 
+use cratebay_core::bundle_images;
 use cratebay_core::container;
 use cratebay_core::models::ImageSearchResult;
 
@@ -87,6 +88,81 @@ pub async fn delete(docker: &Docker, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn export(docker: &Docker, images: Vec<String>, output: &str) -> Result<()> {
+    let bytes = container::image_export_to_tar(docker, &images, output).await?;
+    println!(
+        "Exported {} image(s) to {} ({} bytes)",
+        images.len(),
+        output,
+        bytes
+    );
+    Ok(())
+}
+
+pub async fn import(docker: &Docker, input: &str, format: &OutputFormat) -> Result<()> {
+    let loaded = container::image_load_from_tar(docker, input).await?;
+
+    match format {
+        OutputFormat::Table => {
+            if loaded.is_empty() {
+                println!("Imported image archive from {}", input);
+            } else {
+                println!("Imported from {}:", input);
+                for image in &loaded {
+                    println!("  {}", image);
+                }
+            }
+            Ok(())
+        }
+        _ => print_structured(&loaded, format),
+    }
+}
+
+pub async fn preload_bundled(
+    docker: &Docker,
+    dir: Option<String>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let bundle_dir = match dir {
+        Some(dir) => PathBuf::from(dir),
+        None => bundle_images::find_bundle_image_dir().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No bundle-images directory found. Set CRATEBAY_BUNDLE_IMAGES_DIR or pass --dir."
+            )
+        })?,
+    };
+
+    let results = bundle_images::load_bundle_images_from_dir(docker, &bundle_dir).await;
+
+    match format {
+        OutputFormat::Table => {
+            println!("Bundle image directory: {}", bundle_dir.display());
+            println!("{:<28} {:<10} MESSAGE", "IMAGE", "STATUS",);
+            for result in &results {
+                let status = if result.loaded {
+                    "loaded"
+                } else if result.skipped {
+                    "skipped"
+                } else {
+                    "failed"
+                };
+                println!(
+                    "{:<28} {:<10} {}",
+                    result.image_name, status, result.message
+                );
+            }
+            Ok(())
+        }
+        _ => print_structured(&results, format),
+    }?;
+
+    if bundle_preload_failed(&results) {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
 pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result<()> {
     let detail = container::image_inspect(docker, id).await?;
     match format {
@@ -101,37 +177,43 @@ pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result
     }
 }
 
+pub async fn tag(docker: &Docker, source: &str, target: &str) -> Result<()> {
+    container::image_tag(docker, source, target).await?;
+    println!("Tagged {} as {}", source, target);
+    Ok(())
+}
+
 pub async fn pack_container(docker: &Docker, container_id: &str, image: &str) -> Result<()> {
-    let (repo, tag) = split_repo_and_tag(image);
-    let options = CommitContainerOptions {
-        container: container_id.to_string(),
-        repo,
-        tag,
-        pause: false,
-        ..Default::default()
-    };
-    docker
-        .commit_container(options, Config::<String>::default())
-        .await?;
+    container::image_commit_container(docker, container_id, image).await?;
     println!("Packed container {} into {}", container_id, image);
     Ok(())
 }
 
-fn split_repo_and_tag(reference: &str) -> (String, String) {
-    let last_slash = reference.rfind('/');
-    let last_colon = reference.rfind(':');
+fn bundle_preload_failed(results: &[BundleImageLoadResult]) -> bool {
+    results
+        .iter()
+        .any(|result| !result.loaded && !result.skipped)
+}
 
-    match last_colon {
-        Some(colon_index)
-            if last_slash
-                .map(|slash_index| colon_index > slash_index)
-                .unwrap_or(true) =>
-        {
-            (
-                reference[..colon_index].to_string(),
-                reference[colon_index + 1..].to_string(),
-            )
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(loaded: bool, skipped: bool) -> BundleImageLoadResult {
+        BundleImageLoadResult {
+            image_name: "cratebay-test:v1".to_string(),
+            tar_filename: "test.tar.gz".to_string(),
+            archive_path: None,
+            loaded,
+            skipped,
+            message: "test".to_string(),
         }
-        _ => (reference.to_string(), "latest".to_string()),
+    }
+
+    #[test]
+    fn bundle_preload_failure_detects_failed_archives() {
+        assert!(!bundle_preload_failed(&[result(true, false)]));
+        assert!(!bundle_preload_failed(&[result(false, true)]));
+        assert!(bundle_preload_failed(&[result(false, false)]));
     }
 }

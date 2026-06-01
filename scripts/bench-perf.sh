@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # CrateBay Performance Benchmark
-# Validates the performance claims in README.md:
-#   1. <20MB install (binary size)
-#   2. <3s startup
-#   3. <200MB idle RAM
+# Checks release binary size, CLI startup, runtime command health, and core benchmarks:
+#   1. CLI binary size
+#   2. CLI startup
+#   3. Runtime status command health
 #   4. Criterion micro-benchmarks (cratebay-core)
 #
 # Usage:
@@ -16,9 +16,7 @@ set -euo pipefail
 # ── Configuration ─────────────────────────────────────────────────
 MAX_BINARY_SIZE_MB=20
 MAX_STARTUP_TIME_S=3
-MAX_IDLE_RAM_MB=200
 STARTUP_RUNS=5
-DAEMON_SETTLE_SECONDS=3
 
 # ── Argument parsing ──────────────────────────────────────────────
 RELEASE_DIR="target/release"
@@ -69,18 +67,6 @@ file_size_bytes() {
     fi
 }
 
-# ── Helper: get RSS of a PID in KB ───────────────────────────────
-get_rss_kb() {
-    local pid="$1"
-    if [[ "$(uname)" == "Darwin" ]]; then
-        ps -o rss= -p "$pid" | tr -d ' '
-    elif [[ -f "/proc/$pid/status" ]]; then
-        awk '/^VmRSS:/ { print $2 }' "/proc/$pid/status"
-    else
-        ps -o rss= -p "$pid" | tr -d ' '
-    fi
-}
-
 # ── Helper: compute median from a file of numbers ────────────────
 median() {
     sort -n | awk '{a[NR]=$1} END {
@@ -108,7 +94,7 @@ echo "────────────────────────�
 
 MAX_BYTES=$((MAX_BINARY_SIZE_MB * 1048576))
 
-for bin in cratebay cratebay-daemon; do
+for bin in cratebay; do
     path="${RELEASE_DIR}/${bin}"
     if [[ ! -f "$path" ]]; then
         printf "  %-20s [$(warn)] binary not found at %s\n" "$bin" "$path"
@@ -150,7 +136,7 @@ else
         echo "  Using hyperfine for measurement..."
         # hyperfine outputs JSON; extract median
         HYPERFINE_JSON=$(hyperfine --runs "$STARTUP_RUNS" --export-json /dev/stdout \
-            --warmup 1 "$CLI_BIN status" 2>/dev/null) || true
+            --warmup 1 "$CLI_BIN system info" 2>/dev/null) || true
 
         if [[ -n "$HYPERFINE_JSON" ]]; then
             MEDIAN_S=$(echo "$HYPERFINE_JSON" | \
@@ -170,7 +156,7 @@ else
         for i in $(seq 1 "$STARTUP_RUNS"); do
             # Use bash TIMEFORMAT to get wall-clock seconds
             START_NS=$( { date +%s%N 2>/dev/null || python3 -c "import time; print(int(time.time()*1e9))"; } )
-            "$CLI_BIN" status >/dev/null 2>&1 || true
+            "$CLI_BIN" system info >/dev/null 2>&1 || true
             END_NS=$( { date +%s%N 2>/dev/null || python3 -c "import time; print(int(time.time()*1e9))"; } )
             ELAPSED=$(echo "scale=4; ($END_NS - $START_NS) / 1000000000" | bc)
             echo "$ELAPSED" >> "$TIMES_FILE"
@@ -194,68 +180,30 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════
-# 3. Idle Memory Check (<200MB)
+# 3. Runtime Status Command
 # ══════════════════════════════════════════════════════════════════
 echo "──────────────────────────────────────────────────────"
-echo " 3. Idle Memory Check (limit: <${MAX_IDLE_RAM_MB}MB RSS)"
+echo " 3. Runtime Status Command"
 echo "──────────────────────────────────────────────────────"
 
-DAEMON_BIN="${RELEASE_DIR}/cratebay-daemon"
-
-if [[ ! -f "$DAEMON_BIN" ]]; then
-    printf "  [$(warn)] cratebay-daemon binary not found, skipping memory benchmark\n"
-    record "idle RAM" "N/A" "<${MAX_IDLE_RAM_MB}MB" "SKIP"
+if [[ ! -f "$CLI_BIN" ]]; then
+    printf "  [$(warn)] cratebay binary not found, skipping runtime status check\n"
+    record "runtime status" "N/A" "exit 0" "SKIP"
     SKIPS=$((SKIPS + 1))
 else
-    DAEMON_PID=""
-    cleanup_daemon() {
-        if [[ -n "$DAEMON_PID" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
-            echo "  Stopping daemon (PID $DAEMON_PID)..."
-            kill "$DAEMON_PID" 2>/dev/null || true
-            wait "$DAEMON_PID" 2>/dev/null || true
-        fi
-    }
-    trap cleanup_daemon EXIT
-
-    echo "  Starting daemon..."
-    "$DAEMON_BIN" &>/dev/null &
-    DAEMON_PID=$!
-
-    # Verify it started
-    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-        printf "  [$(warn)] daemon failed to start\n"
-        record "idle RAM" "N/A" "<${MAX_IDLE_RAM_MB}MB" "SKIP"
-        SKIPS=$((SKIPS + 1))
-        DAEMON_PID=""
+    set +e
+    RUNTIME_STATUS_OUTPUT="$("$CLI_BIN" runtime status 2>&1)"
+    RUNTIME_STATUS_CODE=$?
+    set -e
+    if [[ "$RUNTIME_STATUS_CODE" -eq 0 ]]; then
+        printf "  runtime status  [$(pass)]\n"
+        record "runtime status" "exit 0" "exit 0" "PASS"
+        echo "$RUNTIME_STATUS_OUTPUT" | sed 's/^/    /'
     else
-        echo "  Waiting ${DAEMON_SETTLE_SECONDS}s for daemon to stabilise..."
-        sleep "$DAEMON_SETTLE_SECONDS"
-
-        # Check it's still alive
-        if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-            printf "  [$(warn)] daemon exited during settle period\n"
-            record "idle RAM" "N/A" "<${MAX_IDLE_RAM_MB}MB" "SKIP"
-            SKIPS=$((SKIPS + 1))
-            DAEMON_PID=""
-        else
-            RSS_KB=$(get_rss_kb "$DAEMON_PID")
-            RSS_MB=$(echo "scale=2; $RSS_KB / 1024" | bc)
-            MAX_RSS_KB=$((MAX_IDLE_RAM_MB * 1024))
-
-            if [[ "$RSS_KB" -gt "$MAX_RSS_KB" ]]; then
-                printf "  RSS: %sMB (PID %s)  [$(fail)]  exceeds %sMB limit\n" \
-                    "$RSS_MB" "$DAEMON_PID" "$MAX_IDLE_RAM_MB"
-                record "idle RAM" "${RSS_MB}MB" "<${MAX_IDLE_RAM_MB}MB" "FAIL"
-                FAILURES=$((FAILURES + 1))
-            else
-                printf "  RSS: %sMB (PID %s)  [$(pass)]\n" "$RSS_MB" "$DAEMON_PID"
-                record "idle RAM" "${RSS_MB}MB" "<${MAX_IDLE_RAM_MB}MB" "PASS"
-            fi
-
-            # Clean up
-            cleanup_daemon
-            DAEMON_PID=""
-        fi
+        printf "  runtime status  [$(fail)]\n"
+        record "runtime status" "error" "exit 0" "FAIL"
+        echo "$RUNTIME_STATUS_OUTPUT" | sed 's/^/    /'
+        FAILURES=$((FAILURES + 1))
     fi
 fi
 echo ""

@@ -40,7 +40,10 @@ export function ContainerLogs({ containerId, tail = 200 }: { containerId: string
   }, [refresh]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-zinc-950">
+    <div
+      className="overflow-hidden rounded-lg border border-border bg-zinc-950"
+      data-testid="container-logs"
+    >
       <div className="flex items-center justify-end gap-2 border-b border-border/60 px-3 py-2">
         <Button
           variant="ghost"
@@ -97,4 +100,3 @@ function formatLogTimestamp(ts: string): string {
     return ts;
   }
 }
-

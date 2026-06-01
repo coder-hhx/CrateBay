@@ -1,5 +1,5 @@
 /**
- * Container/sandbox type definitions for CrateBay.
+ * Container type definitions for CrateBay.
  *
  * Matches frontend-spec.md §4.3 — containerStore types.
  */
@@ -29,10 +29,18 @@ export interface ContainerCreateRequest {
   name: string;
   image: string;
   templateId?: string;
+  entrypoint?: string;
   command?: string;
   env?: string[];
+  ports?: PortMapping[];
+  volumes?: VolumeMount[];
   cpuCores?: number;
   memoryMb?: number;
+  workingDir?: string;
+  pod?: string;
+  network?: "bridge" | "none" | "host";
+  user?: string;
+  readOnlyRootfs?: boolean;
   autoStart?: boolean;
 }
 
@@ -66,6 +74,15 @@ export interface PortMapping {
   hostPort: number;
   containerPort: number;
   protocol: "tcp" | "udp";
+}
+
+/**
+ * Bind mount between host and container.
+ */
+export interface VolumeMount {
+  hostPath: string;
+  containerPath: string;
+  readOnly?: boolean;
 }
 
 /**

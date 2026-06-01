@@ -72,7 +72,7 @@ export function ContainerMonitoring({
       : stats?.memoryPercent ?? 0;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
+    <div className="rounded-lg border border-border bg-card p-3" data-testid="container-monitoring">
       <div className="flex items-center justify-end">
         <Button variant="ghost" size="xs" onClick={() => void refresh()} disabled={loading}>
           {t("common", "refresh")}
@@ -80,7 +80,9 @@ export function ContainerMonitoring({
       </div>
 
       {!enabled ? (
-        <div className="mt-2 text-sm text-muted-foreground">Container is not running.</div>
+        <div className="mt-2 text-sm text-muted-foreground">
+          {t("containers", "containerNotRunning")}
+        </div>
       ) : stats ? (
         <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <div>

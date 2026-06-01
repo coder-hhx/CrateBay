@@ -38,12 +38,12 @@ assets/node_modules/
 
 # Internal docs (never commit)
 /internal/
-.claude/
 .codex-screenshots/
 
 # Local automation artifacts
 /.playwright-cli/
 /output/
+**/playwright-report/
 
 # Tauri sidecar binaries (generated per-target)
 crates/cratebay-gui/src-tauri/bin/

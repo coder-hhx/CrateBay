@@ -1,208 +1,45 @@
 # Glossary
 
-> Version: 1.0.1 | Last Updated: 2026-03-25 | Author: product-manager
+## CrateBay
 
-This glossary defines key terms used throughout CrateBay's documentation and codebase. All project documents should use these terms consistently.
+An open-source desktop and CLI tool for local container, image, pod, and runtime
+management.
 
----
+## Built-In Runtime
 
-## Project & Product
+The VM-backed container runtime managed by CrateBay. Platform implementations
+live under `cratebay-core/src/runtime` and `cratebay-vz`.
 
-### CrateBay
+## Image
 
-An open-source local AI sandbox. Provides a secure, private environment for AI agents to execute code via MCP protocol, with a built-in container runtime. Built with Tauri v2, React, and Rust.
+A Docker-compatible image reference, such as `alpine:latest` or
+`ghcr.io/example/app:1.0`.
 
-### Sandbox
+## Image Archive
 
-An isolated container environment where AI agents can safely execute code, install packages, and manage files. CrateBay sandboxes run inside a lightweight VM (VZ/KVM/WSL2) with Docker.
+A tar archive produced by Docker-compatible save/export operations and loaded by
+Docker-compatible import/load operations.
 
-### MCP-First
+## Container
 
-The primary interaction paradigm of CrateBay. AI agents connect via the MCP protocol to execute code in sandboxes. The desktop GUI and CLI are secondary interfaces for management and monitoring.
+A running or stopped process environment created from an image and managed by a
+Docker-compatible engine.
 
----
+## Pod
 
-## Agent System
+A CrateBay-managed container group backed by an attachable Docker bridge
+network.
 
-### Hybrid Agent Architecture
+## Bundle Image
 
-CrateBay's agent design pattern where TypeScript handles orchestration (LLM interaction, tool selection, conversation state) and Rust handles execution (Docker API, file I/O, storage, MCP). The two layers communicate via Tauri IPC.
+A pre-built image archive shipped with the desktop app and loaded into the
+runtime when needed.
 
-### pi-agent-core
+## Tauri Command
 
-`@mariozechner/pi-agent-core` -- A TypeScript agent framework used in CrateBay for LLM orchestration, multi-turn conversation management, tool calling, and streaming. Runs in the frontend (Tauri webview).
+A Rust function exposed to the React desktop app through Tauri IPC.
 
-### pi-ai
+## Guest Helper
 
-`@mariozechner/pi-ai` -- A TypeScript library providing a unified interface to multiple LLM providers (OpenAI, Anthropic, etc.). Used by pi-agent-core to abstract provider differences.
-
-### AgentTool
-
-A tool definition in pi-agent-core that the AI agent can invoke during a conversation. Each AgentTool has a name, description, parameter schema (TypeBox), and an `execute()` function. In CrateBay, AgentTools are typically thin TypeScript wrappers around Tauri `invoke()` calls.
-
-### StreamFn
-
-A streaming function in pi-agent-core that connects to an LLM provider and returns tokens incrementally. In CrateBay, the custom streamFn routes through the Rust backend (LLM Proxy) for API key security.
-
-### LLM Proxy
-
-The Rust backend component that mediates all LLM API calls. The frontend sends prompts to the Rust backend via Tauri invoke; Rust reads the encrypted API key from SQLite, calls the LLM provider, and streams tokens back via Tauri Events. API keys never reach the frontend.
-
-### System Prompt
-
-The initial instruction set provided to the LLM at the start of each conversation, defining the agent's personality, available tools, safety rules, and behavioral constraints.
-
----
-
-## MCP (Model Context Protocol)
-
-### MCP
-
-Model Context Protocol -- An open standard for AI tool interoperability. Defines how AI assistants discover and invoke tools provided by external servers. CrateBay supports MCP as both a server and a client.
-
-### MCP Server
-
-A standalone process that exposes tools via the MCP protocol. CrateBay's MCP Server (`cratebay-mcp` binary) exposes container/sandbox management tools, allowing external AI assistants (Claude, Cursor, etc.) to manage CrateBay sandboxes.
-
-### MCP Client
-
-A component that connects to MCP servers and consumes their tools. CrateBay's MCP Client (in `cratebay-core`) connects to external MCP servers configured in `.mcp.json`.
-
-### MCP Bridge
-
-The mechanism that makes external MCP tools available as AgentTools within pi-agent-core. When the MCP Client connects to an external server and discovers its tools, those tools are automatically registered as AgentTools that the built-in agent can invoke.
-
----
-
-## Frontend
-
-### Streamdown
-
-A streaming markdown renderer by Vercel, designed for AI chat interfaces. Handles partial markdown content gracefully (incomplete code blocks, half-rendered tables) and integrates natively with shadcn/ui components and Tailwind CSS classes.
-
-### shadcn/ui
-
-A component system for React that provides copy-paste UI components built on Radix UI primitives. Unlike traditional component libraries, shadcn/ui components are copied into the project source, giving full ownership and customizability.
-
-### Radix UI
-
-A set of unstyled, accessible React component primitives (Dialog, Dropdown, Tabs, etc.) that serve as the foundation for shadcn/ui. Provides built-in keyboard navigation, screen reader support, and ARIA attributes.
-
-### Zustand Store
-
-A lightweight state management solution for React. CrateBay uses 6 domain-specific Zustand stores: `appStore`, `chatStore`, `containerStore`, `mcpStore`, `settingsStore`, and `workflowStore`. Each store manages a specific domain of application state.
-
-### Tauri Commands
-
-The IPC mechanism in Tauri v2 for calling Rust functions from the frontend. CrateBay defines Tauri commands for container operations, LLM proxy, storage, MCP management, and system status. Commands are grouped by module in `src-tauri/src/commands/`.
-
-### tauri-specta
-
-A code generation tool that auto-generates TypeScript type definitions and invoke wrappers from Rust Tauri command signatures. Ensures type safety across the Rust-TypeScript IPC boundary with zero manual type maintenance.
-
-### Tauri Event
-
-An event system in Tauri v2 for pushing data from the Rust backend to the frontend. Used primarily for streaming LLM tokens and long-running operation progress updates.
-
----
-
-## Backend & Infrastructure
-
-### bollard
-
-A Rust Docker SDK (`bollard` crate, version 0.18) used by CrateBay to interact with the Docker engine API. Provides async container lifecycle management, image operations, and exec capabilities.
-
-### rusqlite
-
-A Rust binding for SQLite, used as the storage layer in CrateBay. The database file lives at `~/.cratebay/cratebay.db` and stores conversations, API keys (encrypted), settings, container templates, and MCP server configs.
-
-### thiserror
-
-A Rust crate for defining custom error types with derive macros. CrateBay uses `thiserror` to define `AppError` types with structured error variants, enabling consistent error handling across all crates.
-
-### tokio
-
-The async runtime used by CrateBay's Rust backend. Provides the foundation for non-blocking I/O, task spawning, and concurrent execution of Docker API calls, LLM streaming, and MCP communication.
-
----
-
-## Container Runtime
-
-### Built-in Runtime
-
-CrateBay's zero-dependency container runtime that provisions a lightweight Linux VM with Docker inside, eliminating the need for users to install Docker Desktop separately. Platform implementations: VZ.framework (macOS), KVM/QEMU (Linux), WSL2 (Windows). This is the **primary product runtime path**.
-
-### Podman
-
-A Docker-compatible container engine that CrateBay may use as a **fallback / escape hatch** when the built-in runtime is unavailable, or when an operator explicitly forces `CRATEBAY_ENGINE_PROVIDER=podman`. Podman is a compatibility path, not a parallel product roadmap.
-
-### Engine Provider
-
-The runtime engine selection mode used by `cratebay-core/src/engine.rs`. Supported values are `auto`, `builtin`, and `podman`. Provider overrides affect connection behavior and recovery/testing flows, but do not change the product strategy that treats the built-in runtime as the primary path.
-
-### VZ.framework
-
-Apple's Virtualization framework (`Virtualization.framework`) for macOS. CrateBay uses `VZVirtualMachine` to run a lightweight Linux VM on Apple Silicon and Intel Macs, hosting the Docker engine inside the VM.
-
-### KVM/QEMU
-
-Linux virtualization technologies. KVM (Kernel-based Virtual Machine) provides hardware acceleration; QEMU provides the VM emulation layer. CrateBay uses these to run a lightweight Linux VM hosting Docker on Linux hosts.
-
-### WSL2
-
-Windows Subsystem for Linux 2 -- Microsoft's lightweight Linux VM technology for Windows. CrateBay leverages WSL2 to run Docker inside a Linux distribution on Windows, providing container support without Docker Desktop.
-
-### Sandbox
-
-An isolated container environment created from a template. Sandboxes have defined resource limits (CPU, memory), a time-to-live (TTL), and are managed through CrateBay's container lifecycle API. The term is used interchangeably with "managed container" in some contexts.
-
-### Container Template
-
-A predefined configuration for creating sandboxes. Templates specify the base image, startup command, environment variables, and default resource limits. Built-in templates include `node-dev`, `python-dev`, and `rust-dev`.
-
----
-
-## Development Process
-
-### Spec-Driven
-
-CrateBay's development methodology where specification documents (specs) are the authoritative source for all implementation. The flow is: update spec first, implement code according to spec, then update knowledge base. Code must match the spec; discrepancies are resolved by updating either the spec or the code, never by ignoring the difference.
-
-### Knowledge Base
-
-The complete set of documentation and configuration files that enable any AI Agent to work on the project without human re-briefing. Comprises 6 layers: AGENTS.md, specs, workflow docs, references, `.codebuddy/` configs, and `.mcp.json`.
-
-### ADR (Architecture Decision Record)
-
-A structured document that captures a significant technical decision, its context, alternatives considered, and consequences. CrateBay's ADRs are stored in `docs/references/tech-decisions.md`.
-
-### progress.md
-
-The development progress tracking file (`docs/progress.md`) that enables cross-machine project recovery. Contains current status, completed work, in-progress tasks, blockers, and a "Quick Resume" section for continuing work on a different machine.
-
----
-
-## Abbreviations
-
-| Abbreviation | Full Form |
-|-------------|-----------|
-| ADR | Architecture Decision Record |
-| API | Application Programming Interface |
-| ARIA | Accessible Rich Internet Applications |
-| CI/CD | Continuous Integration / Continuous Deployment |
-| CLI | Command-Line Interface |
-| CSS | Cascading Style Sheets |
-| E2E | End-to-End |
-| HMR | Hot Module Replacement |
-| IPC | Inter-Process Communication |
-| LLM | Large Language Model |
-| MCP | Model Context Protocol |
-| ORM | Object-Relational Mapping |
-| SDK | Software Development Kit |
-| SemVer | Semantic Versioning |
-| SSE | Server-Sent Events |
-| TS | TypeScript |
-| TTL | Time To Live |
-| UI | User Interface |
-| VM | Virtual Machine |
-| WSL | Windows Subsystem for Linux |
+The small binary installed inside the runtime guest to bridge Docker socket
+access back to the host-side app.

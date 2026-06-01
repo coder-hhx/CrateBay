@@ -56,14 +56,21 @@ pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatus, A
             .map_err(|e| AppError::Runtime(format!("Docker state lock poisoned: {}", e)))?;
         guard.clone()
     };
+    let source = state
+        .docker_source()
+        .or_else(docker::explicit_host_override)
+        .unwrap_or_else(|| "builtin".to_string());
 
     match docker_opt {
         Some(d) => {
             let is_available = docker::is_available(&d).await;
             if is_available {
                 let version_info = docker::version(&d).await.ok();
-                let source = "built-in".to_string();
-                let socket_path = Some(built_in_docker_endpoint(&state));
+                let socket_path = if docker::is_builtin_source(Some(source.as_str())) {
+                    Some(built_in_docker_endpoint(&state))
+                } else {
+                    Some(source.clone())
+                };
                 Ok(DockerStatus {
                     connected: true,
                     version: version_info.as_ref().and_then(|v| v.version.clone()),
@@ -80,7 +87,7 @@ pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatus, A
                     api_version: None,
                     os: None,
                     arch: None,
-                    source: "none".to_string(),
+                    source,
                     socket_path: None,
                 })
             }
@@ -91,7 +98,7 @@ pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatus, A
             api_version: None,
             os: None,
             arch: None,
-            source: "none".to_string(),
+            source,
             socket_path: None,
         }),
     }
@@ -142,7 +149,9 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
 
     // Reconcile transient ping failures with the shared AppState Docker client.
     // This avoids reporting "starting" while an already-connected client is healthy.
-    if !health.docker_responsive
+    let docker_source = state.docker_source();
+    if docker::is_builtin_source(docker_source.as_deref())
+        && !health.docker_responsive
         && matches!(
             health.runtime_state,
             RuntimeState::Starting | RuntimeState::Ready | RuntimeState::Error(_)
@@ -224,7 +233,7 @@ pub async fn runtime_start(state: State<'_, AppState>) -> Result<String, AppErro
     while std::time::Instant::now() < deadline {
         if let Some(docker) = try_connect_runtime_docker(state.runtime.as_ref()).await {
             tracing::info!("Docker connected via built-in runtime");
-            state.set_docker(Some(Arc::new(docker)));
+            state.set_docker(Some(Arc::new(docker)), Some("builtin".to_string()));
             return Ok("Runtime started and Docker connected".to_string());
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -296,7 +305,7 @@ pub async fn runtime_stop(state: State<'_, AppState>) -> Result<String, AppError
     state.runtime.stop().await?;
 
     // Clear Docker connection since runtime is stopping
-    state.set_docker(None);
+    state.set_docker(None, None);
 
     Ok("Runtime stopped".to_string())
 }
