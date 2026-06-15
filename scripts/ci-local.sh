@@ -10,17 +10,15 @@ cargo fmt --check
 echo "== Local CI: Product surface guard =="
 ./scripts/product-surface-guard.sh
 
+echo "== Local CI: Runtime native guard =="
+./scripts/runtime-native-guard.sh
+
 echo "== Local CI: Tauri command surface =="
 ./scripts/verify-tauri-command-surface.sh
 
 os_name="$(uname -s)"
-if [[ "$os_name" == "Darwin" ]]; then
-  clippy_args=(--workspace --exclude cratebay-gui -- -D warnings)
-  test_args=(--workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1)
-else
-  clippy_args=(--workspace --exclude cratebay-gui --exclude cratebay-vz -- -D warnings)
-  test_args=(--workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1)
-fi
+core_clippy_args=(--workspace --exclude cratebay-gui --exclude cratebay-vz --all-targets -- -D warnings)
+core_test_args=(--workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1)
 
 ready_runtime_file() {
   local file_path="$1"
@@ -60,11 +58,11 @@ ensure_node_runtime() {
   return 1
 }
 
-echo "== Local CI: Rust clippy =="
-cargo clippy "${clippy_args[@]}"
+echo "== Local CI: Core workspace clippy =="
+cargo clippy "${core_clippy_args[@]}"
 
-echo "== Local CI: Rust tests =="
-cargo test "${test_args[@]}"
+echo "== Local CI: Core workspace tests =="
+cargo test "${core_test_args[@]}"
 
 if [[ "$os_name" == "Darwin" ]]; then
   rust_target="$(rustc -vV | awk '/^host:/ {print $2}' | head -n 1)"
@@ -102,8 +100,14 @@ popd >/dev/null
 echo "== Local CI: GUI backend Rust check =="
 cargo check -p cratebay-gui
 
+echo "== Local CI: GUI backend Rust clippy =="
+cargo clippy -p cratebay-gui --all-targets -- -D warnings
+
 echo "== Local CI: GUI backend Rust tests =="
-cargo test -p cratebay-gui
+cargo test -p cratebay-gui -- --test-threads=1
+
+echo "== Local CI: cratebay-vz clippy =="
+cargo clippy -p cratebay-vz --all-targets -- -D warnings
 
 if [[ "$os_name" == "Darwin" ]]; then
   if [[ "${CRATEBAY_RUN_VZ_TESTS:-0}" == "1" ]]; then
@@ -113,6 +117,9 @@ if [[ "$os_name" == "Darwin" ]]; then
     echo "== Local CI: cratebay-vz tests skipped =="
     echo "Set CRATEBAY_RUN_VZ_TESTS=1 to run cratebay-vz tests locally."
   fi
+else
+  echo "== Local CI: cratebay-vz tests =="
+  cargo test -p cratebay-vz -- --test-threads=1
 fi
 
 echo "== Local CI: Frontend checks =="

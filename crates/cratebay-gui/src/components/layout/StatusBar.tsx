@@ -4,12 +4,12 @@ import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/constants";
 
 export function StatusBar() {
-  const dockerConnected = useAppStore((s) => s.dockerConnected);
+  const engineConnected = useAppStore((s) => s.engineConnected);
   const runtimeStatus = useAppStore((s) => s.runtimeStatus);
   const { t } = useI18n();
 
   // Derive a single unified engine status
-  const { color, label, pulse } = getEngineStatus(dockerConnected, runtimeStatus, t);
+  const { color, label, pulse } = getEngineStatus(engineConnected, runtimeStatus, t);
 
   return (
     <footer className="flex h-7 flex-shrink-0 items-center justify-between border-t border-border px-4 text-[11px] text-muted-foreground">
@@ -26,15 +26,15 @@ export function StatusBar() {
 }
 
 /**
- * Derive a single status from docker + runtime states.
+ * Derive a single status from engine + runtime states.
  */
 function getEngineStatus(
-  dockerConnected: boolean,
+  engineConnected: boolean,
   runtimeStatus: "starting" | "running" | "stopped" | "error",
   t: (namespace: string, key: string) => string,
 ): { color: "green" | "red" | "yellow" | "gray"; label: string; pulse: boolean } {
-  // Docker is connected via built-in runtime
-  if (dockerConnected) {
+  // The compatibility API is connected via the built-in CrateBay Engine.
+  if (engineConnected) {
     return { color: "green", label: t("statusbar", "engineReady"), pulse: false };
   }
   // Builtin runtime is trying to start
@@ -47,15 +47,12 @@ function getEngineStatus(
   return { color: "gray", label: t("statusbar", "engineDisconnected"), pulse: false };
 }
 
-/**
- * Glowing dot indicator with CSS box-shadow glow effect.
- */
 function GlowDot({ color, pulse }: { color: "green" | "red" | "yellow" | "gray"; pulse?: boolean }) {
   const styles: Record<typeof color, string> = {
-    green: "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]",
-    red: "bg-red-400 shadow-[0_0_6px_2px_rgba(248,113,113,0.5)]",
-    yellow: "bg-yellow-400 shadow-[0_0_6px_2px_rgba(250,204,21,0.5)]",
-    gray: "bg-zinc-400 shadow-none",
+    green: "bg-emerald-400",
+    red: "bg-red-400",
+    yellow: "bg-yellow-400",
+    gray: "bg-zinc-400",
   };
 
   return (

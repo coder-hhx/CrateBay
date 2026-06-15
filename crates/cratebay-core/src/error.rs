@@ -3,7 +3,7 @@ use thiserror::Error;
 /// Unified error type for all CrateBay operations.
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("Docker error: {0}")]
+    #[error("CrateBay Engine compatibility error: {0}")]
     Docker(#[from] bollard::errors::Error),
 
     #[error("Database error: {0}")]

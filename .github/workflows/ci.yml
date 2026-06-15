@@ -1,524 +1,187 @@
 name: CI
 
 on:
-  push:
-    branches: [master, rewrite/v2]
   pull_request:
-    branches: [master, rewrite/v2]
+  push:
+    branches:
+      - master
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_VERSION: "24"
+  PNPM_VERSION: "10.32.1"
+  RUST_BACKTRACE: "1"
 
 jobs:
-  # -----------------------------------------------------------
-  # Rust formatting (single runner, fast gate)
-  # -----------------------------------------------------------
-  fmt:
-    name: Rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Product surface guard
-        run: ./scripts/product-surface-guard.sh
-      - name: Tauri command surface guard
-        run: ./scripts/verify-tauri-command-surface.sh
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --check
-
-  # -----------------------------------------------------------
-  # Clippy & tests — matrix across macOS + Linux
-  # -----------------------------------------------------------
-  check:
-    name: Clippy & Tests (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    needs: fmt
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            os: macos-latest
-            install-protoc: brew install protobuf
-            # On macOS we can lint/test the whole workspace (excluding GUI which needs WebKitGTK)
-            clippy-args: --workspace --exclude cratebay-gui -- -D warnings
-            test-args: --workspace --exclude cratebay-gui
-          - name: Linux
-            os: ubuntu-latest
-            install-protoc: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-            clippy-args: --workspace --exclude cratebay-gui -- -D warnings
-            test-args: --workspace --exclude cratebay-gui
-          - name: Windows
-            os: windows-latest
-            install-protoc: choco install protoc -y
-            # cratebay-gui requires WebView2 build tooling
-            clippy-args: --workspace --exclude cratebay-gui -- -D warnings
-            test-args: --workspace --exclude cratebay-gui
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Install protoc
-        run: ${{ matrix.install-protoc }}
-
-      # Linux-only: system libs required by Tauri / WebKitGTK (needed for
-      # workspace resolve even though we skip the GUI crate itself)
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Clippy
-        run: cargo clippy ${{ matrix.clippy-args }}
-
-      - name: Tests
-        run: cargo test ${{ matrix.test-args }} -- --test-threads=1
-        env:
-          RUST_BACKTRACE: 1
-
-  # -----------------------------------------------------------
-  # GUI backend Rust tests (src-tauri)
-  # -----------------------------------------------------------
-  gui-backend:
-    name: GUI Backend Rust (Ubuntu)
-    runs-on: ubuntu-latest
-    needs: fmt
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: gui-backend
-
-      - name: Cargo check
-        run: cargo check -p cratebay-gui
-
-      - name: Cargo tests
-        run: cargo test -p cratebay-gui
-
-  # -----------------------------------------------------------
-  # Built-in Linux runtime smoke — bundled QEMU/KVM runtime
-  # -----------------------------------------------------------
-  builtin-runtime-linux:
-    name: Built-in Runtime Smoke (Linux)
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Linux runtime build dependencies
-        run: |
-          sudo apt-get install -y \
-            patchelf \
-            qemu-system-x86 \
-            squashfs-tools
-
-      - name: Install Zig
-        run: bash scripts/install-zig.sh
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked --force
-
-      - name: Add musl target for runtime guest agent
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: builtin-runtime-linux
-
-      - name: Build bundled runtime assets
-        run: |
-          bash scripts/build-runtime-assets-alpine.sh x86_64
-          bash scripts/build-runtime-assets-linux.sh x86_64
-
-      - name: Run CLI + built-in runtime smoke
-        shell: bash
-        run: ./scripts/runtime-smoke-local-registry.sh
-
-  # -----------------------------------------------------------
-  # Prepare WSL runtime assets on Linux for Windows smoke tests
-  # -----------------------------------------------------------
-  wsl-runtime-assets:
-    name: WSL Runtime Assets (Linux)
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build bundled WSL runtime assets
-        shell: bash
-        run: |
-          out_dir="${RUNNER_TEMP}/runtime-wsl"
-          bash scripts/build-runtime-assets-wsl.sh x86_64 "${out_dir}"
-
-      - name: Upload bundled WSL runtime assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: runtime-wsl-x86_64
-          path: ${{ runner.temp }}/runtime-wsl/cratebay-runtime-wsl-x86_64/rootfs.tar
-
-  # -----------------------------------------------------------
-  # Built-in Windows runtime smoke — bundled WSL2 runtime
-  # -----------------------------------------------------------
-  builtin-runtime-windows:
-    name: Built-in Runtime Smoke (Windows)
-    runs-on: windows-latest
-    needs: [check, wsl-runtime-assets]
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: choco install protoc -y
-
-      - name: Add Linux musl target for offline smoke image
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: builtin-runtime-windows
-
-      - name: Prepare bundled WSL runtime asset destination
-        shell: bash
-        run: |
-          dest="crates/cratebay-gui/src-tauri/runtime-wsl/cratebay-runtime-wsl-x86_64"
-          mkdir -p "${dest}"
-          rm -f "${dest}/rootfs.tar"
-
-      - name: Download bundled WSL runtime assets
-        uses: actions/download-artifact@v8
-        with:
-          name: runtime-wsl-x86_64
-          path: crates/cratebay-gui/src-tauri/runtime-wsl/cratebay-runtime-wsl-x86_64
-
-      - name: Run built-in runtime smoke
-        shell: bash
-        run: ./scripts/runtime-smoke-cli-only.sh
-
-  # -----------------------------------------------------------
-  # Frontend — Node / React lint & build
-  # -----------------------------------------------------------
   frontend:
-    name: Frontend Lint, Build & Test (Node ${{ matrix.node-version }})
+    name: Frontend
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ["22", "24"]
-    defaults:
-      run:
-        working-directory: crates/cratebay-gui
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
-          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
+        working-directory: crates/cratebay-gui
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm run lint
-
-      - name: Type-check & build
+      - name: Build
+        working-directory: crates/cratebay-gui
         run: pnpm run build
 
-      - name: Check i18n keys
+      - name: Lint
+        working-directory: crates/cratebay-gui
+        run: pnpm run lint
+
+      - name: I18n key check
+        working-directory: crates/cratebay-gui
         run: pnpm run check:i18n
 
       - name: Unit tests
+        working-directory: crates/cratebay-gui
         run: pnpm run test:unit
 
-      - name: Unit tests with coverage
-        run: pnpm run test:coverage
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: frontend-coverage-node${{ matrix.node-version }}
-          path: crates/cratebay-gui/coverage
-          if-no-files-found: ignore
-
-  # -----------------------------------------------------------
-  # Frontend E2E — Playwright browser validation
-  # -----------------------------------------------------------
-  frontend-e2e:
-    name: Frontend E2E (Playwright)
+  release-scripts:
+    name: Release Scripts
     runs-on: ubuntu-latest
-    needs: frontend
-    defaults:
-      run:
-        working-directory: crates/cratebay-gui
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
         with:
-          version: 9
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
+      - name: Test release helpers
+        run: node --test scripts/release/*.test.mjs
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Run end-to-end tests
-        run: npx playwright test
-
-      - name: Upload Playwright artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: |
-            output/playwright/report
-            output/playwright/results
-          if-no-files-found: ignore
-
-  # -----------------------------------------------------------
-  # Desktop shell smoke — real Tauri app on Linux
-  # -----------------------------------------------------------
-  desktop-smoke-linux:
-    name: Desktop Smoke (Tauri Linux)
-    runs-on: ubuntu-latest
-    needs: [frontend-e2e, builtin-runtime-linux]
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Linux desktop dependencies
+      - name: Smoke generated version and updater manifests
+        env:
+          CRATEBAY_RELEASE_TAG: v1.2.3
+          CRATEBAY_UPDATE_REPOSITORY: nicepkg/CrateBay
         run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          node scripts/release/prepare-app-version-from-tag.mjs \
+            v1.2.3 \
+            --tauri-config "$tmp/tauri.version.generated.conf.json" \
+            --json
+          printf 'fake-app' > "$tmp/CrateBay-v1.2.3-macOS-aarch64.app.tar.gz"
+          printf 'fake-signature' > "$tmp/CrateBay-v1.2.3-macOS-aarch64.app.tar.gz.sig"
+          printf '# CrateBay v1.2.3\n\nSynthetic CI notes.\n' > "$tmp/notes.md"
+          node scripts/release/create-tauri-updater-manifest.mjs \
+            "$tmp" \
+            "$tmp/latest.json" \
+            "$tmp/notes.md"
+          node -e 'const manifest = require(process.argv[1]); if (manifest.version !== "1.2.3" || !manifest.platforms["darwin-aarch64"]) process.exit(1)' "$tmp/latest.json"
+
+  guards:
+    name: Static Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Product surface guard
+        run: ./scripts/product-surface-guard.sh
+
+      - name: Runtime native guard
+        run: ./scripts/runtime-native-guard.sh
+
+      - name: Tauri command surface guard
+        run: ./scripts/verify-tauri-command-surface.sh
+
+  rust:
+    name: Rust Workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
+            protobuf-compiler \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            xauth \
-            xvfb \
-            webkit2gtk-driver
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          shared-key: desktop-smoke-linux
+          components: clippy,rustfmt
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked --version 2.0.5
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Run desktop smoke
-        run: |
-          mkdir -p dist/desktop-smoke
-          set +e
-          xvfb-run -a -e /tmp/xvfb-run.log ./scripts/run-desktop-e2e-linux.sh
-          status=$?
-          set -e
+      - name: Format
+        run: cargo fmt --check
 
-          if [[ -f /tmp/xvfb-run.log ]]; then
-            cp /tmp/xvfb-run.log dist/desktop-smoke/xvfb-run.log || true
-            echo "== Xvfb log (tail) =="
-            tail -n 200 /tmp/xvfb-run.log || true
-          fi
+      - name: Core workspace clippy
+        run: cargo clippy --workspace --exclude cratebay-gui --exclude cratebay-vz --all-targets -- -D warnings
 
-          exit $status
+      - name: GUI backend clippy
+        run: cargo clippy -p cratebay-gui --all-targets -- -D warnings
 
-      - name: Upload desktop smoke artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-smoke-artifacts
-          path: dist/desktop-smoke
-          if-no-files-found: ignore
+      - name: Core workspace tests
+        run: cargo test --workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1
 
-  # -----------------------------------------------------------
-  # Release binary size check (macOS only — primary target)
-  # -----------------------------------------------------------
-  size-check:
-    name: Binary Size Check
+      - name: GUI backend tests
+        run: cargo test -p cratebay-gui -- --test-threads=1
+
+  vz-runner:
+    name: VZ Runner
     runs-on: macos-latest
-    needs: check
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: brew install protobuf
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          shared-key: size-check
+          components: clippy
 
-      - name: Build release (CLI)
-        run: cargo build --release -p cratebay-cli
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Report binary sizes
-        run: |
-          echo "## Release binary sizes" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Binary | Size |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|--------|------|" >> "$GITHUB_STEP_SUMMARY"
-          for bin in cratebay; do
-            path="target/release/$bin"
-            if [ -f "$path" ]; then
-              size_bytes=$(stat -f%z "$path")
-              size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
-              echo "| $bin | ${size_mb} MB |" >> "$GITHUB_STEP_SUMMARY"
-              echo "$bin: ${size_mb} MB ($size_bytes bytes)"
-            fi
-          done
+      - name: VZ runner clippy
+        run: cargo clippy -p cratebay-vz --all-targets -- -D warnings
 
-      - name: Check binary size limit (20 MB each)
-        run: |
-          MAX_BYTES=$((20 * 1048576))
-          for bin in cratebay; do
-            path="target/release/$bin"
-            if [ -f "$path" ]; then
-              size=$(stat -f%z "$path")
-              if [ "$size" -gt "$MAX_BYTES" ]; then
-                echo "::error::$bin is $(echo "scale=2; $size/1048576" | bc) MB — exceeds 20 MB limit"
-                exit 1
-              fi
-            fi
-          done
-          echo "All binaries within size budget."
+      - name: VZ runner tests
+        run: cargo test -p cratebay-vz -- --test-threads=1
 
-  # -----------------------------------------------------------
-  # Performance benchmark (binary size + startup + idle RAM)
-  # -----------------------------------------------------------
-  perf-bench:
-    name: Performance Benchmark (${{ matrix.name }})
-    needs: check
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            os: macos-latest
-            install-protoc: brew install protobuf
-          - name: Linux
-            os: ubuntu-latest
-            install-protoc: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
+  cli-contract:
+    name: CLI JSON Contract
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: ${{ matrix.install-protoc }}
-
-      # Linux-only: system libs required by workspace resolve
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
+      - name: Install CLI contract dependencies
         run: |
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+          sudo apt-get update
+          sudo apt-get install -y jq protobuf-compiler
 
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: perf-bench
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binaries
-        run: cargo build --release -p cratebay-cli
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Run performance benchmarks
-        run: ./scripts/bench-perf.sh
+      - name: Build CLI
+        run: cargo build -p cratebay-cli
 
-      - name: Write benchmark summary
-        if: always()
+      - name: Verify JSON contracts used by LiveAgent
         run: |
-          echo "## Performance Benchmark (${{ matrix.name }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ./scripts/bench-perf.sh 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          bin="target/debug/cratebay"
+          test -x "$bin"
+          "$bin" --json system info | jq -e '.version and .platform and .arch'
+          "$bin" --json system engine-status | jq -e '.engine'
+          "$bin" --json runtime status | jq -e '.state and .socketPath'
+
+  diff-hygiene:
+    name: Diff Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: git diff --check

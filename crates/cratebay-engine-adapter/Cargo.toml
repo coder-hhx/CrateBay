@@ -1,0 +1,16 @@
+[package]
+name = "cratebay-engine-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Guest-side CrateBay Engine adapter backed by containerd/runc/CNI"
+
+[[bin]]
+name = "cratebay-engine-adapter"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+libc.workspace = true
+sha2 = "0.10"
+tar = "0.4"

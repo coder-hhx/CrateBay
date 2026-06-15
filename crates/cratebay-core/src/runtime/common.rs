@@ -3,10 +3,10 @@
 //! Functions in this module are used by all three platform backends
 //! (macOS VZ.framework, Linux KVM/QEMU, Windows WSL2). They cover:
 //!
-//! - Global runtime configuration (`runtime_vm_name`, `docker_proxy_port`, ...)
-//! - Host Docker socket path management
+//! - Global runtime configuration (`runtime_vm_name`, `engine_proxy_port`, ...)
+//! - Host engine compatibility socket path management
 //! - Bundled runtime asset discovery and installation
-//! - Docker HTTP health ping (TCP-based, for Linux/Windows)
+//! - Compatibility API health ping (TCP-based, for Linux/Windows)
 //! - Runtime image readiness verification
 //!
 //! Ported from `master:crates/cratebay-core/src/runtime.rs` and adapted for
@@ -24,8 +24,11 @@ use crate::error::AppError;
 /// Default VM name for the CrateBay built-in runtime.
 pub const DEFAULT_RUNTIME_VM_NAME: &str = "cratebay-runtime";
 
-/// Default vsock / proxy port for Docker API inside the runtime VM.
-pub const DEFAULT_DOCKER_PROXY_PORT: u32 = 6237;
+/// Default vsock / proxy port for the engine compatibility API inside the runtime VM.
+pub const DEFAULT_ENGINE_PROXY_PORT: u32 = 6237;
+
+/// Compatibility alias for older callers.
+pub const DEFAULT_DOCKER_PROXY_PORT: u32 = DEFAULT_ENGINE_PROXY_PORT;
 
 /// Subdirectory name for bundled runtime image assets.
 pub const DEFAULT_RUNTIME_ASSETS_SUBDIR: &str = "runtime-images";
@@ -38,11 +41,11 @@ pub const DEFAULT_LINUX_RUNTIME_ASSETS_SUBDIR: &str = "runtime-linux";
 #[cfg(target_os = "windows")]
 pub const DEFAULT_WSL_ASSETS_SUBDIR: &str = "runtime-wsl";
 
-/// Default Docker TCP port for the Windows WSL2 runtime.
+/// Default engine compatibility TCP port for the Windows WSL2 runtime.
 #[cfg(target_os = "windows")]
 pub const DEFAULT_WSL_DOCKER_PORT: u16 = 2375;
 
-/// Default Docker TCP port for the Linux KVM/QEMU runtime.
+/// Default engine compatibility TCP port for the Linux KVM/QEMU runtime.
 #[cfg(target_os = "linux")]
 pub const DEFAULT_LINUX_DOCKER_PORT: u16 = 2475;
 
@@ -51,8 +54,8 @@ pub const DEFAULT_LINUX_DOCKER_PORT: u16 = 2475;
 // ---------------------------------------------------------------------------
 
 static RUNTIME_VM_NAME: OnceLock<String> = OnceLock::new();
-static DOCKER_PROXY_PORT: OnceLock<u32> = OnceLock::new();
-static DOCKER_SOCKET_PATH: OnceLock<PathBuf> = OnceLock::new();
+static ENGINE_PROXY_PORT: OnceLock<u32> = OnceLock::new();
+static ENGINE_SOCKET_PATH: OnceLock<PathBuf> = OnceLock::new();
 static RUNTIME_OS_IMAGE_ID: OnceLock<String> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -93,18 +96,31 @@ pub fn runtime_vm_name() -> &'static str {
         .as_str()
 }
 
-/// The guest port for the Docker API proxy inside the runtime VM.
+/// The guest port for the engine compatibility API proxy inside the runtime VM.
 ///
-/// Override via `CRATEBAY_DOCKER_PROXY_PORT` or the legacy
-/// `CRATEBAY_DOCKER_VSOCK_PORT`. When `CRATEBAY_DATA_DIR` is set and no port
-/// override is provided, derive a deterministic high port from the data dir so
-/// isolated runtimes do not all collide on the global default port.
-pub fn docker_proxy_port() -> u32 {
-    *DOCKER_PROXY_PORT.get_or_init(|| {
-        std::env::var("CRATEBAY_DOCKER_PROXY_PORT")
+/// Override via `CRATEBAY_ENGINE_PROXY_PORT` or `CRATEBAY_ENGINE_VSOCK_PORT`.
+/// Legacy `CRATEBAY_DOCKER_PROXY_PORT` and `CRATEBAY_DOCKER_VSOCK_PORT`
+/// remain supported for compatibility. When `CRATEBAY_DATA_DIR` is set and no
+/// port override is provided, derive a deterministic high port from the data
+/// dir so isolated runtimes do not all collide on the global default port.
+pub fn engine_proxy_port() -> u32 {
+    *ENGINE_PROXY_PORT.get_or_init(|| {
+        std::env::var("CRATEBAY_ENGINE_PROXY_PORT")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .filter(|v| *v > 0)
+            .or_else(|| {
+                std::env::var("CRATEBAY_ENGINE_VSOCK_PORT")
+                    .ok()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .filter(|v| *v > 0)
+            })
+            .or_else(|| {
+                std::env::var("CRATEBAY_DOCKER_PROXY_PORT")
+                    .ok()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .filter(|v| *v > 0)
+            })
             .or_else(|| {
                 std::env::var("CRATEBAY_DOCKER_VSOCK_PORT")
                     .ok()
@@ -117,27 +133,57 @@ pub fn docker_proxy_port() -> u32 {
                     if dir.is_empty() {
                         return None;
                     }
-                    let hash = dir.bytes().fold(0_u32, |acc, byte| {
-                        acc.wrapping_mul(131).wrapping_add(byte as u32)
-                    });
-                    Some(42000 + (hash % 10000))
+                    Some(42000 + (data_dir_hash(dir) % 10000))
                 })
             })
-            .unwrap_or(DEFAULT_DOCKER_PROXY_PORT)
+            .unwrap_or(DEFAULT_ENGINE_PROXY_PORT)
     })
 }
 
-/// The host-side Docker-compatible Unix socket path exposed by CrateBay.
+/// Compatibility alias for older call sites that still use Docker-shaped naming.
+pub fn docker_proxy_port() -> u32 {
+    engine_proxy_port()
+}
+
+fn data_dir_hash(dir: &str) -> u32 {
+    dir.bytes().fold(0_u32, |acc, byte| {
+        acc.wrapping_mul(131).wrapping_add(byte as u32)
+    })
+}
+
+fn isolated_runtime_socket_dir(hash: u32) -> PathBuf {
+    #[cfg(unix)]
+    {
+        PathBuf::from("/tmp").join(format!("cratebay-{}", hash))
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir().join(format!("cratebay-{}", hash))
+    }
+}
+
+const ENGINE_SOCKET_FILE_NAME: &str = "engine.sock";
+const LEGACY_DOCKER_SOCKET_FILE_NAME: &str = "docker.sock";
+
+/// The host-side CrateBay Engine Unix socket path exposed by CrateBay.
 ///
-/// Defaults to `$HOME/.cratebay/runtime/docker.sock`. When `CRATEBAY_DATA_DIR`
-/// is explicitly set, derive a short, isolated socket path under the system
-/// temp directory so isolated runtimes do not share the global socket path and
-/// do not hit macOS Unix socket path length limits.
+/// Defaults to `$HOME/.cratebay/runtime/engine.sock`. When `CRATEBAY_DATA_DIR`
+/// is explicitly set, derive a short, isolated socket path under `/tmp` on
+/// Unix so isolated runtimes do not share the global socket path and do not hit
+/// macOS Unix socket path length limits.
 ///
-/// Override via `CRATEBAY_DOCKER_SOCKET_PATH`.
-pub fn host_docker_socket_path() -> &'static Path {
-    let path = DOCKER_SOCKET_PATH
+/// Override via `CRATEBAY_ENGINE_SOCKET_PATH`. The legacy
+/// `CRATEBAY_DOCKER_SOCKET_PATH` override is still honored for compatibility.
+pub fn host_engine_socket_path() -> &'static Path {
+    let path = ENGINE_SOCKET_PATH
         .get_or_init(|| {
+            if let Ok(p) = std::env::var("CRATEBAY_ENGINE_SOCKET_PATH") {
+                if !p.trim().is_empty() {
+                    return PathBuf::from(p);
+                }
+            }
+
             if let Ok(p) = std::env::var("CRATEBAY_DOCKER_SOCKET_PATH") {
                 if !p.trim().is_empty() {
                     return PathBuf::from(p);
@@ -147,12 +193,8 @@ pub fn host_docker_socket_path() -> &'static Path {
             if let Ok(dir) = std::env::var("CRATEBAY_DATA_DIR") {
                 let dir = dir.trim();
                 if !dir.is_empty() {
-                    let hash = dir.bytes().fold(0_u32, |acc, byte| {
-                        acc.wrapping_mul(131).wrapping_add(byte as u32)
-                    });
-                    return std::env::temp_dir()
-                        .join(format!("cratebay-runtime-{}", hash))
-                        .join("docker.sock");
+                    return isolated_runtime_socket_dir(data_dir_hash(dir))
+                        .join(ENGINE_SOCKET_FILE_NAME);
                 }
             }
 
@@ -160,25 +202,45 @@ pub fn host_docker_socket_path() -> &'static Path {
                 return PathBuf::from(home)
                     .join(".cratebay")
                     .join("runtime")
-                    .join("docker.sock");
+                    .join(ENGINE_SOCKET_FILE_NAME);
             }
 
             crate::storage::data_dir()
                 .join("runtime")
-                .join("docker.sock")
+                .join(ENGINE_SOCKET_FILE_NAME)
         })
         .as_path();
-    tracing::debug!("Host Docker socket path: {}", path.display());
+    tracing::debug!("Host CrateBay Engine socket path: {}", path.display());
     path
 }
 
-/// Per-VM Docker socket path on the host.
+/// Compatibility alias for existing call sites.
 ///
-/// Located alongside `host_docker_socket_path()` and includes an additional
+/// The returned path is CrateBay's canonical Engine socket. A `docker.sock`
+/// symlink is created alongside it for external Docker-compatible clients.
+pub fn host_docker_socket_path() -> &'static Path {
+    host_engine_socket_path()
+}
+
+/// The legacy Docker-compatible host socket alias path.
+pub fn host_legacy_docker_socket_path() -> PathBuf {
+    host_engine_socket_path()
+        .parent()
+        .map(|parent| parent.join(LEGACY_DOCKER_SOCKET_FILE_NAME))
+        .unwrap_or_else(|| {
+            crate::storage::data_dir()
+                .join("runtime")
+                .join(LEGACY_DOCKER_SOCKET_FILE_NAME)
+        })
+}
+
+/// Per-VM CrateBay Engine socket path on the host.
+///
+/// Located alongside `host_engine_socket_path()` and includes an additional
 /// suffix when `CRATEBAY_DATA_DIR` is explicitly set, so isolated runtimes do
-/// not collide on the same `/tmp/docker-<vm>.sock` path.
-pub fn runtime_host_docker_socket_path(vm_id: &str) -> PathBuf {
-    let base = host_docker_socket_path()
+/// not collide on the same `/tmp/engine-<vm>.sock` path.
+pub fn runtime_host_engine_socket_path(vm_id: &str) -> PathBuf {
+    let base = host_engine_socket_path()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| crate::storage::data_dir().join("runtime"));
@@ -187,27 +249,24 @@ pub fn runtime_host_docker_socket_path(vm_id: &str) -> PathBuf {
         .ok()
         .map(|dir| dir.trim().to_string())
         .filter(|dir| !dir.is_empty())
-        .map(|dir| {
-            dir.bytes().fold(0_u32, |acc, byte| {
-                acc.wrapping_mul(131).wrapping_add(byte as u32)
-            })
-        });
+        .map(|dir| data_dir_hash(&dir));
 
     match suffix {
-        Some(hash) => base.join(format!("docker-{}-{}.sock", vm_id, hash)),
-        None => base.join(format!("docker-{}.sock", vm_id)),
+        Some(hash) => base.join(format!("engine-{}-{}.sock", vm_id, hash)),
+        None => base.join(format!("engine-{}.sock", vm_id)),
     }
 }
 
-/// Create a symlink from the canonical `host_docker_socket_path()` to the
-/// actual per-VM socket.
+/// Compatibility alias for existing runtime backends.
+pub fn runtime_host_docker_socket_path(vm_id: &str) -> PathBuf {
+    runtime_host_engine_socket_path(vm_id)
+}
+
 #[cfg(unix)]
-pub fn link_runtime_host_docker_socket(vm_id: &str) -> Result<(), AppError> {
+fn replace_socket_symlink(alias: &Path, actual: &Path) -> Result<(), AppError> {
     use std::os::unix::fs::symlink;
 
-    let alias = host_docker_socket_path();
-    let actual = runtime_host_docker_socket_path(vm_id);
-    if let Some(parent) = actual.parent() {
+    if let Some(parent) = alias.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
@@ -219,19 +278,40 @@ pub fn link_runtime_host_docker_socket(vm_id: &str) -> Result<(), AppError> {
         Err(err) => return Err(AppError::Io(err)),
     }
 
-    symlink(&actual, alias)?;
+    symlink(actual, alias)?;
     Ok(())
 }
 
-/// Remove the canonical socket symlink if it points to this VM.
+/// Create symlinks from the canonical Engine socket and legacy compatibility
+/// socket alias to the actual per-VM socket.
+#[cfg(unix)]
+pub fn link_runtime_host_docker_socket(vm_id: &str) -> Result<(), AppError> {
+    let alias = host_engine_socket_path();
+    let legacy_alias = host_legacy_docker_socket_path();
+    let actual = runtime_host_engine_socket_path(vm_id);
+    if let Some(parent) = actual.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    replace_socket_symlink(alias, &actual)?;
+    if legacy_alias != alias {
+        replace_socket_symlink(&legacy_alias, &actual)?;
+    }
+    Ok(())
+}
+
+/// Remove the canonical and legacy socket symlinks if they point to this VM.
 #[cfg(unix)]
 pub fn unlink_runtime_host_docker_socket(vm_id: &str) {
-    let alias = host_docker_socket_path();
-    let actual = runtime_host_docker_socket_path(vm_id);
+    let alias = host_engine_socket_path();
+    let legacy_alias = host_legacy_docker_socket_path();
+    let actual = runtime_host_engine_socket_path(vm_id);
 
-    if let Ok(target) = std::fs::read_link(alias) {
-        if target == actual {
-            let _ = std::fs::remove_file(alias);
+    for alias in [alias.to_path_buf(), legacy_alias] {
+        if let Ok(target) = std::fs::read_link(&alias) {
+            if target == actual {
+                let _ = std::fs::remove_file(alias);
+            }
         }
     }
     let _ = std::fs::remove_file(&actual);
@@ -289,6 +369,12 @@ fn runtime_images_dir_from_root(root: &Path) -> Option<PathBuf> {
     let dir = root.join(DEFAULT_RUNTIME_ASSETS_SUBDIR);
     if dir.is_dir() {
         Some(dir)
+    } else if root.join("cratebay-runtime-aarch64").is_dir()
+        || root.join("cratebay-runtime-x86_64").is_dir()
+    {
+        // Allow explicit CRATEBAY_RUNTIME_ASSETS_DIR values to point directly
+        // at the directory produced by scripts/build-runtime-assets-*.sh.
+        Some(root.to_path_buf())
     } else {
         None
     }
@@ -764,13 +850,13 @@ pub fn ensure_runtime_image_ready(image_id: &str) -> Result<(), AppError> {
 }
 
 // ---------------------------------------------------------------------------
-// Docker TCP endpoint parsing
+// Engine TCP endpoint parsing
 // ---------------------------------------------------------------------------
 
 /// Parse a `tcp://host:port` string into `(host, port)`.
 ///
 /// Supports IPv4 (`tcp://127.0.0.1:2375`) and IPv6 (`tcp://[::1]:2375`).
-pub fn docker_host_tcp_endpoint(host: &str) -> Option<(String, u16)> {
+pub fn engine_host_tcp_endpoint(host: &str) -> Option<(String, u16)> {
     let endpoint = host.strip_prefix("tcp://")?;
 
     // IPv6 bracket notation: [host]:port
@@ -790,19 +876,32 @@ pub fn docker_host_tcp_endpoint(host: &str) -> Option<(String, u16)> {
     Some((host_part.to_string(), port))
 }
 
-/// Ping a Docker daemon over TCP HTTP (no TLS).
+/// Compatibility alias for Docker-compatible endpoint callers.
+pub fn docker_host_tcp_endpoint(host: &str) -> Option<(String, u16)> {
+    engine_host_tcp_endpoint(host)
+}
+
+/// Ping a CrateBay Engine compatibility endpoint over TCP HTTP (no TLS).
 ///
 /// Sends `GET /_ping HTTP/1.1` and checks for a `200 OK` response.
 /// This function uses raw TCP and is suitable for Linux/Windows runtimes
 /// that expose Docker via TCP rather than Unix sockets.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn docker_http_ping_host(host: &str) -> Result<(), String> {
+    engine_http_ping_host(host)
+}
+
+/// Ping a CrateBay Engine compatibility endpoint over TCP HTTP (no TLS).
+///
+/// Sends `GET /_ping HTTP/1.1` and checks for a `200 OK` response.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn engine_http_ping_host(host: &str) -> Result<(), String> {
     use std::io::{Read, Write};
     use std::net::ToSocketAddrs;
     use std::time::Duration;
 
     let (tcp_host, port) =
-        docker_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Docker host '{}'", host))?;
+        engine_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Engine host '{}'", host))?;
 
     let mut addresses = (tcp_host.as_str(), port)
         .to_socket_addrs()
@@ -848,17 +947,459 @@ pub fn docker_http_ping_host(host: &str) -> Result<(), String> {
     Err(last_error.unwrap_or_else(|| "unknown error".to_string()))
 }
 
-/// Wait for a Docker TCP endpoint to become responsive.
+fn engine_http_request(path: &str) -> Vec<u8> {
+    engine_http_json_request("GET", path, &[])
+}
+
+fn engine_http_json_request(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
+    engine_http_raw_request(method, path, "application/json", body)
+}
+
+fn normalized_engine_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn engine_http_raw_header(
+    method: &str,
+    path: &str,
+    content_type: &str,
+    content_length: u64,
+) -> Vec<u8> {
+    let normalized_path = normalized_engine_path(path);
+    if content_length == 0 {
+        return format!(
+            "{method} {normalized_path} HTTP/1.1\r\nHost: cratebay\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+    }
+
+    format!(
+        "{method} {normalized_path} HTTP/1.1\r\nHost: cratebay\r\nConnection: close\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
+        if content_type.trim().is_empty() { "application/octet-stream" } else { content_type },
+        content_length,
+    )
+    .into_bytes()
+}
+
+fn engine_http_raw_request(method: &str, path: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
+    if body.is_empty() {
+        return engine_http_raw_header(method, path, content_type, 0);
+    }
+
+    let mut request = engine_http_raw_header(method, path, content_type, body.len() as u64);
+    request.extend_from_slice(body);
+    request
+}
+
+fn parse_http_body_response(response: &[u8]) -> Result<Vec<u8>, String> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "response did not include HTTP headers".to_string())?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status = headers
+        .lines()
+        .next()
+        .ok_or_else(|| "response did not include a status line".to_string())?;
+    let status_code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or_default();
+    if !(200..300).contains(&status_code) {
+        let body = String::from_utf8_lossy(&response[header_end + 4..]);
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(format!("Engine endpoint returned {status}"));
+        }
+        return Err(format!("Engine endpoint returned {status}: {body}"));
+    }
+    Ok(response[header_end + 4..].to_vec())
+}
+
+fn parse_http_json_response(response: &[u8]) -> Result<serde_json::Value, String> {
+    let body = parse_http_body_response(response)?;
+    serde_json::from_slice(&body).map_err(|error| format!("parse Engine JSON response: {error}"))
+}
+
+/// Query a CrateBay Engine JSON endpoint over a Unix socket.
+#[cfg(unix)]
+pub fn engine_http_get_json_unix_socket(
+    socket: &std::path::Path,
+    path: &str,
+) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut stream = UnixStream::connect(socket)
+        .map_err(|error| format!("connect {}: {error}", socket.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    stream
+        .write_all(&engine_http_request(path))
+        .map_err(|error| format!("write {}: {error}", socket.display()))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read {}: {error}", socket.display()))?;
+    parse_http_json_response(&response)
+}
+
+/// Send a JSON request to a CrateBay Engine endpoint over a Unix socket.
+#[cfg(unix)]
+pub fn engine_http_json_unix_socket(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let body = serde_json::to_vec(payload)
+        .map_err(|error| format!("encode Engine JSON request: {error}"))?;
+    let mut stream = UnixStream::connect(socket)
+        .map_err(|error| format!("connect {}: {error}", socket.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    stream
+        .write_all(&engine_http_json_request(method, path, &body))
+        .map_err(|error| format!("write {}: {error}", socket.display()))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read {}: {error}", socket.display()))?;
+    parse_http_json_response(&response)
+}
+
+/// Send a raw request to a CrateBay Engine endpoint over a Unix socket.
+#[cfg(unix)]
+pub fn engine_http_raw_unix_socket(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut stream = UnixStream::connect(socket)
+        .map_err(|error| format!("connect {}: {error}", socket.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+    stream
+        .write_all(&engine_http_raw_request(method, path, content_type, body))
+        .map_err(|error| format!("write {}: {error}", socket.display()))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read {}: {error}", socket.display()))?;
+    parse_http_body_response(&response)
+}
+
+/// Send a raw request body from a file to a CrateBay Engine endpoint over a Unix socket.
+#[cfg(unix)]
+pub fn engine_http_raw_file_unix_socket(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body_path: &std::path::Path,
+) -> Result<Vec<u8>, String> {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut body = File::open(body_path)
+        .map_err(|error| format!("open request body {}: {error}", body_path.display()))?;
+    let body_len = body
+        .metadata()
+        .map_err(|error| format!("stat request body {}: {error}", body_path.display()))?
+        .len();
+    let mut stream = UnixStream::connect(socket)
+        .map_err(|error| format!("connect {}: {error}", socket.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+    stream
+        .write_all(&engine_http_raw_header(
+            method,
+            path,
+            content_type,
+            body_len,
+        ))
+        .map_err(|error| format!("write headers {}: {error}", socket.display()))?;
+    std::io::copy(&mut body, &mut stream)
+        .map_err(|error| format!("write body {}: {error}", body_path.display()))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read {}: {error}", socket.display()))?;
+    parse_http_body_response(&response)
+}
+
+/// Query a CrateBay Engine JSON endpoint over a TCP compatibility host.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn engine_http_get_json_tcp_host(host: &str, path: &str) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let (tcp_host, port) =
+        engine_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Engine host '{}'", host))?;
+
+    let mut addresses = (tcp_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve {}:{}: {}", tcp_host, port, error))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!(
+            "resolve {}:{}: no addresses returned",
+            tcp_host, port
+        ));
+    }
+    addresses.sort_by_key(|address| if address.is_ipv4() { 0 } else { 1 });
+
+    let mut last_error = None;
+    for address in addresses {
+        match std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
+            Ok(mut stream) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                if let Err(error) = stream.write_all(&engine_http_request(path)) {
+                    last_error = Some(format!("write {}: {}", address, error));
+                    continue;
+                }
+                let mut response = Vec::new();
+                if let Err(error) = stream.read_to_end(&mut response) {
+                    last_error = Some(format!("read {}: {}", address, error));
+                    continue;
+                }
+                return parse_http_json_response(&response);
+            }
+            Err(error) => {
+                last_error = Some(format!("connect {}: {}", address, error));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "unknown error".to_string()))
+}
+
+/// Send a JSON request to a CrateBay Engine endpoint over a TCP compatibility host.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn engine_http_json_tcp_host(
+    host: &str,
+    method: &str,
+    path: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let body = serde_json::to_vec(payload)
+        .map_err(|error| format!("encode Engine JSON request: {error}"))?;
+    let (tcp_host, port) =
+        engine_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Engine host '{}'", host))?;
+
+    let mut addresses = (tcp_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve {}:{}: {}", tcp_host, port, error))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!(
+            "resolve {}:{}: no addresses returned",
+            tcp_host, port
+        ));
+    }
+    addresses.sort_by_key(|address| if address.is_ipv4() { 0 } else { 1 });
+
+    let mut last_error = None;
+    for address in addresses {
+        match std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
+            Ok(mut stream) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                if let Err(error) = stream.write_all(&engine_http_json_request(method, path, &body))
+                {
+                    last_error = Some(format!("write {}: {}", address, error));
+                    continue;
+                }
+                let mut response = Vec::new();
+                if let Err(error) = stream.read_to_end(&mut response) {
+                    last_error = Some(format!("read {}: {}", address, error));
+                    continue;
+                }
+                return parse_http_json_response(&response);
+            }
+            Err(error) => {
+                last_error = Some(format!("connect {}: {}", address, error));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "unknown error".to_string()))
+}
+
+/// Send a raw request to a CrateBay Engine endpoint over a TCP compatibility host.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn engine_http_raw_tcp_host(
+    host: &str,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let (tcp_host, port) =
+        engine_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Engine host '{}'", host))?;
+
+    let mut addresses = (tcp_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve {}:{}: {}", tcp_host, port, error))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!(
+            "resolve {}:{}: no addresses returned",
+            tcp_host, port
+        ));
+    }
+    addresses.sort_by_key(|address| if address.is_ipv4() { 0 } else { 1 });
+
+    let mut last_error = None;
+    for address in addresses {
+        match std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
+            Ok(mut stream) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+                if let Err(error) =
+                    stream.write_all(&engine_http_raw_request(method, path, content_type, body))
+                {
+                    last_error = Some(format!("write {}: {}", address, error));
+                    continue;
+                }
+                let mut response = Vec::new();
+                if let Err(error) = stream.read_to_end(&mut response) {
+                    last_error = Some(format!("read {}: {}", address, error));
+                    continue;
+                }
+                return parse_http_body_response(&response);
+            }
+            Err(error) => {
+                last_error = Some(format!("connect {}: {}", address, error));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "unknown error".to_string()))
+}
+
+/// Send a raw request body from a file to a CrateBay Engine endpoint over a TCP compatibility host.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn engine_http_raw_file_tcp_host(
+    host: &str,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body_path: &std::path::Path,
+) -> Result<Vec<u8>, String> {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let body_len = std::fs::metadata(body_path)
+        .map_err(|error| format!("stat request body {}: {error}", body_path.display()))?
+        .len();
+    let (tcp_host, port) =
+        engine_host_tcp_endpoint(host).ok_or_else(|| format!("invalid Engine host '{}'", host))?;
+
+    let mut addresses = (tcp_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve {}:{}: {}", tcp_host, port, error))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!(
+            "resolve {}:{}: no addresses returned",
+            tcp_host, port
+        ));
+    }
+    addresses.sort_by_key(|address| if address.is_ipv4() { 0 } else { 1 });
+
+    let mut last_error = None;
+    for address in addresses {
+        match std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
+            Ok(mut stream) => {
+                let mut body = File::open(body_path).map_err(|error| {
+                    format!("open request body {}: {error}", body_path.display())
+                })?;
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+                if let Err(error) = stream.write_all(&engine_http_raw_header(
+                    method,
+                    path,
+                    content_type,
+                    body_len,
+                )) {
+                    last_error = Some(format!("write headers {}: {}", address, error));
+                    continue;
+                }
+                if let Err(error) = std::io::copy(&mut body, &mut stream) {
+                    last_error = Some(format!("write body {}: {}", body_path.display(), error));
+                    continue;
+                }
+                let mut response = Vec::new();
+                if let Err(error) = stream.read_to_end(&mut response) {
+                    last_error = Some(format!("read {}: {}", address, error));
+                    continue;
+                }
+                return parse_http_body_response(&response);
+            }
+            Err(error) => {
+                last_error = Some(format!("connect {}: {}", address, error));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "unknown error".to_string()))
+}
+
+/// Wait for an Engine compatibility TCP endpoint to become responsive.
 ///
-/// Polls every 500ms until either Docker responds to a ping or
+/// Polls every 500ms until either the compatibility endpoint responds to a ping or
 /// the timeout expires.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn wait_for_docker_tcp(host: &str, timeout: std::time::Duration) -> Result<(), String> {
+    wait_for_engine_tcp(host, timeout)
+}
+
+/// Wait for an Engine compatibility TCP endpoint to become responsive.
+///
+/// Polls every 500ms until either the compatibility endpoint responds to a ping or
+/// the timeout expires.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn wait_for_engine_tcp(host: &str, timeout: std::time::Duration) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
-    let mut last_error = "Docker host is still starting".to_string();
+    let mut last_error = "Engine host is still starting".to_string();
 
     while std::time::Instant::now() < deadline {
-        match docker_http_ping_host(host) {
+        match engine_http_ping_host(host) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = error,
         }
@@ -866,6 +1407,91 @@ pub fn wait_for_docker_tcp(host: &str, timeout: std::time::Duration) -> Result<(
     }
 
     Err(last_error)
+}
+
+/// CPU usage from two Linux `/proc/stat` samples.
+///
+/// The input can be raw `/proc/stat` snapshots or just the first `cpu ...`
+/// aggregate line. Returns a percentage in the range 0..100.
+pub fn linux_proc_stat_cpu_percent(previous: &str, current: &str) -> Option<f32> {
+    let previous = parse_linux_proc_stat_cpu_line(previous)?;
+    let current = parse_linux_proc_stat_cpu_line(current)?;
+    let total_delta = current.total.saturating_sub(previous.total);
+    if total_delta == 0 {
+        return Some(0.0);
+    }
+
+    let idle_delta = current.idle.saturating_sub(previous.idle);
+    let busy_delta = total_delta.saturating_sub(idle_delta);
+    Some(((busy_delta as f64 / total_delta as f64) * 100.0) as f32)
+}
+
+/// Disk usage in GiB from `df -B1` output.
+pub fn linux_df_used_gb(output: &str) -> Option<f32> {
+    output.lines().skip(1).find_map(|line| {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        let used_bytes = columns.get(2)?.parse::<u64>().ok()?;
+        Some(bytes_to_gib(used_bytes))
+    })
+}
+
+/// Host-allocated disk usage in GiB for a sparse runtime disk image.
+///
+/// On Unix this uses allocated filesystem blocks instead of logical length, so
+/// sparse `disk.raw` images report real host usage. Non-Unix platforms fall
+/// back to logical file length.
+pub fn file_allocated_gb(path: &Path) -> f32 {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return 0.0;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        return bytes_to_gib(metadata.blocks().saturating_mul(512));
+    }
+
+    #[allow(unreachable_code)]
+    bytes_to_gib(metadata.len())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LinuxProcStatCpu {
+    idle: u64,
+    total: u64,
+}
+
+fn parse_linux_proc_stat_cpu_line(input: &str) -> Option<LinuxProcStatCpu> {
+    let line = input.lines().find(|line| {
+        line.trim_start()
+            .strip_prefix("cpu")
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    })?;
+    let values = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|value| value.parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    if values.len() < 4 {
+        return None;
+    }
+
+    let idle = values
+        .get(3)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(values.get(4).copied().unwrap_or_default());
+    let total = values
+        .iter()
+        .copied()
+        .fold(0_u64, |total, value| total.saturating_add(value));
+
+    Some(LinuxProcStatCpu { idle, total })
+}
+
+pub fn bytes_to_gib(bytes: u64) -> f32 {
+    bytes as f32 / 1024.0 / 1024.0 / 1024.0
 }
 
 // ---------------------------------------------------------------------------
@@ -909,36 +1535,68 @@ mod tests {
     }
 
     #[test]
-    fn docker_proxy_port_default() {
-        let port = docker_proxy_port();
+    fn engine_proxy_port_default() {
+        let port = engine_proxy_port();
         assert!(port > 0, "proxy port should be positive");
     }
 
     #[test]
-    fn host_docker_socket_path_not_empty() {
-        let path = host_docker_socket_path();
+    fn host_engine_socket_path_not_empty() {
+        let path = host_engine_socket_path();
         assert!(!path.as_os_str().is_empty());
     }
 
     #[test]
-    fn host_docker_socket_path_contains_docker_sock() {
-        let path = host_docker_socket_path();
+    fn host_engine_socket_path_contains_engine_sock() {
+        let path = host_engine_socket_path();
         let s = path.to_string_lossy();
         assert!(
-            s.contains("docker.sock"),
-            "path should contain docker.sock: {}",
+            s.contains("engine.sock"),
+            "path should contain engine.sock: {}",
             s
         );
     }
 
     #[test]
-    fn runtime_host_docker_socket_path_contains_vm_id() {
-        let path = runtime_host_docker_socket_path("test-vm");
+    fn host_legacy_docker_socket_path_contains_docker_sock() {
+        let path = host_legacy_docker_socket_path();
         let s = path.to_string_lossy();
         assert!(
-            s.contains("docker-test-vm.sock"),
+            s.contains("docker.sock"),
+            "legacy alias should contain docker.sock: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn runtime_host_engine_socket_path_contains_vm_id() {
+        let path = runtime_host_engine_socket_path("test-vm");
+        let s = path.to_string_lossy();
+        assert!(
+            s.contains("engine-test-vm.sock"),
             "path should contain vm id: {}",
             s
+        );
+    }
+
+    #[test]
+    fn isolated_runtime_socket_paths_stay_short_for_unix_sockets() {
+        let hash = data_dir_hash(
+            "/Users/example/Library/Application Support/com.xiaofei.liveagent/cratebay-sandbox/runtime/data",
+        );
+        let alias = isolated_runtime_socket_dir(hash).join("engine.sock");
+        let actual =
+            isolated_runtime_socket_dir(hash).join(format!("engine-cratebay-runtime-{hash}.sock"));
+
+        assert!(
+            alias.to_string_lossy().len() < 103,
+            "alias socket path is too long: {}",
+            alias.display()
+        );
+        assert!(
+            actual.to_string_lossy().len() < 103,
+            "runtime socket path is too long: {}",
+            actual.display()
         );
     }
 
@@ -954,30 +1612,177 @@ mod tests {
     }
 
     #[test]
-    fn docker_host_tcp_endpoint_parses_ipv4() {
-        let result = docker_host_tcp_endpoint("tcp://127.0.0.1:2375");
+    fn engine_host_tcp_endpoint_parses_ipv4() {
+        let result = engine_host_tcp_endpoint("tcp://127.0.0.1:2375");
         assert_eq!(result, Some(("127.0.0.1".to_string(), 2375)));
     }
 
     #[test]
-    fn docker_host_tcp_endpoint_parses_ipv6() {
-        let result = docker_host_tcp_endpoint("tcp://[::1]:2375");
+    fn engine_host_tcp_endpoint_parses_ipv6() {
+        let result = engine_host_tcp_endpoint("tcp://[::1]:2375");
         assert_eq!(result, Some(("::1".to_string(), 2375)));
     }
 
     #[test]
-    fn docker_host_tcp_endpoint_rejects_invalid() {
-        assert!(docker_host_tcp_endpoint("unix:///var/run/docker.sock").is_none());
-        assert!(docker_host_tcp_endpoint("tcp://").is_none());
-        assert!(docker_host_tcp_endpoint("tcp://:2375").is_none());
-        assert!(docker_host_tcp_endpoint("").is_none());
-        assert!(docker_host_tcp_endpoint("not-a-url").is_none());
+    fn engine_host_tcp_endpoint_rejects_invalid() {
+        assert!(engine_host_tcp_endpoint("unix:///var/run/docker.sock").is_none());
+        assert!(engine_host_tcp_endpoint("tcp://").is_none());
+        assert!(engine_host_tcp_endpoint("tcp://:2375").is_none());
+        assert!(engine_host_tcp_endpoint("").is_none());
+        assert!(engine_host_tcp_endpoint("not-a-url").is_none());
     }
 
     #[test]
-    fn docker_host_tcp_endpoint_parses_hostname() {
+    fn engine_host_tcp_endpoint_parses_hostname() {
+        let result = engine_host_tcp_endpoint("tcp://engine.local:2376");
+        assert_eq!(result, Some(("engine.local".to_string(), 2376)));
+    }
+
+    #[test]
+    fn docker_host_tcp_endpoint_alias_parses_hostname() {
         let result = docker_host_tcp_endpoint("tcp://docker.local:2376");
         assert_eq!(result, Some(("docker.local".to_string(), 2376)));
+    }
+
+    #[test]
+    fn parses_engine_http_json_response() {
+        let response =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"name\":\"CrateBay Engine\"}";
+        let json = parse_http_json_response(response).expect("json response");
+        assert_eq!(json["name"], "CrateBay Engine");
+    }
+
+    #[test]
+    fn parses_created_engine_http_json_response() {
+        let response =
+            b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n\r\n{\"id\":\"abc123\"}";
+        let json = parse_http_json_response(response).expect("json response");
+        assert_eq!(json["id"], "abc123");
+    }
+
+    #[test]
+    fn rejects_non_ok_engine_http_json_response() {
+        let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{}";
+        let err = parse_http_json_response(response).expect_err("non-ok response");
+        assert!(err.contains("404 Not Found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parses_engine_http_raw_body_response() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/x-tar\r\n\r\nabc123";
+        let body = parse_http_body_response(response).expect("raw response");
+        assert_eq!(body, b"abc123");
+    }
+
+    #[test]
+    fn engine_http_request_normalizes_path() {
+        let request = String::from_utf8(engine_http_request("cratebay/engine")).unwrap();
+        assert!(request.starts_with("GET /cratebay/engine HTTP/1.1"));
+    }
+
+    #[test]
+    fn engine_http_json_request_includes_body_headers() {
+        let request = String::from_utf8(engine_http_json_request(
+            "POST",
+            "/cratebay/containers/abc/exec",
+            br#"{"command":["true"]}"#,
+        ))
+        .unwrap();
+        assert!(request.starts_with("POST /cratebay/containers/abc/exec HTTP/1.1"));
+        assert!(request.contains("Content-Type: application/json"));
+        assert!(request.contains("Content-Length: 20"));
+        assert!(request.ends_with(r#"{"command":["true"]}"#));
+    }
+
+    #[test]
+    fn engine_http_raw_request_includes_content_type_and_body() {
+        let request = String::from_utf8(engine_http_raw_request(
+            "POST",
+            "/cratebay/images/import",
+            "application/x-tar",
+            b"tar-bytes",
+        ))
+        .unwrap();
+        assert!(request.starts_with("POST /cratebay/images/import HTTP/1.1"));
+        assert!(request.contains("Content-Type: application/x-tar"));
+        assert!(request.contains("Content-Length: 9"));
+        assert!(request.ends_with("tar-bytes"));
+    }
+
+    #[test]
+    fn engine_http_raw_header_includes_length_without_materializing_body() {
+        let request = String::from_utf8(engine_http_raw_header(
+            "POST",
+            "/cratebay/images/import",
+            "application/x-tar",
+            1024 * 1024 * 1024,
+        ))
+        .unwrap();
+        assert!(request.starts_with("POST /cratebay/images/import HTTP/1.1"));
+        assert!(request.contains("Content-Type: application/x-tar"));
+        assert!(request.contains("Content-Length: 1073741824"));
+        assert!(request.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn linux_proc_stat_cpu_percent_uses_aggregate_busy_delta() {
+        let previous = "cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 1 0 1 8";
+        let current = "cpu  150 0 150 900 0 0 0 0 0 0\ncpu0 1 0 1 9";
+
+        let percent = linux_proc_stat_cpu_percent(previous, current).unwrap();
+
+        assert!((percent - 50.0).abs() < 0.01, "percent={percent}");
+    }
+
+    #[test]
+    fn linux_proc_stat_cpu_percent_handles_unchanged_snapshot() {
+        let snapshot = "cpu  100 0 100 800 0 0 0 0 0 0";
+
+        assert_eq!(linux_proc_stat_cpu_percent(snapshot, snapshot), Some(0.0));
+    }
+
+    #[test]
+    fn linux_proc_stat_cpu_percent_rejects_missing_aggregate_line() {
+        assert_eq!(linux_proc_stat_cpu_percent("intr 1", "intr 2"), None);
+    }
+
+    #[test]
+    fn linux_df_used_gb_parses_byte_output() {
+        let output = "Filesystem     1B-blocks       Used Available Use% Mounted on\n/dev/sdb       42949672960 1073741824 41875931136   3% /";
+
+        let used = linux_df_used_gb(output).unwrap();
+
+        assert!((used - 1.0).abs() < 0.01, "used={used}");
+    }
+
+    #[test]
+    fn linux_df_used_gb_rejects_empty_output() {
+        assert_eq!(
+            linux_df_used_gb("Filesystem 1B-blocks Used Available Use% Mounted on"),
+            None
+        );
+    }
+
+    #[test]
+    fn bytes_to_gib_converts_binary_gib() {
+        assert!((bytes_to_gib(1024 * 1024 * 1024) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn file_allocated_gb_returns_zero_for_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing.raw");
+
+        assert_eq!(file_allocated_gb(&missing), 0.0);
+    }
+
+    #[test]
+    fn file_allocated_gb_reads_existing_file_without_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let disk = tmp.path().join("disk.raw");
+        std::fs::write(&disk, vec![0_u8; 4096]).unwrap();
+
+        assert!(file_allocated_gb(&disk) >= 0.0);
     }
 
     #[test]
@@ -988,6 +1793,16 @@ mod tests {
             !candidates.is_empty(),
             "should have at least one asset root candidate"
         );
+    }
+
+    #[test]
+    fn runtime_images_dir_accepts_direct_generated_assets_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cratebay-runtime-x86_64")).unwrap();
+
+        let dir = runtime_images_dir_from_root(tmp.path());
+
+        assert_eq!(dir.as_deref(), Some(tmp.path()));
     }
 
     #[test]

@@ -19,10 +19,13 @@ cd "$repo_root"
 
 suffix="$(date +%s)-$$"
 container_name="cbx-runtime-smoke-${suffix}"
+native_container_name="cbx-native-smoke-${suffix}"
+native_run_name="cbx-native-run-${suffix}"
 pod_name="cbx-runtime-pod-${suffix}"
 packaged_image="cbx-runtime-pack:${suffix}"
 tagged_image="cbx-runtime-pack:${suffix}-tag"
 volume_name="cbx-runtime-volume-${suffix}"
+network_name="cbx-runtime-network-${suffix}"
 runtime_image="${CRATEBAY_SMOKE_RUNTIME_IMAGE:-}"
 offline_smoke_image=0
 env_key="CRATEBAY_E2E"
@@ -30,6 +33,7 @@ env_value="smoke-${suffix}"
 container_removed=0
 pod_removed=0
 volume_removed=0
+network_removed=0
 registry_container_name=""
 registry_server_image=""
 registry_seed_dir=""
@@ -58,6 +62,25 @@ ready_runtime_file() {
   return 0
 }
 
+runtime_assets_stale() {
+  local marker="$1"
+  [[ -f "$marker" ]] || return 0
+
+  local newer_source
+  newer_source="$(
+    find \
+      "$repo_root/crates/cratebay-engine-adapter" \
+      "$repo_root/crates/cratebay-guest-agent" \
+      "$repo_root/scripts/build-runtime-assets-alpine.sh" \
+      "$repo_root/Cargo.toml" \
+      "$repo_root/Cargo.lock" \
+      -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name 'build-runtime-assets-alpine.sh' \) \
+      -newer "$marker" \
+      -print -quit 2>/dev/null || true
+  )"
+  [[ -n "$newer_source" ]]
+}
+
 has_virtualization_entitlements() {
   local binary_path="$1"
   command -v codesign >/dev/null 2>&1 || return 1
@@ -80,8 +103,10 @@ prepare_macos_runtime() {
     exit 1
   fi
 
-  if ! ready_runtime_file "$repo_root/crates/cratebay-gui/src-tauri/runtime-images/cratebay-runtime-${runtime_arch}/vmlinuz" \
-    || ! ready_runtime_file "$repo_root/crates/cratebay-gui/src-tauri/runtime-images/cratebay-runtime-${runtime_arch}/initramfs"; then
+  local image_dir="$repo_root/crates/cratebay-gui/src-tauri/runtime-images/cratebay-runtime-${runtime_arch}"
+  if ! ready_runtime_file "$image_dir/vmlinuz" \
+    || ! ready_runtime_file "$image_dir/initramfs" \
+    || runtime_assets_stale "$image_dir/initramfs"; then
     echo "== Prepare macOS runtime assets (${runtime_arch}) =="
     bash "$repo_root/scripts/build-runtime-assets-alpine.sh" "$runtime_arch"
   fi
@@ -138,7 +163,8 @@ prepare_linux_runtime() {
 
   image_dir="$repo_root/crates/cratebay-gui/src-tauri/runtime-images/cratebay-runtime-${runtime_arch}"
   if ! ready_runtime_file "$image_dir/vmlinuz" \
-    || ! ready_runtime_file "$image_dir/initramfs"; then
+    || ! ready_runtime_file "$image_dir/initramfs" \
+    || runtime_assets_stale "$image_dir/initramfs"; then
     echo "== Prepare Linux runtime image assets (${runtime_arch}) =="
     bash "$repo_root/scripts/build-runtime-assets-alpine.sh" "$runtime_arch"
   fi
@@ -159,6 +185,48 @@ assert_contains() {
     echo "--- output ---"
     printf '%s\n' "$haystack"
     exit 1
+  fi
+}
+
+run_capture() {
+  local output_var="$1"
+  shift
+  local output status
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf -v "$output_var" '%s' "$output"
+  if [[ "$status" -ne 0 ]]; then
+    echo "COMMAND FAILED ($status): $*"
+    echo "--- output ---"
+    printf '%s\n' "$output"
+    exit "$status"
+  fi
+}
+
+run_cleanup_cmd() {
+  if command -v perl >/dev/null 2>&1; then
+    perl -e '
+      my $timeout = shift @ARGV;
+      my $pid = fork();
+      exit 125 unless defined $pid;
+      if ($pid == 0) {
+        exec @ARGV;
+        exit 127;
+      }
+      local $SIG{ALRM} = sub {
+        kill "TERM", $pid;
+        sleep 1;
+        kill "KILL", $pid;
+        exit 124;
+      };
+      alarm $timeout;
+      waitpid($pid, 0);
+      exit(($? >> 8) || 0);
+    ' 8 "$@" >/dev/null 2>&1 || true
+  else
+    "$@" >/dev/null 2>&1 || true
   fi
 }
 
@@ -221,7 +289,7 @@ create_offline_smoke_image() {
   cat >"$source_file" <<'RS'
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process;
@@ -267,11 +335,26 @@ fn main() {
         Some("echo") => {
             println!("{}", args.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
         }
+        Some("pty") => run_pty_echo(),
         Some(other) => {
             eprintln!("unknown command: {}", other);
             process::exit(64);
         }
         None => println!("cratebay-smoke"),
+    }
+}
+
+fn run_pty_echo() {
+    println!("cratebay-smoke pty ready");
+    let _ = io::stdout().flush();
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap_or_default();
+        if line.trim() == "exit" {
+            break;
+        }
+        println!("pty: {}", line.trim_end());
+        let _ = io::stdout().flush();
     }
 }
 
@@ -425,26 +508,32 @@ fn handle_registry_connection(stream: TcpStream, state: Arc<RegistryState>) -> R
             ],
             is_head,
         )
-    } else if path == format!("/v2/{}/blobs/{}", state.repo, state.config_digest) {
+    } else if path == format!("/v2/{}/blobs/{}", state.repo, state.config_digest)
+        || path == format!("/v2/{}/blobs/sha256:{}", state.repo, state.config_digest)
+    {
+        let digest_header = format!("sha256:{}", state.config_digest);
         registry_response(
             "200 OK",
             "application/vnd.docker.container.image.v1+json",
             &state.config,
             vec![
                 ("Docker-Distribution-API-Version", "registry/2.0"),
-                ("Docker-Content-Digest", &state.config_digest),
+                ("Docker-Content-Digest", digest_header.as_str()),
                 ("Cache-Control", "no-cache"),
             ],
             is_head,
         )
-    } else if path == format!("/v2/{}/blobs/{}", state.repo, state.layer_digest) {
+    } else if path == format!("/v2/{}/blobs/{}", state.repo, state.layer_digest)
+        || path == format!("/v2/{}/blobs/sha256:{}", state.repo, state.layer_digest)
+    {
+        let digest_header = format!("sha256:{}", state.layer_digest);
         registry_response(
             "200 OK",
             "application/vnd.docker.image.rootfs.diff.tar",
             &state.layer,
             vec![
                 ("Docker-Distribution-API-Version", "registry/2.0"),
-                ("Docker-Content-Digest", &state.layer_digest),
+                ("Docker-Content-Digest", digest_header.as_str()),
                 ("Cache-Control", "no-cache"),
             ],
             is_head,
@@ -623,8 +712,10 @@ JSON
   COPYFILE_DISABLE=1 tar -C "$image_dir" -cf "$archive" manifest.json repositories "$config_name" "$layer_digest"
 
   echo "== Import offline smoke image =="
-  import_output="$("$cratebay_bin" image import "$archive")"
+  import_output="$("$cratebay_bin" --json image import "$archive")"
   printf '%s\n' "$import_output"
+  assert_contains "$import_output" '"api": "cratebay.image.import.v1"' "top-level image import should use the native image API"
+  assert_contains "$import_output" '"backend": "containerd"' "top-level image import should use containerd"
 
   list_output="$("$cratebay_bin" image list)"
   assert_contains "$list_output" "$image_name" "offline smoke image should be available after import"
@@ -719,8 +810,10 @@ JSON
 JSON
 
     COPYFILE_DISABLE=1 tar -C "$registry_image_dir" -cf "$registry_archive" manifest.json repositories "$registry_config_name" "$registry_layer_digest"
-    registry_import_output="$("$cratebay_bin" image import "$registry_archive")"
+    registry_import_output="$("$cratebay_bin" --json image import "$registry_archive")"
     printf '%s\n' "$registry_import_output"
+    assert_contains "$registry_import_output" '"api": "cratebay.image.import.v1"' "top-level registry image import should use the native image API"
+    assert_contains "$registry_import_output" '"backend": "containerd"' "top-level registry image import should use containerd"
 
     echo "== Start local registry container =="
     registry_container_name="cbx-registry-${suffix}"
@@ -797,32 +890,47 @@ mkdir -p "$smoke_data_dir"
 export CRATEBAY_DATA_DIR="$(native_path "$smoke_data_dir")"
 # Keep smoke runs isolated from the user's normal runtime socket/port.
 # macOS Unix sockets have a short path limit, so prefer a short /tmp socket path.
-export CRATEBAY_DOCKER_SOCKET_PATH="/tmp/cratebay-smoke-${suffix}.sock"
-export CRATEBAY_DOCKER_PROXY_PORT="$((42000 + (suffix % 10000)))"
-export CRATEBAY_LINUX_DOCKER_PORT="$CRATEBAY_DOCKER_PROXY_PORT"
+export CRATEBAY_ENGINE_SOCKET_PATH="/tmp/cratebay-smoke-${suffix}.sock"
+export CRATEBAY_ENGINE_PROXY_PORT="$((42000 + (suffix % 10000)))"
+export CRATEBAY_DOCKER_PROXY_PORT="$CRATEBAY_ENGINE_PROXY_PORT"
+export CRATEBAY_LINUX_DOCKER_PORT="$CRATEBAY_ENGINE_PROXY_PORT"
+export CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT="$((52000 + (suffix % 10000)))"
 
 cleanup() {
   set +e
   if [[ -x "$cratebay_bin" ]]; then
     if [[ -n "$registry_container_name" ]]; then
-      "$cratebay_bin" container delete "$registry_container_name" --force >/dev/null 2>&1 || true
+      run_cleanup_cmd "$cratebay_bin" container delete "$registry_container_name" --force
     fi
     if [[ "$container_removed" != "1" ]]; then
-      "$cratebay_bin" container delete "$container_name" --force >/dev/null 2>&1 || true
+      run_cleanup_cmd "$cratebay_bin" container delete "$container_name" --force
     fi
-    "$cratebay_bin" pod delete "$pod_name" --force >/dev/null 2>&1 || true
-    "$cratebay_bin" volume remove "$volume_name" --force >/dev/null 2>&1 || true
+    run_cleanup_cmd "$cratebay_bin" engine remove "$native_container_name" --force
+    run_cleanup_cmd "$cratebay_bin" engine remove "$native_run_name" --force
+    run_cleanup_cmd "$cratebay_bin" pod delete "$pod_name" --force
+    run_cleanup_cmd "$cratebay_bin" volume remove "$volume_name" --force
+    run_cleanup_cmd "$cratebay_bin" network remove "$network_name"
     if [[ -n "$registry_server_image" ]]; then
-      "$cratebay_bin" image delete "$registry_server_image" >/dev/null 2>&1 || true
+      run_cleanup_cmd "$cratebay_bin" image delete "$registry_server_image"
     fi
-    "$cratebay_bin" image delete "$tagged_image" >/dev/null 2>&1 || true
-    "$cratebay_bin" image delete "$packaged_image" >/dev/null 2>&1 || true
+    run_cleanup_cmd "$cratebay_bin" image delete "$tagged_image"
+    run_cleanup_cmd "$cratebay_bin" image delete "$packaged_image"
     if [[ -n "$runtime_image" && "$offline_smoke_image" == "1" ]]; then
-      "$cratebay_bin" image delete "$runtime_image" >/dev/null 2>&1 || true
+      run_cleanup_cmd "$cratebay_bin" image delete "$runtime_image"
     fi
-    "$cratebay_bin" runtime stop >/dev/null 2>&1 || true
+    run_cleanup_cmd "$cratebay_bin" runtime stop
   fi
-  rm -f "$CRATEBAY_DOCKER_SOCKET_PATH" >/dev/null 2>&1 || true
+  local runner_pid_file="$smoke_data_dir/runtime/vm/runner.pid"
+  if [[ -f "$runner_pid_file" ]]; then
+    local runner_pid
+    runner_pid="$(cat "$runner_pid_file" 2>/dev/null || true)"
+    if [[ "$runner_pid" =~ ^[0-9]+$ ]] && kill -0 "$runner_pid" >/dev/null 2>&1; then
+      kill "$runner_pid" >/dev/null 2>&1 || true
+      sleep 1
+      kill -9 "$runner_pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -f "${CRATEBAY_ENGINE_SOCKET_PATH:-}" "${CRATEBAY_DOCKER_SOCKET_PATH:-}" >/dev/null 2>&1 || true
   if [[ "${CRATEBAY_KEEP_SMOKE_TEMP:-0}" == "1" ]]; then
     echo "Keeping smoke temp dir: $TEMP_DIR" >&2
   else
@@ -876,10 +984,20 @@ echo "== Bootstrap built-in runtime via container list =="
 bootstrap_output="$("$cratebay_bin" container list --all)"
 printf '%s\n' "$bootstrap_output"
 
-echo "== Verify Docker status =="
-docker_status_output="$("$cratebay_bin" system docker-status)"
-printf '%s\n' "$docker_status_output"
-assert_contains "$docker_status_output" "Docker: connected" "system docker-status should connect to built-in runtime"
+echo "== Verify CrateBay Engine status =="
+engine_status_output="$("$cratebay_bin" system engine-status)"
+printf '%s\n' "$engine_status_output"
+assert_contains "$engine_status_output" "CrateBay Engine: connected" "system engine-status should connect to built-in runtime"
+
+echo "== Verify native CrateBay Engine contract =="
+native_engine_contract="$("$cratebay_bin" --json engine status)"
+printf '%s\n' "$native_engine_contract"
+assert_contains "$native_engine_contract" '"name": "CrateBay Engine"' "native engine contract should identify CrateBay Engine"
+assert_contains "$native_engine_contract" '"kind": "cratebay-containerd"' "native engine contract should use the CrateBay containerd engine"
+assert_contains "$native_engine_contract" '"api": "cratebay.engine.v1"' "native engine contract should expose the CrateBay native API"
+assert_contains "$native_engine_contract" '"runtime": "containerd"' "native engine contract should report containerd as runtime backend"
+assert_contains "$native_engine_contract" '"ociRuntime": "runc"' "native engine contract should report runc as OCI runtime"
+assert_contains "$native_engine_contract" '"dockerCompatible": true' "Docker compatibility should be reported as an adapter capability"
 
 echo "== Verify bundled image preload failure is explicit =="
 missing_bundle_dir="$TEMP_DIR/missing-bundle-images"
@@ -900,16 +1018,16 @@ prepare_smoke_image
 
 echo "== One-shot run for embedded CLI usage =="
 if [[ "$offline_smoke_image" == "1" ]]; then
-  run_output="$("$cratebay_bin" run --no-pull --network none --read-only --entrypoint /usr/local/bin/cratebay-smoke "$runtime_image" -- exists /usr/local/bin/cratebay-smoke)"
+  run_capture run_output "$cratebay_bin" run --no-pull --network none --read-only --entrypoint /usr/local/bin/cratebay-smoke "$runtime_image" -- exists /usr/local/bin/cratebay-smoke
 else
-  run_output="$("$cratebay_bin" run --network none --read-only "$runtime_image" -- sh -lc "pwd && id")"
+  run_capture run_output "$cratebay_bin" run --network none --read-only "$runtime_image" -- sh -lc "pwd && id"
 fi
 printf '%s\n' "$run_output"
 assert_contains "$run_output" "/" "one-shot run should print command output"
 
 if [[ "$offline_smoke_image" == "1" ]]; then
   echo "== One-shot structured output limit =="
-  bounded_output="$("$cratebay_bin" --json run --no-pull --max-output-bytes 4 --entrypoint /usr/local/bin/cratebay-smoke "$runtime_image" -- echo 123456789)"
+  run_capture bounded_output "$cratebay_bin" --json run --no-pull --max-output-bytes 4 --entrypoint /usr/local/bin/cratebay-smoke "$runtime_image" -- echo 123456789
   printf '%s\n' "$bounded_output"
   assert_contains "$bounded_output" '"stdout": "1234"' "bounded one-shot run should truncate stdout"
   assert_contains "$bounded_output" '"stdoutTruncated": true' "bounded one-shot run should mark truncated stdout"
@@ -940,43 +1058,53 @@ if [[ "$offline_smoke_image" == "1" ]]; then
 fi
 
 echo "== Pod lifecycle =="
-pod_create_output="$("$cratebay_bin" pod create "$pod_name")"
+run_capture pod_create_output "$cratebay_bin" pod create "$pod_name"
 printf '%s\n' "$pod_create_output"
 assert_contains "$pod_create_output" "$pod_name" "pod create should report the new pod"
 
 echo "== Create container in pod (auto-pull if missing) =="
-create_output="$("$cratebay_bin" container create "$container_name" --image "$runtime_image" --env "${env_key}=${env_value}" --pod "$pod_name" --no-start)"
+run_capture create_output "$cratebay_bin" container create "$container_name" --image "$runtime_image" --env "${env_key}=${env_value}" --pod "$pod_name" --no-start
 printf '%s\n' "$create_output"
 assert_contains "$create_output" "$container_name" "container create should report the created container"
 
 echo "== Verify container list =="
-list_output="$("$cratebay_bin" container list --all)"
+run_capture list_output "$cratebay_bin" container list --all
 printf '%s\n' "$list_output"
 assert_contains "$list_output" "$container_name" "container list should show the created container"
 assert_contains "$list_output" "$runtime_image" "container list should show the runtime image"
 
 echo "== Start container =="
-start_output="$("$cratebay_bin" container start "$container_name")"
+run_capture start_output "$cratebay_bin" container start "$container_name"
 printf '%s\n' "$start_output"
 assert_contains "$start_output" "Started $container_name" "container start should succeed"
 
-pod_inspect_output="$("$cratebay_bin" pod inspect "$pod_name")"
+run_capture pod_inspect_output "$cratebay_bin" pod inspect "$pod_name"
 printf '%s\n' "$pod_inspect_output"
 assert_contains "$pod_inspect_output" "$container_name" "pod inspect should show the attached container"
 
-pod_remove_output="$("$cratebay_bin" pod remove "$pod_name" "$container_name" --force)"
+run_capture pod_remove_output "$cratebay_bin" pod remove "$pod_name" "$container_name" --force
 printf '%s\n' "$pod_remove_output"
 assert_contains "$pod_remove_output" "$container_name" "pod remove should report the container"
 
-pod_add_output="$("$cratebay_bin" pod add "$pod_name" "$container_name")"
+run_capture pod_add_output "$cratebay_bin" pod add "$pod_name" "$container_name"
 printf '%s\n' "$pod_add_output"
 assert_contains "$pod_add_output" "$container_name" "pod add should report the container"
 
+run_capture pod_remove_json "$cratebay_bin" --json pod remove "$pod_name" "$container_name" --force
+printf '%s\n' "$pod_remove_json"
+assert_contains "$pod_remove_json" '"api": "cratebay.pod.detach.v1"' "structured pod remove should use the native CrateBay pod detach API"
+assert_contains "$pod_remove_json" '"detached": true' "structured pod remove should report native detach state"
+
+run_capture pod_add_json "$cratebay_bin" --json pod add "$pod_name" "$container_name"
+printf '%s\n' "$pod_add_json"
+assert_contains "$pod_add_json" '"api": "cratebay.pod.attach.v1"' "structured pod add should use the native CrateBay pod attach API"
+assert_contains "$pod_add_json" '"attached": true' "structured pod add should report native attach state"
+
 echo "== Verify exec and logs =="
 if [[ "$offline_smoke_image" == "1" ]]; then
-  exec_output="$("$cratebay_bin" container exec "$container_name" -- /usr/local/bin/cratebay-smoke env "$env_key")"
+  run_capture exec_output "$cratebay_bin" container exec "$container_name" -- /usr/local/bin/cratebay-smoke env "$env_key"
 else
-  exec_output="$("$cratebay_bin" container exec "$container_name" -- printenv "$env_key")"
+  run_capture exec_output "$cratebay_bin" container exec "$container_name" -- printenv "$env_key"
 fi
 printf '%s\n' "$exec_output"
 assert_contains "$exec_output" "$env_value" "container exec should see the injected env value"
@@ -1008,7 +1136,7 @@ if [[ "$offline_smoke_image" == "1" ]]; then
   assert_contains "$exec_json_output" '"timedOut": false' "structured container exec should report timeout state"
 
   echo "== Verify structured exec output limit =="
-  exec_bounded_output="$("$cratebay_bin" --json container exec --max-output-bytes 4 --no-propagate-exit-code "$container_name" -- /usr/local/bin/cratebay-smoke echo 123456789)"
+  run_capture exec_bounded_output "$cratebay_bin" --json container exec --max-output-bytes 4 --no-propagate-exit-code "$container_name" -- /usr/local/bin/cratebay-smoke echo 123456789
   printf '%s\n' "$exec_bounded_output"
   assert_contains "$exec_bounded_output" '"stdout": "1234"' "bounded structured container exec should truncate stdout"
   assert_contains "$exec_bounded_output" '"stdoutTruncated": true' "bounded structured container exec should mark truncated stdout"
@@ -1026,47 +1154,168 @@ if [[ "$offline_smoke_image" == "1" ]]; then
   fi
   assert_contains "$exec_timeout_output" '"exitCode": 124' "timed-out structured container exec should include timeout exit code"
   assert_contains "$exec_timeout_output" '"timedOut": true' "timed-out structured container exec should report timeout state"
-  assert_contains "$exec_timeout_output" "Execution timed out after 1s" "timed-out structured container exec should report timeout"
+  assert_contains "$exec_timeout_output" "timed out after 1s" "timed-out structured container exec should report timeout"
 fi
 
 logs_output="$("$cratebay_bin" container logs "$container_name" --tail 20 || true)"
 printf '%s\n' "$logs_output"
 
+if [[ "$offline_smoke_image" == "1" ]]; then
+  echo "== Native CrateBay Engine one-shot run =="
+  run_capture native_run_output "$cratebay_bin" --json engine run --name "$native_run_name" --no-pull --timeout 30 --max-output-bytes 4096 "$runtime_image" -- /usr/local/bin/cratebay-smoke echo native-run-ok
+  printf '%s\n' "$native_run_output"
+  assert_contains "$native_run_output" '"api": "cratebay.container.run.v1"' "native engine run should use the native run API"
+  assert_contains "$native_run_output" '"backend": "containerd"' "native engine run should execute through containerd"
+  assert_contains "$native_run_output" '"exitCode": 0' "native engine run should capture the exit code"
+  assert_contains "$native_run_output" "native-run-ok" "native engine run should capture stdout"
+  assert_contains "$native_run_output" '"removed": true' "native engine run should remove the one-shot container by default"
+
+  echo "== Native CrateBay Engine container lifecycle =="
+  run_capture native_create_output "$cratebay_bin" --json engine create "$native_container_name" --image "$runtime_image" --entrypoint /usr/local/bin/cratebay-smoke --command serve --env "${env_key}=native-${env_value}" --pod "$pod_name" --no-start
+  printf '%s\n' "$native_create_output"
+  assert_contains "$native_create_output" '"api": "cratebay.container.create.v1"' "native engine create should use the native create API"
+  assert_contains "$native_create_output" '"backend": "containerd-pending"' "native engine create should register a containerd-backed container"
+  assert_contains "$native_create_output" "$native_container_name" "native engine create should report the container name"
+
+  run_capture native_list_output "$cratebay_bin" --json engine containers
+  printf '%s\n' "$native_list_output"
+  assert_contains "$native_list_output" '"api": "cratebay.containers.v1"' "native engine containers should use the native list API"
+  assert_contains "$native_list_output" '"managedBy": "cratebay"' "native engine containers should be CrateBay-managed"
+  assert_contains "$native_list_output" "$native_container_name" "native engine containers should show the native container"
+
+  run_capture native_start_output "$cratebay_bin" --json engine start "$native_container_name"
+  printf '%s\n' "$native_start_output"
+  assert_contains "$native_start_output" '"api": "cratebay.container.start.v1"' "native engine start should use the native start API"
+  assert_contains "$native_start_output" '"backend": "containerd"' "native engine start should run through containerd"
+
+  run_capture native_inspect_output "$cratebay_bin" --json engine inspect "$native_container_name"
+  printf '%s\n' "$native_inspect_output"
+  assert_contains "$native_inspect_output" '"api": "cratebay.container.inspect.v1"' "native engine inspect should use the native inspect API"
+  assert_contains "$native_inspect_output" "$native_container_name" "native engine inspect should include the native container"
+
+  run_capture native_exec_output "$cratebay_bin" --json engine exec "$native_container_name" -- /usr/local/bin/cratebay-smoke env "$env_key"
+  printf '%s\n' "$native_exec_output"
+  assert_contains "$native_exec_output" '"api": "cratebay.container.exec.v1"' "native engine exec should use the native exec API"
+  assert_contains "$native_exec_output" "native-${env_value}" "native engine exec should see the injected env value"
+
+  run_capture native_logs_output "$cratebay_bin" --json engine logs "$native_container_name" --tail 20
+  printf '%s\n' "$native_logs_output"
+  assert_contains "$native_logs_output" '"api": "cratebay.container.logs.v1"' "native engine logs should use the native logs API"
+  assert_contains "$native_logs_output" "cratebay-smoke ready" "native engine logs should include container output"
+
+  run_capture native_stats_output "$cratebay_bin" --json engine stats "$native_container_name"
+  printf '%s\n' "$native_stats_output"
+  assert_contains "$native_stats_output" '"api": "cratebay.container.stats.v1"' "native engine stats should use the native stats API"
+  assert_contains "$native_stats_output" '"backend": "containerd"' "native engine stats should read from containerd metrics"
+  assert_contains "$native_stats_output" '"memory"' "native engine stats should include memory metrics"
+
+  echo "== Native CrateBay Engine PTY terminal lifecycle =="
+  terminal_session_id="cbx-native-pty-${suffix}"
+  run_capture native_terminal_open_output "$cratebay_bin" --json engine terminal-open "$native_container_name" --session-id "$terminal_session_id" --cols 80 --rows 24 -- /usr/local/bin/cratebay-smoke pty
+  printf '%s\n' "$native_terminal_open_output"
+  assert_contains "$native_terminal_open_output" '"api": "cratebay.container.terminal.open.v1"' "native engine terminal-open should use the native terminal API"
+  assert_contains "$native_terminal_open_output" '"backend": "containerd-pty"' "native engine terminal should use the containerd PTY backend"
+  assert_contains "$native_terminal_open_output" '"transport": "cratebay-native-pty"' "native engine terminal should use the CrateBay PTY transport"
+
+  run_capture native_terminal_resize_output "$cratebay_bin" --json engine terminal-resize "$native_container_name" --session-id "$terminal_session_id" --cols 120 --rows 33
+  printf '%s\n' "$native_terminal_resize_output"
+  assert_contains "$native_terminal_resize_output" '"api": "cratebay.container.terminal.resize.v1"' "native engine terminal-resize should use the native resize API"
+  assert_contains "$native_terminal_resize_output" '"resized": true' "native engine terminal-resize should apply PTY window size"
+
+  run_capture native_terminal_input_output "$cratebay_bin" --json engine terminal-input "$native_container_name" --session-id "$terminal_session_id" --data $'pty-smoke\n'
+  printf '%s\n' "$native_terminal_input_output"
+  assert_contains "$native_terminal_input_output" '"api": "cratebay.container.terminal.input.v1"' "native engine terminal-input should use the native input API"
+
+  native_terminal_read_output=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    run_capture native_terminal_read_output "$cratebay_bin" --json engine terminal-read "$native_container_name" --session-id "$terminal_session_id"
+    if printf '%s\n' "$native_terminal_read_output" | grep -Fq "pty: pty-smoke"; then
+      break
+    fi
+    sleep 0.2
+  done
+  printf '%s\n' "$native_terminal_read_output"
+  assert_contains "$native_terminal_read_output" '"api": "cratebay.container.terminal.read.v1"' "native engine terminal-read should use the native read API"
+  assert_contains "$native_terminal_read_output" "cratebay-smoke pty ready" "native engine terminal-read should capture PTY startup output"
+  assert_contains "$native_terminal_read_output" "pty: pty-smoke" "native engine terminal-read should capture PTY input response"
+
+  run_capture native_terminal_close_output "$cratebay_bin" --json engine terminal-close "$native_container_name" --session-id "$terminal_session_id"
+  printf '%s\n' "$native_terminal_close_output"
+  assert_contains "$native_terminal_close_output" '"api": "cratebay.container.terminal.close.v1"' "native engine terminal-close should use the native close API"
+  assert_contains "$native_terminal_close_output" '"closed": true' "native engine terminal-close should close the PTY session"
+
+  run_capture native_stop_output "$cratebay_bin" --json engine stop "$native_container_name"
+  printf '%s\n' "$native_stop_output"
+  assert_contains "$native_stop_output" '"api": "cratebay.container.stop.v1"' "native engine stop should use the native stop API"
+
+  run_capture native_remove_output "$cratebay_bin" --json engine remove "$native_container_name"
+  printf '%s\n' "$native_remove_output"
+  assert_contains "$native_remove_output" '"api": "cratebay.container.remove.v1"' "native engine remove should use the native remove API"
+fi
+
 echo "== Verify image list =="
-image_list_output="$("$cratebay_bin" image list)"
+run_capture image_list_output "$cratebay_bin" image list
 printf '%s\n' "$image_list_output"
 assert_contains "$image_list_output" "$runtime_image" "image list should include the runtime image"
 
 echo "== Package container into image =="
-pack_output="$("$cratebay_bin" image pack-container "$container_name" "$packaged_image")"
+run_capture pack_output "$cratebay_bin" --json image pack-container "$container_name" "$packaged_image"
 printf '%s\n' "$pack_output"
+assert_contains "$pack_output" '"api": "cratebay.image.pack.v1"' "top-level image pack should use the native image API"
+assert_contains "$pack_output" '"backend": "containerd"' "top-level image pack should use containerd"
 assert_contains "$pack_output" "$packaged_image" "pack-container should report the packaged image"
 
-tag_output="$("$cratebay_bin" image tag "$packaged_image" "$tagged_image")"
+run_capture tag_output "$cratebay_bin" --json image tag "$packaged_image" "$tagged_image"
 printf '%s\n' "$tag_output"
+assert_contains "$tag_output" '"api": "cratebay.image.tag.v1"' "top-level image tag should use the native image API"
+assert_contains "$tag_output" '"backend": "containerd"' "top-level image tag should use containerd"
 assert_contains "$tag_output" "$tagged_image" "image tag should report the new tag"
 
-image_inspect_output="$("$cratebay_bin" image inspect "$tagged_image")"
+run_capture image_inspect_output "$cratebay_bin" image inspect "$tagged_image"
 printf '%s\n' "$image_inspect_output"
 assert_contains "$image_inspect_output" "$tagged_image" "image inspect should include the tagged image"
 
+run_capture native_image_inspect_output "$cratebay_bin" --json engine inspect-image "$tagged_image"
+printf '%s\n' "$native_image_inspect_output"
+assert_contains "$native_image_inspect_output" '"api": "cratebay.image.inspect.v1"' "native engine image inspect should use the native image API"
+assert_contains "$native_image_inspect_output" '"backend": "containerd"' "native engine image inspect should read from containerd"
+
 echo "== Volume lifecycle =="
-volume_create_output="$("$cratebay_bin" volume create "$volume_name")"
+run_capture volume_create_output "$cratebay_bin" volume create "$volume_name" --driver local
 printf '%s\n' "$volume_create_output"
 assert_contains "$volume_create_output" "$volume_name" "volume create should report the new volume"
 
-volume_list_output="$("$cratebay_bin" volume list)"
+run_capture volume_list_output "$cratebay_bin" volume list
 printf '%s\n' "$volume_list_output"
 assert_contains "$volume_list_output" "$volume_name" "volume list should show the new volume"
 
-volume_inspect_output="$("$cratebay_bin" volume inspect "$volume_name")"
+run_capture volume_inspect_output "$cratebay_bin" volume inspect "$volume_name"
 printf '%s\n' "$volume_inspect_output"
-assert_contains "$volume_inspect_output" "\"Name\": \"$volume_name\"" "volume inspect should show the created volume"
+assert_contains "$volume_inspect_output" "Volume: $volume_name" "volume inspect should show the created volume"
 
-volume_remove_output="$("$cratebay_bin" volume remove "$volume_name")"
+run_capture volume_remove_output "$cratebay_bin" volume remove "$volume_name"
 printf '%s\n' "$volume_remove_output"
 assert_contains "$volume_remove_output" "$volume_name" "volume remove should report the deleted volume"
 volume_removed=1
+
+echo "== Network lifecycle =="
+run_capture network_create_output "$cratebay_bin" network create "$network_name"
+printf '%s\n' "$network_create_output"
+assert_contains "$network_create_output" "$network_name" "network create should report the new network"
+
+run_capture network_list_output "$cratebay_bin" network list
+printf '%s\n' "$network_list_output"
+assert_contains "$network_list_output" "$network_name" "network list should show the new network"
+
+run_capture network_inspect_output "$cratebay_bin" --json network inspect "$network_name"
+printf '%s\n' "$network_inspect_output"
+assert_contains "$network_inspect_output" '"api": "cratebay.network.inspect.v1"' "network inspect should use the native CrateBay network inspect API"
+assert_contains "$network_inspect_output" "$network_name" "network inspect should show the created network"
+
+run_capture network_remove_output "$cratebay_bin" network remove "$network_name"
+printf '%s\n' "$network_remove_output"
+assert_contains "$network_remove_output" "$network_name" "network remove should report the deleted network"
+network_removed=1
 
 echo "== Stop and delete container =="
 stop_output="$("$cratebay_bin" container stop "$container_name")"
@@ -1075,28 +1324,37 @@ assert_contains "$stop_output" "Stopped $container_name" "container stop should 
 
 delete_output="$("$cratebay_bin" container delete "$container_name")"
 printf '%s\n' "$delete_output"
-assert_contains "$delete_output" "Deleted $container_name" "container delete should succeed"
+assert_contains "$delete_output" "$container_name" "container delete should succeed"
 container_removed=1
 
 pod_delete_output="$("$cratebay_bin" pod delete "$pod_name" --force)"
 printf '%s\n' "$pod_delete_output"
-assert_contains "$pod_delete_output" "Deleted pod $pod_name" "pod delete should succeed"
+assert_contains "$pod_delete_output" "$pod_name" "pod delete should succeed"
 pod_removed=1
 
 echo "== Image export/import round trip =="
 export_archive="$TEMP_DIR/${tagged_image//[:\/]/-}.tar"
-export_output="$("$cratebay_bin" image export --output "$export_archive" "$tagged_image")"
+run_capture export_output "$cratebay_bin" --json image export --output "$export_archive" "$tagged_image"
 printf '%s\n' "$export_output"
+assert_contains "$export_output" '"api": "cratebay.image.export.v1"' "top-level image export should use the native image API"
+assert_contains "$export_output" '"backend": "containerd"' "top-level image export should use containerd"
 assert_contains "$export_output" "$export_archive" "image export should report the archive path"
 
 "$cratebay_bin" image delete "$tagged_image" >/dev/null 2>&1 || true
 "$cratebay_bin" image delete "$packaged_image" >/dev/null 2>&1 || true
 
-import_output="$("$cratebay_bin" image import "$export_archive")"
+run_capture import_output "$cratebay_bin" --json image import "$export_archive"
 printf '%s\n' "$import_output"
+assert_contains "$import_output" '"api": "cratebay.image.import.v1"' "top-level image import should use the native image API"
+assert_contains "$import_output" '"backend": "containerd"' "top-level image import should use containerd"
 
 roundtrip_image_list="$("$cratebay_bin" image list)"
 printf '%s\n' "$roundtrip_image_list"
 assert_contains "$roundtrip_image_list" "$tagged_image" "image import should restore the exported tag"
+
+run_capture native_image_remove_output "$cratebay_bin" --json engine remove-image "$tagged_image" --force
+printf '%s\n' "$native_image_remove_output"
+assert_contains "$native_image_remove_output" '"api": "cratebay.image.remove.v1"' "native engine image remove should use the native image API"
+assert_contains "$native_image_remove_output" '"backend": "containerd"' "native engine image remove should remove from containerd"
 
 echo "CLI-only runtime smoke: PASS"

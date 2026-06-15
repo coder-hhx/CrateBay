@@ -77,6 +77,7 @@ pub async fn create(
         auto_start: Some(!no_start),
         labels: None,
         template_id: None,
+        registry_mirrors: None,
     };
 
     let created = match container::create(docker, request.clone()).await {
@@ -270,8 +271,12 @@ pub async fn logs(
     follow: bool,
     tail: Option<u32>,
     timestamps: bool,
+    format: &OutputFormat,
 ) -> Result<()> {
     if follow {
+        if !matches!(format, OutputFormat::Table) {
+            bail!("--follow is only supported with table output");
+        }
         let log_options = LogsOptions::<String> {
             follow: true,
             stdout: true,
@@ -303,13 +308,18 @@ pub async fn logs(
         ..Default::default()
     };
     let entries = container::logs(docker, id, Some(options)).await?;
-    for entry in entries {
-        match entry.stream.as_str() {
-            "stderr" => eprint!("{}", entry.message),
-            _ => print!("{}", entry.message),
+    match format {
+        OutputFormat::Table => {
+            for entry in entries {
+                match entry.stream.as_str() {
+                    "stderr" => eprint!("{}", entry.message),
+                    _ => print!("{}", entry.message),
+                }
+            }
+            Ok(())
         }
+        _ => print_structured(&entries, format),
     }
-    Ok(())
 }
 
 pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result<()> {
@@ -327,6 +337,27 @@ pub async fn inspect(docker: &Docker, id: &str, format: &OutputFormat) -> Result
     }
 }
 
+pub async fn stats(docker: &Docker, id: &str, format: &OutputFormat) -> Result<()> {
+    let stats = container::stats(docker, id).await?;
+    match format {
+        OutputFormat::Table => {
+            println!("ID: {}", stats.id);
+            println!("Name: {}", stats.name);
+            println!(
+                "CPU: {:.2}% ({:.3} cores)",
+                stats.cpu_percent, stats.cpu_cores_used
+            );
+            println!(
+                "Memory: {:.1} / {:.1} MB ({:.1}%)",
+                stats.memory_used_mb, stats.memory_limit_mb, stats.memory_percent
+            );
+            println!("Read At: {}", stats.read_at);
+            Ok(())
+        }
+        _ => print_structured(&stats, format),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_once(
     docker: &Docker,
@@ -335,6 +366,7 @@ pub async fn run_once(
     command: Vec<String>,
     env: Vec<String>,
     volume: Vec<String>,
+    publish: Vec<String>,
     cpu_cores: Option<u32>,
     memory_mb: Option<u64>,
     working_dir: Option<String>,
@@ -351,6 +383,7 @@ pub async fn run_once(
     format: &OutputFormat,
 ) -> Result<()> {
     let volumes = parse_volume_specs(&volume)?;
+    let ports = parse_publish_specs(&publish)?;
     let max_output_bytes = (max_output_bytes > 0).then_some(max_output_bytes);
     let request = ContainerRunRequest {
         name,
@@ -358,6 +391,7 @@ pub async fn run_once(
         entrypoint,
         command,
         env: if env.is_empty() { None } else { Some(env) },
+        ports: if ports.is_empty() { None } else { Some(ports) },
         volumes: if volumes.is_empty() {
             None
         } else {
@@ -374,6 +408,7 @@ pub async fn run_once(
         remove: !keep,
         timeout_secs: Some(timeout),
         max_output_bytes,
+        registry_mirrors: None,
     };
 
     let result = match container::run_once(docker, request.clone()).await {
@@ -538,6 +573,29 @@ mod tests {
         assert_eq!(port.host_port, 8080);
         assert_eq!(port.container_port, 80);
         assert_eq!(port.protocol, "tcp");
+    }
+
+    #[test]
+    fn parse_publish_spec_accepts_udp_and_sctp() {
+        let udp = parse_publish_spec("5353:53/udp").unwrap();
+        let sctp = parse_publish_spec("5000:5000/sctp").unwrap();
+
+        assert_eq!(udp.host_port, 5353);
+        assert_eq!(udp.container_port, 53);
+        assert_eq!(udp.protocol, "udp");
+        assert_eq!(sctp.host_port, 5000);
+        assert_eq!(sctp.container_port, 5000);
+        assert_eq!(sctp.protocol, "sctp");
+    }
+
+    #[test]
+    fn parse_publish_spec_rejects_unknown_protocol() {
+        let err = parse_publish_spec("8080:80/http").unwrap_err();
+
+        assert!(
+            err.to_string().contains("expected tcp, udp, or sctp"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useContainerStore } from "@/stores/containerStore";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/lib/i18n";
+import { invoke } from "@/lib/tauri";
+import { formatTauriError, isImplicitRuntimeStartDisabled } from "@/lib/runtimeOffline";
+import { EngineOfflineCallout } from "@/components/common/EngineOfflineCallout";
 import { ContainerCard } from "@/components/container/ContainerCard";
 import { ContainerList } from "@/components/container/ContainerList";
 import { ContainerDetail } from "@/components/container/ContainerDetail";
 import { ContainerCreate } from "@/components/container/ContainerCreate";
+import { ContainerRun } from "@/components/container/ContainerRun";
 import { PodsPage } from "@/pages/PodsPage";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -60,15 +64,17 @@ export function ContainersPage() {
   const error = useContainerStore((s) => s.error);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [section, setSection] = useState<ContainersSection>("containers");
+  const [startingEngine, setStartingEngine] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Read builtin runtime ready state from appStore
   const builtinRuntimeReady = useAppStore((s) => s.builtinRuntimeReady);
-  const dockerConnected = useAppStore((s) => s.dockerConnected);
+  const engineConnected = useAppStore((s) => s.engineConnected);
 
   useEffect(() => {
     void fetchContainers();
     void fetchTemplates();
-  }, [fetchContainers, fetchTemplates]);
+  }, [fetchContainers, fetchTemplates, t]);
 
   // Apply filters on all containers
   const filteredContainers = useMemo(
@@ -99,6 +105,23 @@ export function ContainersPage() {
   const handleChipClick = (f: FilterStatus) => {
     setFilter({ status: f });
   };
+
+  const engineOffline = error !== null && isImplicitRuntimeStartDisabled(error);
+  const visibleError = engineOffline ? startError : (error ?? startError);
+
+  const handleStartEngine = useCallback(async () => {
+    setStartingEngine(true);
+    setStartError(null);
+    try {
+      await invoke("runtime_start");
+      await fetchContainers();
+      await fetchTemplates();
+    } catch (err) {
+      setStartError(formatTauriError(err, t("common", "operationFailed")));
+    } finally {
+      setStartingEngine(false);
+    }
+  }, [fetchContainers, fetchTemplates]);
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
@@ -137,12 +160,17 @@ export function ContainersPage() {
       ) : (
         <>
           {/* Error alerts */}
-          {error !== null && (
+          {visibleError !== null && (
             <div className="mx-6 mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {error}
+              {visibleError}
             </div>
           )}
-          {!builtinRuntimeReady && dockerConnected && (
+          {engineOffline && (
+            <div className="mx-6 mt-2">
+              <EngineOfflineCallout starting={startingEngine} onStart={() => void handleStartEngine()} />
+            </div>
+          )}
+          {!builtinRuntimeReady && engineConnected && (
             <div className="mx-6 mt-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-600 dark:text-blue-400">
               {t("containers", "builtinRuntimeNotReady")}
             </div>
@@ -167,13 +195,14 @@ export function ContainersPage() {
                   key={f}
                   onClick={() => handleChipClick(f)}
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none",
+                    "inline-flex h-8 min-w-[76px] items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors focus:outline-none",
                     currentChipFilter === f
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
                   )}
                 >
-                  {t("containers", FILTER_LABEL_KEYS[f])} ({counts[f]})
+                  <span>{t("containers", FILTER_LABEL_KEYS[f])}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">{counts[f]}</span>
                 </button>
               ))}
             </div>
@@ -213,6 +242,7 @@ export function ContainersPage() {
                 <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
                 {t("common", "refresh")}
               </Button>
+              <ContainerRun />
               <div data-testid="create-container">
                 <ContainerCreate />
               </div>

@@ -40,6 +40,39 @@ require_match() {
   printf '  %s\n' "${matched_files[@]}"
 }
 
+require_headless_zip() {
+  local platform="$1"
+  shift
+  local required_entries=("$@")
+
+  require_match \
+    "Headless ${platform} zip" \
+    "$artifacts_root/**/CrateBay-*-headless-${platform}.zip" \
+    "$artifacts_root/CrateBay-*-headless-${platform}.zip"
+  local zip_path="${matched_files[0]}"
+
+  require_match \
+    "Headless ${platform} checksum" \
+    "$artifacts_root/**/CrateBay-*-headless-${platform}.zip.sha256" \
+    "$artifacts_root/CrateBay-*-headless-${platform}.zip.sha256"
+
+  python3 - "$zip_path" "${required_entries[@]}" <<'PY'
+import sys
+from zipfile import ZipFile
+
+zip_path = sys.argv[1]
+required = sys.argv[2:]
+with ZipFile(zip_path) as archive:
+    names = set(archive.namelist())
+missing = [entry for entry in required if entry not in names]
+if missing:
+    raise SystemExit(f"{zip_path} missing required entries: {', '.join(missing)}")
+print(f"OK: headless package contents in {zip_path}")
+for entry in required:
+    print(f"  {entry}")
+PY
+}
+
 verify_macos_app_bundle_images() {
   local label="$1"
   shift
@@ -138,25 +171,35 @@ verify_downloaded() {
     fail "Internal bundle-images artifact should not be published as a standalone release asset"
   fi
 
-  require_match "macOS aarch64 CLI artifact" "$artifacts_root/cratebay-macos-aarch64/cratebay" "$artifacts_root/cratebay-macos-aarch64/**/cratebay"
-  require_match "macOS x86_64 CLI artifact" "$artifacts_root/cratebay-macos-x86_64/cratebay" "$artifacts_root/cratebay-macos-x86_64/**/cratebay"
-  require_match "Linux x86_64 CLI artifact" "$artifacts_root/cratebay-linux-x86_64/cratebay" "$artifacts_root/cratebay-linux-x86_64/**/cratebay"
-  require_match "Linux aarch64 CLI artifact" "$artifacts_root/cratebay-linux-aarch64/cratebay" "$artifacts_root/cratebay-linux-aarch64/**/cratebay"
-  require_match "Windows x86_64 CLI artifact" "$artifacts_root/cratebay-windows-x86_64/cratebay.exe" "$artifacts_root/cratebay-windows-x86_64/**/cratebay.exe"
-  require_match "Windows aarch64 CLI artifact" "$artifacts_root/cratebay-windows-aarch64/cratebay.exe" "$artifacts_root/cratebay-windows-aarch64/**/cratebay.exe"
+  require_headless_zip \
+    "macos-aarch64" \
+    "bin/cratebay" \
+    "bin/cratebay-vz" \
+    "resources/runtime-images/cratebay-runtime-aarch64/vmlinuz" \
+    "resources/runtime-images/cratebay-runtime-aarch64/initramfs"
+  require_headless_zip \
+    "macos-x86_64" \
+    "bin/cratebay" \
+    "bin/cratebay-vz" \
+    "resources/runtime-images/cratebay-runtime-x86_64/vmlinuz" \
+    "resources/runtime-images/cratebay-runtime-x86_64/initramfs"
+  require_headless_zip \
+    "linux-x86_64" \
+    "bin/cratebay" \
+    "resources/runtime-images/cratebay-runtime-x86_64/vmlinuz" \
+    "resources/runtime-images/cratebay-runtime-x86_64/initramfs" \
+    "resources/runtime-linux/cratebay-runtime-linux-x86_64/qemu-system-x86_64"
+  require_headless_zip \
+    "windows-x86_64" \
+    "bin/cratebay.exe" \
+    "resources/runtime-wsl/cratebay-runtime-wsl-x86_64/rootfs.tar"
 
-  verify_macos_app_bundle_images "macOS aarch64 app bundle" "$artifacts_root/cratebay-gui-macos-aarch64/**/*.app"
-  require_match "macOS aarch64 dmg bundle" "$artifacts_root/cratebay-gui-macos-aarch64/**/*.dmg"
-  verify_macos_app_bundle_images "macOS x86_64 app bundle" "$artifacts_root/cratebay-gui-macos-x86_64/**/*.app"
-  require_match "macOS x86_64 dmg bundle" "$artifacts_root/cratebay-gui-macos-x86_64/**/*.dmg"
-  require_match "Linux x86_64 deb bundle" "$artifacts_root/cratebay-gui-linux-x86_64/**/*.deb"
-  require_match "Linux x86_64 AppImage bundle" "$artifacts_root/cratebay-gui-linux-x86_64/**/*.AppImage"
-  require_match "Linux aarch64 deb bundle" "$artifacts_root/cratebay-gui-linux-aarch64/**/*.deb"
-  require_match "Linux aarch64 AppImage bundle" "$artifacts_root/cratebay-gui-linux-aarch64/**/*.AppImage"
-  require_match "Windows x86_64 msi bundle" "$artifacts_root/cratebay-gui-windows-x86_64/**/*.msi"
-  require_match "Windows x86_64 nsis bundle" "$artifacts_root/cratebay-gui-windows-x86_64/**/*.exe"
-  require_match "Windows aarch64 msi bundle" "$artifacts_root/cratebay-gui-windows-aarch64/**/*.msi"
-  require_match "Windows aarch64 nsis bundle" "$artifacts_root/cratebay-gui-windows-aarch64/**/*.exe"
+  require_match "macOS aarch64 dmg bundle" "$artifacts_root/**/CrateBay-*-macOS-aarch64.dmg" "$artifacts_root/CrateBay-*-macOS-aarch64.dmg"
+  require_match "macOS x86_64 dmg bundle" "$artifacts_root/**/CrateBay-*-macOS-x86_64.dmg" "$artifacts_root/CrateBay-*-macOS-x86_64.dmg"
+  require_match "Linux x86_64 deb bundle" "$artifacts_root/**/CrateBay-*-Linux-x86_64.deb" "$artifacts_root/CrateBay-*-Linux-x86_64.deb"
+  require_match "Linux x86_64 AppImage bundle" "$artifacts_root/**/CrateBay-*-Linux-x86_64.AppImage" "$artifacts_root/CrateBay-*-Linux-x86_64.AppImage"
+  require_match "Windows x86_64 msi bundle" "$artifacts_root/**/CrateBay-*-Windows-x64.msi" "$artifacts_root/CrateBay-*-Windows-x64.msi"
+  require_match "Windows x86_64 nsis bundle" "$artifacts_root/**/CrateBay-*-Windows-x64-Setup.exe" "$artifacts_root/CrateBay-*-Windows-x64-Setup.exe"
 }
 
 case "$mode" in

@@ -85,7 +85,7 @@ pub async fn list(
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker container list timed out after {:?}",
+                "CrateBay Engine container list timed out after {:?}",
                 DOCKER_LIST_TIMEOUT
             ))
         })??;
@@ -161,7 +161,7 @@ pub async fn list(
         })
         .collect();
 
-    // Apply client-side image filter (Docker API doesn't support image substring match)
+    // Apply client-side image filter (compatibility API doesn't support image substring match)
     if let Some(ref f) = filters {
         if let Some(ref image_filter) = f.image {
             results.retain(|c| c.image.contains(image_filter.as_str()));
@@ -250,7 +250,7 @@ pub async fn create(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container create timed out after {:?}",
+            "CrateBay Engine container create timed out after {:?}",
             DOCKER_CREATE_TIMEOUT
         ))
     })??;
@@ -267,7 +267,7 @@ pub async fn create(
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker container start timed out after {:?}",
+                "CrateBay Engine container start timed out after {:?}",
                 DOCKER_START_TIMEOUT
             ))
         });
@@ -387,13 +387,6 @@ fn resolve_network_mode(
         return Ok(None);
     };
 
-    if !matches!(network, "bridge" | "none" | "host") {
-        return Err(AppError::Validation(format!(
-            "Unsupported network mode '{}'; expected bridge, none, or host",
-            network
-        )));
-    }
-
     Ok(Some(network.to_string()))
 }
 
@@ -451,6 +444,7 @@ pub async fn run_once(
         memory: request.memory_mb.map(|m| (m * 1024 * 1024) as i64),
         nano_cpus: request.cpu_cores.map(|c| (c as i64) * 1_000_000_000),
         binds: build_volume_binds(request.volumes.as_deref())?,
+        port_bindings: build_port_bindings(request.ports.as_deref())?,
         network_mode,
         auto_remove: Some(false),
         readonly_rootfs: request.read_only_rootfs.filter(|value| *value),
@@ -463,6 +457,7 @@ pub async fn run_once(
         cmd: Some(request.command.clone()),
         env: request.env.clone(),
         host_config: Some(host_config),
+        exposed_ports: build_exposed_ports(request.ports.as_deref())?,
         labels: Some(labels),
         working_dir: request.working_dir.clone(),
         user: request.user.clone(),
@@ -485,7 +480,7 @@ pub async fn run_once(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container create timed out after {:?}",
+            "CrateBay Engine container create timed out after {:?}",
             DOCKER_CREATE_TIMEOUT
         ))
     })??;
@@ -535,7 +530,7 @@ async fn run_created_container(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container start timed out after {:?}",
+            "CrateBay Engine container start timed out after {:?}",
             DOCKER_START_TIMEOUT
         ))
     })??;
@@ -687,7 +682,7 @@ async fn cleanup_run_container(docker: &Docker, container_id: &str) -> Result<()
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container cleanup timed out after {:?}",
+            "CrateBay Engine container cleanup timed out after {:?}",
             DOCKER_RUN_CLEANUP_TIMEOUT
         ))
     })??;
@@ -713,7 +708,7 @@ pub async fn start(docker: &Docker, id: &str) -> Result<(), AppError> {
                 }
             }
             Err(AppError::Runtime(format!(
-                "Docker container start timed out after {:?}",
+                "CrateBay Engine container start timed out after {:?}",
                 DOCKER_START_TIMEOUT
             )))
         }
@@ -736,7 +731,7 @@ pub async fn stop(docker: &Docker, id: &str, timeout: Option<u32>) -> Result<(),
                 }
             }
             Err(AppError::Runtime(format!(
-                "Docker container stop timed out after {:?}",
+                "CrateBay Engine container stop timed out after {:?}",
                 DOCKER_STOP_TIMEOUT
             )))
         }
@@ -753,7 +748,7 @@ pub async fn delete(docker: &Docker, id: &str, force: bool) -> Result<(), AppErr
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker container delete timed out after {:?}",
+                "CrateBay Engine container delete timed out after {:?}",
                 DOCKER_DELETE_TIMEOUT
             ))
         })??;
@@ -769,7 +764,7 @@ pub async fn inspect(docker: &Docker, id: &str) -> Result<ContainerDetail, AppEr
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container inspect timed out after {:?}",
+            "CrateBay Engine container inspect timed out after {:?}",
             DOCKER_INSPECT_TIMEOUT
         ))
     })??;
@@ -879,7 +874,7 @@ pub async fn stats(docker: &Docker, id: &str) -> Result<ContainerStats, AppError
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker container stats timed out after {:?}",
+                "CrateBay Engine container stats timed out after {:?}",
                 DOCKER_STATS_TIMEOUT
             ))
         })?
@@ -995,7 +990,7 @@ async fn exec_with_limits(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec create timed out after {:?}",
+            "Engine exec create timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1007,7 +1002,7 @@ async fn exec_with_limits(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec start timed out after {:?}",
+            "Engine exec start timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1044,7 +1039,7 @@ async fn exec_with_limits(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec inspect timed out after {:?}",
+            "Engine exec inspect timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1181,7 +1176,7 @@ pub async fn exec_stream(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec create timed out after {:?}",
+            "Engine exec create timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1193,7 +1188,7 @@ pub async fn exec_stream(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec start timed out after {:?}",
+            "Engine exec start timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1229,7 +1224,7 @@ pub async fn exec_stream(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker exec inspect timed out after {:?}",
+            "Engine exec inspect timed out after {:?}",
             DOCKER_EXEC_SETUP_TIMEOUT
         ))
     })??;
@@ -1271,7 +1266,8 @@ pub async fn logs(
 
         while let Some(chunk) = stream.next().await {
             match chunk? {
-                bollard::container::LogOutput::StdOut { message } => {
+                bollard::container::LogOutput::StdOut { message }
+                | bollard::container::LogOutput::Console { message } => {
                     let (timestamp, parsed_message) =
                         split_log_timestamp(&String::from_utf8_lossy(&message), with_timestamps);
                     append_log_lines(&mut entries, "stdout", timestamp, parsed_message);
@@ -1290,7 +1286,7 @@ pub async fn logs(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker container logs timed out after {:?}",
+            "CrateBay Engine container logs timed out after {:?}",
             DOCKER_LOGS_TIMEOUT
         ))
     })?
@@ -1415,7 +1411,7 @@ pub async fn image_load_from_tar(docker: &Docker, tar_path: &str) -> Result<Vec<
             Err(e) => {
                 if let bollard::errors::Error::DockerStreamError { error } = e {
                     return Err(AppError::Runtime(format!(
-                        "Docker image load failed: {}",
+                        "Engine image import failed: {}",
                         error
                     )));
                 }
@@ -1483,7 +1479,7 @@ pub async fn image_export_to_tar(
     Ok(written)
 }
 
-/// List local Docker images.
+/// List local engine images.
 pub async fn image_list(docker: &Docker) -> Result<Vec<LocalImageInfo>, AppError> {
     let options = ListImagesOptions::<String> {
         all: false,
@@ -1494,7 +1490,7 @@ pub async fn image_list(docker: &Docker) -> Result<Vec<LocalImageInfo>, AppError
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker image list timed out after {:?}",
+                "Engine image list timed out after {:?}",
                 DOCKER_IMAGE_LIST_TIMEOUT
             ))
         })??;
@@ -1523,7 +1519,7 @@ pub async fn image_list(docker: &Docker) -> Result<Vec<LocalImageInfo>, AppError
     Ok(results)
 }
 
-/// Search images from registry via Docker API.
+/// Search images from registry via the Engine compatibility API.
 pub async fn image_search(
     docker: &Docker,
     query: &str,
@@ -1542,7 +1538,7 @@ pub async fn image_search(
         filters: HashMap::new(),
     };
 
-    // Primary: Docker Engine search API (Docker Hub index via dockerd).
+    // Primary: compatibility API search (Docker Hub index through the active engine).
     // Fallback: Docker Hub HTTP API (host network), which is often more reliable
     // in environments where `index.docker.io` is blocked.
     let engine_results =
@@ -1574,23 +1570,23 @@ pub async fn image_search(
     }
 
     let engine_err = engine_results.err().unwrap_or_else(|| {
-        AppError::Runtime("Docker Engine image search failed with unknown error".to_string())
+        AppError::Runtime("Compatibility API image search failed with unknown error".to_string())
     });
     tracing::warn!(
-        "Docker Engine image search failed, trying Docker Hub API fallback: {}",
+        "Compatibility API image search failed, trying Docker Hub API fallback: {}",
         engine_err
     );
 
     match dockerhub_search(term, limit).await {
         Ok(results) => Ok(results),
         Err(fallback_err) => Err(AppError::Runtime(format!(
-            "Image search failed. Docker Engine: {}; Docker Hub API fallback: {}",
+            "Image search failed. Compatibility API: {}; Docker Hub API fallback: {}",
             engine_err, fallback_err
         ))),
     }
 }
 
-/// Search Docker Hub via HTTP API (does not require a Docker daemon).
+/// Search Docker Hub via HTTP API (does not require an Engine endpoint).
 pub async fn image_search_dockerhub(
     query: &str,
     limit: Option<u64>,
@@ -1734,7 +1730,7 @@ pub async fn image_inspect(docker: &Docker, id: &str) -> Result<ImageInspectInfo
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker image inspect timed out after {:?}",
+                "Engine image inspect timed out after {:?}",
                 DOCKER_IMAGE_INSPECT_TIMEOUT
             ))
         })??;
@@ -1775,7 +1771,7 @@ pub async fn image_remove(docker: &Docker, id: &str, force: bool) -> Result<(), 
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker image remove timed out after {:?}",
+            "Engine image remove timed out after {:?}",
             DOCKER_IMAGE_REMOVE_TIMEOUT
         ))
     })??;
@@ -1804,7 +1800,7 @@ pub async fn image_tag(docker: &Docker, source: &str, target: &str) -> Result<()
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker image tag timed out after {:?}",
+                "Engine image tag timed out after {:?}",
                 DOCKER_IMAGE_TAG_TIMEOUT
             ))
         })??;
@@ -1855,7 +1851,7 @@ pub async fn image_commit_container(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker image commit timed out after {:?}",
+            "Engine image commit timed out after {:?}",
             DOCKER_IMAGE_COMMIT_TIMEOUT
         ))
     })??;
@@ -1875,7 +1871,7 @@ pub struct PullProgress {
     pub total_bytes: u64,
 }
 
-/// Pull a Docker image by name (e.g. "node:20-alpine").
+/// Pull an OCI/Docker image by name (e.g. "node:20-alpine").
 ///
 /// If `mirror` is provided, rewrites Docker Hub images to use the mirror registry.
 /// Each pull attempt has a 30-second timeout to prevent infinite blocking.
@@ -1894,7 +1890,7 @@ pub async fn image_pull(
         _ => image.to_string(),
     };
 
-    // Split into repo + tag so Docker daemon doesn't pull ALL tags when tag is omitted.
+    // Split into repo + tag so the compatibility API doesn't pull ALL tags when tag is omitted.
     let (repo, tag) = split_repo_and_tag(&pull_image);
 
     tracing::info!("Pulling image: {}:{} (original: {})", repo, tag, image);
@@ -2045,7 +2041,7 @@ pub async fn image_pull_with_mirrors(
         // Notify progress: trying mirror
         if let Some(ref cb) = on_progress {
             cb(PullProgress {
-                status: format!("尝试镜像站 {}/{}: {}", i + 1, mirrors.len(), mirror),
+                status: format!("Trying mirror {}/{}: {}", i + 1, mirrors.len(), mirror),
                 progress_detail: None,
                 current_bytes: 0,
                 total_bytes: 0,
@@ -2076,7 +2072,7 @@ pub async fn image_pull_with_mirrors(
                 tracing::warn!("Mirror '{}' failed for '{}': {}", mirror, image, e);
                 if let Some(ref cb) = on_progress {
                     cb(PullProgress {
-                        status: format!("镜像站 {} 失败，尝试下一个...", mirror),
+                        status: format!("Mirror {} failed, trying next...", mirror),
                         progress_detail: None,
                         current_bytes: 0,
                         total_bytes: 0,
@@ -2091,7 +2087,7 @@ pub async fn image_pull_with_mirrors(
     tracing::info!("All mirrors failed, attempting direct pull for '{}'", image);
     if let Some(ref cb) = on_progress {
         cb(PullProgress {
-            status: "所有镜像站失败，尝试直连...".to_string(),
+            status: "All mirrors failed, trying direct pull...".to_string(),
             progress_detail: None,
             current_bytes: 0,
             total_bytes: 0,
@@ -2219,8 +2215,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_network_mode_rejects_unknown_network() {
-        assert!(resolve_network_mode(None, Some("other-network")).is_err());
+    fn resolve_network_mode_accepts_cratebay_network_names() {
+        assert_eq!(
+            resolve_network_mode(None, Some("workspace-net")).unwrap(),
+            Some("workspace-net".to_string())
+        );
     }
 
     #[test]

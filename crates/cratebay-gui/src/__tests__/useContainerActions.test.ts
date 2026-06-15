@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { mockInvoke, resetTauriMocks } from "@/__mocks__/tauriMock";
+import { mockInvoke, mockListen, resetTauriMocks } from "@/__mocks__/tauriMock";
 
 // Mock Tauri before importing hooks that use stores
 vi.mock("@/lib/tauri", () => ({
   invoke: mockInvoke,
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: mockListen,
   isTauri: vi.fn(() => false),
 }));
 
 import { useContainerActions } from "@/hooks/useContainerActions";
 import { useContainerStore } from "@/stores/containerStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import type { ContainerInfo } from "@/types/container";
 
 // ---------------------------------------------------------------------------
@@ -34,14 +35,31 @@ const makeContainer = (overrides: Partial<ContainerInfo> = {}): ContainerInfo =>
 });
 
 function resetStore() {
+  const timer = useContainerStore.getState()._transitionalRefreshTimer;
+  if (timer !== null) {
+    clearTimeout(timer);
+  }
+  useContainerStore.getState()._fetchAbortController?.abort();
+
   useContainerStore.setState({
     containers: [],
+    images: [],
     loading: false,
+    imagesLoading: false,
     error: null,
+    _fetchAbortController: null,
+    _transitionalRefreshTimer: null,
     selectedContainerId: null,
     templates: [],
     filter: { status: "all", search: "", templateId: null },
   });
+  useSettingsStore.setState((state) => ({
+    settings: {
+      ...state.settings,
+      language: "en",
+      registryMirrors: ["docker.1ms.run", "docker.xuanyuan.me", "dockerhub.icu"],
+    },
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +126,8 @@ describe("useContainerActions", () => {
           created: 111,
         },
       ])
-      .mockResolvedValueOnce(newContainer);
+      .mockResolvedValueOnce(newContainer)
+      .mockResolvedValueOnce([newContainer]);
 
     const { result } = renderHook(() => useContainerActions());
 
@@ -127,8 +146,10 @@ describe("useContainerActions", () => {
         templateId: "node-dev",
         name: "new-one",
         image: "node:20-slim",
+        registryMirrors: ["docker.1ms.run", "docker.xuanyuan.me", "dockerhub.icu"],
       },
     });
+    expect(mockInvoke).toHaveBeenNthCalledWith(3, "container_list");
     expect(created?.id).toBe("c-new");
     expect(useContainerStore.getState().containers).toHaveLength(1);
   });
@@ -168,10 +189,11 @@ describe("useContainerActions", () => {
   });
 
   it("remove deletes a container from the store", async () => {
+    const remaining = makeContainer({ id: "c-2", name: "py-dev" });
     useContainerStore.setState({
-      containers: [makeContainer({ id: "c-1" }), makeContainer({ id: "c-2", name: "py-dev" })],
+      containers: [makeContainer({ id: "c-1" }), remaining],
     });
-    mockInvoke.mockResolvedValueOnce(undefined);
+    mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([remaining]);
 
     const { result } = renderHook(() => useContainerActions());
 
@@ -179,8 +201,31 @@ describe("useContainerActions", () => {
       await result.current.remove("c-1");
     });
 
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, "container_delete", {
+      id: "c-1",
+      force: false,
+    });
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, "container_list");
     expect(useContainerStore.getState().containers).toHaveLength(1);
     expect(useContainerStore.getState().containers[0].id).toBe("c-2");
+  });
+
+  it("passes force through remove", async () => {
+    useContainerStore.setState({
+      containers: [makeContainer({ id: "c-1" })],
+    });
+    mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([]);
+
+    const { result } = renderHook(() => useContainerActions());
+
+    await act(async () => {
+      await result.current.remove("c-1", true);
+    });
+
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, "container_delete", {
+      id: "c-1",
+      force: true,
+    });
   });
 
   it("reflects loading state from store", () => {

@@ -1,7 +1,7 @@
 //! macOS runtime — VZ.framework integration via external Swift runner.
 //!
 //! Uses Apple's Virtualization.framework to run a lightweight Linux VM
-//! with Docker Engine inside. VZ.framework is accessed through an external
+//! with CrateBay Engine inside. VZ.framework is accessed through an external
 //! Swift binary (`cratebay-vz`) because the VZ API requires Objective-C/Swift.
 //!
 //! # Architecture (runtime-spec.md §2.1)
@@ -15,17 +15,17 @@
 //!                 ├── VZLinuxBootLoader (vmlinuz + initrd)
 //!                 ├── VZVirtioBlockStorageDevice (rootfs.img)
 //!                 ├── VZVirtioFileSystemDevice (shared dirs)
-//!                 ├── VZVirtioSocketDevice (vsock → Docker socket)
+//!                 ├── VZVirtioSocketDevice (vsock → compatibility API socket)
 //!                 └── VZNATNetworkDeviceAttachment
-//!                     └── Alpine Linux → Docker Engine
+//!                     └── Alpine Linux → CrateBay Engine
 //! ```
 //!
 //! # Lifecycle
 //!
 //! 1. **provision()** — Install runtime image from bundled assets or download
-//! 2. **start()** — Spawn VZ runner, wait for ready file, wait for Docker
+//! 2. **start()** — Spawn VZ runner, wait for ready file, wait for CrateBay Engine
 //! 3. **stop()** — SIGTERM → wait → SIGKILL → cleanup
-//! 4. **detect()** — Check macOS version, images, runner PID, Docker socket
+//! 4. **detect()** — Check macOS version, images, runner PID, engine socket
 //!
 //! Ported from `master:crates/cratebay-core/src/macos.rs` (1749 lines) and
 //! adapted for the v2 `RuntimeManager` trait with `AppError` error model.
@@ -50,7 +50,7 @@ const MIN_MACOS_VERSION: u32 = 13;
 /// Timeout for the VZ runner to write its ready file after spawning.
 const RUNNER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Timeout for Docker to become responsive after the VM starts.
+/// Timeout for CrateBay Engine to become responsive after the VM starts.
 const DOCKER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Number of ping attempts performed in each health check cycle.
@@ -68,6 +68,8 @@ const READY_DOWNGRADE_FAILURE_THRESHOLD: u8 = 3;
 
 /// Grace period for SIGTERM before escalating to SIGKILL.
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(15);
+
+const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct RuntimeHttpProxyConfig {
@@ -87,6 +89,56 @@ fn vm_dir() -> PathBuf {
 /// Disk image path for the runtime VM.
 fn vm_disk_path() -> PathBuf {
     vm_dir().join("disk.raw")
+}
+
+fn configured_vm_disk_bytes(config: &RuntimeConfig) -> Result<u64, AppError> {
+    (config.disk_gb as u64)
+        .checked_mul(BYTES_PER_GIB)
+        .ok_or_else(|| {
+            AppError::Runtime(format!(
+                "Configured VM disk size is too large: {} GiB",
+                config.disk_gb
+            ))
+        })
+}
+
+fn ensure_vm_disk_min_size(disk_path: &Path, min_bytes: u64) -> Result<(), AppError> {
+    let metadata = std::fs::metadata(disk_path).map_err(|e| {
+        AppError::Runtime(format!(
+            "Failed to inspect VM disk image {}: {}",
+            disk_path.display(),
+            e
+        ))
+    })?;
+    let current_bytes = metadata.len();
+    if current_bytes >= min_bytes {
+        return Ok(());
+    }
+
+    tracing::info!(
+        "Expanding VM disk image {} from {:.1} GiB to {:.1} GiB",
+        disk_path.display(),
+        current_bytes as f64 / BYTES_PER_GIB as f64,
+        min_bytes as f64 / BYTES_PER_GIB as f64
+    );
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(disk_path)
+        .map_err(|e| {
+            AppError::Runtime(format!(
+                "Failed to open VM disk image {} for resize: {}",
+                disk_path.display(),
+                e
+            ))
+        })?;
+    file.set_len(min_bytes).map_err(|e| {
+        AppError::Runtime(format!(
+            "Failed to resize VM disk image {}: {}",
+            disk_path.display(),
+            e
+        ))
+    })
 }
 
 /// Console log path for the runtime VM.
@@ -164,6 +216,62 @@ fn find_runner_processes() -> Vec<u32> {
             None
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RunnerResourceUsage {
+    cpu_percent: f32,
+    memory_used_mb: u64,
+}
+
+fn parse_ps_cpu_rss(output: &str) -> Option<RunnerResourceUsage> {
+    output.lines().find_map(|line| {
+        let mut columns = line.split_whitespace();
+        let cpu_percent = columns.next()?.parse::<f32>().ok()?;
+        let rss_kb = columns.next()?.parse::<u64>().ok()?;
+
+        Some(RunnerResourceUsage {
+            cpu_percent: cpu_percent.max(0.0),
+            memory_used_mb: rss_kb.saturating_add(1023) / 1024,
+        })
+    })
+}
+
+fn runner_resource_usage(pid: u32) -> Option<RunnerResourceUsage> {
+    let pid = pid.to_string();
+    let output = Command::new("ps")
+        .args(["-o", "%cpu=,rss=", "-p", &pid])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_ps_cpu_rss(&String::from_utf8_lossy(&output.stdout))
+}
+
+async fn compatibility_container_count(socket_path: &Path) -> Option<u32> {
+    if !socket_path.exists() {
+        return None;
+    }
+
+    let docker = bollard::Docker::connect_with_unix(
+        socket_path.to_str().unwrap_or_default(),
+        5,
+        bollard::API_DEFAULT_VERSION,
+    )
+    .ok()?;
+
+    let containers = docker
+        .list_containers(Some(bollard::container::ListContainersOptions::<String> {
+            all: false,
+            ..Default::default()
+        }))
+        .await
+        .ok()?;
+
+    Some(containers.len() as u32)
 }
 
 /// Terminate a set of runner PIDs with SIGTERM → wait → SIGKILL.
@@ -448,10 +556,10 @@ fn find_entitlements_plist() -> Option<PathBuf> {
 
 /// macOS runtime manager using Apple's VZ.framework via external Swift runner.
 ///
-/// The runtime manages a single VM that runs Docker inside a lightweight
-/// Alpine Linux guest. The VZ runner process (`cratebay-vz`) handles all
-/// VZ.framework API calls and exposes the Docker socket via vsock or TCP
-/// forwarding.
+/// The runtime manages a single CrateBay VM with containerd/runc/CNI inside a
+/// lightweight Alpine Linux guest. The VZ runner process (`cratebay-vz`)
+/// handles all VZ.framework API calls and exposes the CrateBay Engine
+/// compatibility socket via vsock or TCP forwarding.
 pub struct MacOSRuntime {
     /// Runtime configuration (CPU, memory, disk, shared dirs).
     config: RuntimeConfig,
@@ -463,7 +571,7 @@ pub struct MacOSRuntime {
     runner_pid: Arc<Mutex<Option<u32>>>,
     /// Timestamp when the runner was started (for uptime calculation).
     started_at: Arc<Mutex<Option<Instant>>>,
-    /// Number of consecutive health-check cycles with failed Docker ping.
+    /// Number of consecutive health-check cycles with a failed Engine ping.
     consecutive_health_failures: Arc<Mutex<u8>>,
 }
 
@@ -581,7 +689,7 @@ impl MacOSRuntime {
             .map(|e| e.default_cmdline)
             .unwrap_or_else(|| "console=hvc0".to_string());
 
-        // Inject runtime HTTP proxy for guest-side dockerd/apk egress
+        // Inject runtime HTTP proxy for guest-side engine/apk egress.
         if !cmdline
             .split_whitespace()
             .any(|arg| arg.starts_with("cratebay_http_proxy="))
@@ -620,12 +728,28 @@ impl MacOSRuntime {
             }
         }
 
+        let engine_proxy_port = common::engine_proxy_port().to_string();
+        if !cmdline
+            .split_whitespace()
+            .any(|arg| arg.starts_with("cratebay_engine_proxy_port="))
+        {
+            cmdline.push_str(" cratebay_engine_proxy_port=");
+            cmdline.push_str(&engine_proxy_port);
+        }
+
         if !cmdline
             .split_whitespace()
             .any(|arg| arg.starts_with("cratebay_docker_proxy_port="))
         {
             cmdline.push_str(" cratebay_docker_proxy_port=");
-            cmdline.push_str(&common::docker_proxy_port().to_string());
+            cmdline.push_str(&engine_proxy_port);
+        }
+
+        if !cmdline
+            .split_whitespace()
+            .any(|arg| arg.starts_with("cratebay_runtime_engine="))
+        {
+            cmdline.push_str(" cratebay_runtime_engine=containerd");
         }
 
         tracing::debug!("VM boot cmdline: {}", cmdline);
@@ -738,10 +862,7 @@ impl MacOSRuntime {
 
             let bind_host = Self::first_non_empty_env(&["CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST"])
                 .unwrap_or_else(|| "0.0.0.0".to_string());
-            let bind_port = Self::first_non_empty_env(&["CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT"])
-                .and_then(|raw| raw.parse::<u16>().ok())
-                .filter(|port| *port > 0)
-                .unwrap_or(3128);
+            let bind_port = Self::auto_runtime_http_proxy_port();
 
             let guest_host = Self::first_non_empty_env(&["CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST"])
                 .unwrap_or_else(|| "192.168.64.1".to_string());
@@ -907,9 +1028,9 @@ impl MacOSRuntime {
             cmd.arg("--initrd").arg(&paths.initrd_path);
         }
 
-        // Set up Docker socket forwarding
+        // Set up engine API socket forwarding
         let vm_name = common::runtime_vm_name();
-        let sock_path = common::runtime_host_docker_socket_path(vm_name);
+        let sock_path = common::runtime_host_engine_socket_path(vm_name);
         if let Some(parent) = sock_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -918,7 +1039,7 @@ impl MacOSRuntime {
 
         let forward_spec = format!(
             "{}:{}",
-            common::docker_proxy_port(),
+            common::engine_proxy_port(),
             sock_path.to_string_lossy()
         );
 
@@ -935,7 +1056,7 @@ impl MacOSRuntime {
             .unwrap_or_else(|| default_forward_mode.to_string());
 
         tracing::info!(
-            "Docker socket forwarding mode: {} (arch: {}, default: {})",
+            "Engine API socket forwarding mode: {} (arch: {}, default: {})",
             forward_mode,
             std::env::consts::ARCH,
             default_forward_mode
@@ -1037,32 +1158,33 @@ impl MacOSRuntime {
         Ok(child)
     }
 
-    /// Wait for Docker inside the VM to become responsive via the Unix socket.
+    /// Wait for CrateBay Engine inside the VM to become responsive via the Unix socket.
     async fn wait_for_docker(&self, timeout: Duration) -> Result<(), AppError> {
-        let socket_path = self.docker_socket_path();
+        let socket_path = self.engine_socket_path();
         let start = Instant::now();
 
         tracing::info!(
-            "Waiting for Docker at {} (timeout: {:?})",
+            "Waiting for CrateBay Engine API at {} (timeout: {:?})",
             socket_path.display(),
             timeout
         );
 
         while start.elapsed() < timeout {
             if socket_path.exists() {
-                match bollard::Docker::connect_with_unix(
-                    socket_path.to_str().unwrap_or_default(),
-                    5,
-                    bollard::API_DEFAULT_VERSION,
-                ) {
-                    Ok(docker) => {
-                        if crate::docker::is_available(&docker).await {
-                            tracing::info!("Docker is responsive at {}", socket_path.display());
-                            return Ok(());
-                        }
+                match Self::native_engine_contract_ready(&socket_path) {
+                    Ok(()) => {
+                        tracing::info!(
+                            "CrateBay Engine API is responsive at {}",
+                            socket_path.display()
+                        );
+                        return Ok(());
                     }
-                    Err(e) => {
-                        tracing::trace!("Docker not yet ready: {}", e);
+                    Err(error) => {
+                        tracing::trace!(
+                            "CrateBay Engine native contract is not ready at {}: {}",
+                            socket_path.display(),
+                            error
+                        );
                     }
                 }
             }
@@ -1070,9 +1192,30 @@ impl MacOSRuntime {
         }
 
         Err(AppError::Runtime(format!(
-            "Docker did not become responsive within {:?}",
+            "CrateBay Engine API did not become responsive within {:?}",
             timeout
         )))
+    }
+
+    async fn compatibility_api_available(socket_path: &Path) -> bool {
+        let Ok(docker) = bollard::Docker::connect_with_unix(
+            socket_path.to_str().unwrap_or_default(),
+            5,
+            bollard::API_DEFAULT_VERSION,
+        ) else {
+            return false;
+        };
+
+        crate::docker::is_available(&docker).await
+    }
+
+    fn native_engine_contract_ready(socket_path: &Path) -> Result<(), String> {
+        let payload = common::engine_http_get_json_unix_socket(socket_path, "/cratebay/engine")?;
+        crate::runtime::built_in_engine_contract_ready(&payload).map_err(|error| error.to_string())
+    }
+
+    async fn engine_socket_ready(socket_path: &Path) -> bool {
+        Self::native_engine_contract_ready(socket_path).is_ok()
     }
 
     /// Update the internal runtime state.
@@ -1089,7 +1232,7 @@ impl MacOSRuntime {
         Ok(state.clone())
     }
 
-    /// Ping Docker via Unix socket with retries.
+    /// Ping the engine compatibility API via Unix socket with retries.
     async fn docker_health_with_retry(&self, socket_path: &Path) -> (bool, Option<String>) {
         for attempt in 0..HEALTH_PING_ATTEMPTS {
             if let Ok(docker) = bollard::Docker::connect_with_unix(
@@ -1136,7 +1279,7 @@ impl RuntimeManager for MacOSRuntime {
     /// 1. macOS version >= 13 (Ventura) for VZ.framework support
     /// 2. Whether runtime images are installed and ready
     /// 3. Whether the VZ runner process is alive
-    /// 4. Whether Docker is responsive on the socket
+    /// 4. Whether CrateBay Engine is responsive on the socket
     async fn get_state(&self) -> Result<RuntimeState, AppError> {
         // Check macOS version
         match Self::check_macos_version() {
@@ -1162,21 +1305,13 @@ impl RuntimeManager for MacOSRuntime {
 
         // Check if the runner process is alive
         if self.is_runner_alive() {
-            // Verify Docker is responsive
-            let socket_path = self.docker_socket_path();
-            if socket_path.exists() {
-                if let Ok(docker) = bollard::Docker::connect_with_unix(
-                    socket_path.to_str().unwrap_or_default(),
-                    5,
-                    bollard::API_DEFAULT_VERSION,
-                ) {
-                    if crate::docker::is_available(&docker).await {
-                        self.set_state(RuntimeState::Ready)?;
-                        return Ok(RuntimeState::Ready);
-                    }
-                }
+            // Verify CrateBay Engine is responsive
+            let socket_path = self.engine_socket_path();
+            if socket_path.exists() && Self::engine_socket_ready(&socket_path).await {
+                self.set_state(RuntimeState::Ready)?;
+                return Ok(RuntimeState::Ready);
             }
-            // Runner alive but Docker not responsive — still starting
+            // Runner alive but CrateBay Engine not responsive — still starting
             self.set_state(RuntimeState::Starting)?;
             return Ok(RuntimeState::Starting);
         }
@@ -1273,8 +1408,8 @@ impl RuntimeManager for MacOSRuntime {
             std::fs::create_dir_all(parent)?;
         }
 
+        let disk_bytes = configured_vm_disk_bytes(&self.config)?;
         if !disk_path.exists() {
-            let disk_bytes = (self.config.disk_gb as u64) * 1024 * 1024 * 1024;
             let image_id_owned = image_id.to_string();
             let disk_path_owned = disk_path.clone();
             tokio::task::spawn_blocking(move || {
@@ -1283,6 +1418,13 @@ impl RuntimeManager for MacOSRuntime {
             .await
             .map_err(|e| AppError::Runtime(format!("Task join error: {}", e)))?
             .map_err(|e| AppError::Runtime(format!("Failed to create VM disk image: {}", e)))?;
+        } else {
+            let disk_path_owned = disk_path.clone();
+            tokio::task::spawn_blocking(move || {
+                ensure_vm_disk_min_size(&disk_path_owned, disk_bytes)
+            })
+            .await
+            .map_err(|e| AppError::Runtime(format!("Task join error: {}", e)))??;
         }
 
         on_progress(ProvisionProgress {
@@ -1314,29 +1456,37 @@ impl RuntimeManager for MacOSRuntime {
     /// 2. Clean up stray runner processes
     /// 3. Spawn the `cratebay-vz` runner binary
     /// 4. Wait for the ready file (VM booted)
-    /// 5. Wait for Docker to become responsive on the socket
+    /// 5. Wait for CrateBay Engine to become responsive on the socket
     /// 6. Transition state to Ready
     async fn start(&self) -> Result<(), AppError> {
-        // If Docker isn't responsive (stale proxy / old runner), restart once.
+        // If CrateBay Engine isn't responsive (stale proxy / old runner), restart once.
         let mut restarted = false;
         loop {
             // Check if already running
             if self.is_runner_alive() {
-                let socket_path = self.docker_socket_path();
+                let socket_path = self.engine_socket_path();
                 if socket_path.exists() {
-                    if let Ok(docker) = bollard::Docker::connect_with_unix(
-                        socket_path.to_str().unwrap_or_default(),
-                        5,
-                        bollard::API_DEFAULT_VERSION,
-                    ) {
-                        if crate::docker::is_available(&docker).await {
-                            self.set_state(RuntimeState::Ready)?;
-                            return Ok(());
+                    if Self::engine_socket_ready(&socket_path).await {
+                        self.set_state(RuntimeState::Ready)?;
+                        return Ok(());
+                    }
+
+                    if Self::compatibility_api_available(&socket_path).await && !restarted {
+                        restarted = true;
+                        tracing::warn!(
+                            "Runner is serving the compatibility API without the native CrateBay Engine contract. Restarting runtime..."
+                        );
+                        if let Err(stop_err) = self.stop().await {
+                            return Err(AppError::Runtime(format!(
+                                "CrateBay Engine native contract is unavailable and failed to restart runtime: {}",
+                                stop_err
+                            )));
                         }
+                        continue;
                     }
                 }
 
-                // Runner is alive but Docker isn't ready — wait for it.
+                // Runner is alive but CrateBay Engine isn't ready — wait for it.
                 self.set_state(RuntimeState::Starting)?;
                 match self.wait_for_docker(DOCKER_READY_TIMEOUT).await {
                     Ok(()) => {
@@ -1346,12 +1496,12 @@ impl RuntimeManager for MacOSRuntime {
                     Err(e) if !restarted => {
                         restarted = true;
                         tracing::warn!(
-                            "Runner is alive but Docker is not responsive: {}. Restarting runtime once...",
+                            "Runner is alive but CrateBay Engine API is not responsive: {}. Restarting runtime once...",
                             e
                         );
                         if let Err(stop_err) = self.stop().await {
                             return Err(AppError::Runtime(format!(
-                                "Docker is not responsive and failed to restart runtime (stop failed): {}; original error: {}",
+                                "CrateBay Engine API is not responsive and failed to restart runtime (stop failed): {}; original error: {}",
                                 stop_err, e
                             )));
                         }
@@ -1363,6 +1513,12 @@ impl RuntimeManager for MacOSRuntime {
                     }
                 }
             }
+
+            // Ensure bundled runtime assets are installed and current before boot.
+            let image_id = common::runtime_os_image_id().to_string();
+            tokio::task::spawn_blocking(move || common::ensure_runtime_image_ready(&image_id))
+                .await
+                .map_err(|e| AppError::Runtime(format!("Image check task panicked: {}", e)))??;
 
             // Ensure images are provisioned
             if !self.images_ready() {
@@ -1377,6 +1533,7 @@ impl RuntimeManager for MacOSRuntime {
                     "VM disk image not found. Call provision() first.".into(),
                 ));
             }
+            ensure_vm_disk_min_size(&vm_disk_path(), configured_vm_disk_bytes(&self.config)?)?;
 
             self.set_state(RuntimeState::Starting)?;
 
@@ -1399,37 +1556,29 @@ impl RuntimeManager for MacOSRuntime {
             }
 
             // Check if an existing VZ runner (from a previous GUI session) is
-            // still alive and Docker is already responsive.  If so, adopt it
+            // still alive and CrateBay Engine is already responsive.  If so, adopt it
             // instead of killing it and restarting — this preserves running
             // containers across GUI restarts.
             let existing_pids = find_runner_processes();
             if !existing_pids.is_empty() {
-                let socket_path = self.docker_socket_path();
-                if socket_path.exists() {
-                    if let Ok(docker) = bollard::Docker::connect_with_unix(
-                        socket_path.to_str().unwrap_or_default(),
-                        5,
-                        bollard::API_DEFAULT_VERSION,
-                    ) {
-                        if crate::docker::is_available(&docker).await {
-                            // Adopt the existing runner
-                            let pid = existing_pids[0];
-                            tracing::info!(
-                                "Adopting existing VZ runner (PID {}) — Docker is responsive",
-                                pid,
-                            );
-                            if let Ok(mut guard) = self.runner_pid.lock() {
-                                *guard = Some(pid);
-                            }
-                            if let Ok(mut guard) = self.started_at.lock() {
-                                if guard.is_none() {
-                                    *guard = Some(Instant::now());
-                                }
-                            }
-                            self.set_state(RuntimeState::Ready)?;
-                            return Ok(());
+                let socket_path = self.engine_socket_path();
+                if socket_path.exists() && Self::engine_socket_ready(&socket_path).await {
+                    // Adopt the existing runner
+                    let pid = existing_pids[0];
+                    tracing::info!(
+                        "Adopting existing VZ runner (PID {}) — CrateBay Engine API is responsive",
+                        pid,
+                    );
+                    if let Ok(mut guard) = self.runner_pid.lock() {
+                        *guard = Some(pid);
+                    }
+                    if let Ok(mut guard) = self.started_at.lock() {
+                        if guard.is_none() {
+                            *guard = Some(Instant::now());
                         }
                     }
+                    self.set_state(RuntimeState::Ready)?;
+                    return Ok(());
                 }
             }
 
@@ -1509,7 +1658,7 @@ impl RuntimeManager for MacOSRuntime {
             // Write PID file for recovery across sessions
             let _ = std::fs::write(vm_runner_pid_path(), format!("{}\n", pid));
 
-            // Wait for Docker to become responsive
+            // Wait for CrateBay Engine to become responsive
             match self.wait_for_docker(DOCKER_READY_TIMEOUT).await {
                 Ok(()) => {
                     self.set_state(RuntimeState::Ready)?;
@@ -1519,20 +1668,20 @@ impl RuntimeManager for MacOSRuntime {
                 Err(e) if !restarted => {
                     restarted = true;
                     tracing::warn!(
-                        "Docker not responsive after VM start: {}. Restarting runtime once...",
+                        "CrateBay Engine API not responsive after VM start: {}. Restarting runtime once...",
                         e
                     );
                     if let Err(stop_err) = self.stop().await {
                         return Err(AppError::Runtime(format!(
-                            "Docker is not responsive and failed to restart runtime (stop failed): {}; original error: {}",
+                            "CrateBay Engine API is not responsive and failed to restart runtime (stop failed): {}; original error: {}",
                             stop_err, e
                         )));
                     }
                     continue;
                 }
                 Err(e) => {
-                    tracing::warn!("Docker not responsive after VM start: {}", e);
-                    // VM is running but Docker isn't ready — don't kill the runner,
+                    tracing::warn!("CrateBay Engine API not responsive after VM start: {}", e);
+                    // VM is running but CrateBay Engine isn't ready — don't kill the runner,
                     // it may still come up. Set Starting state so health checks
                     // can track it.
                     self.set_state(RuntimeState::Starting)?;
@@ -1615,7 +1764,7 @@ impl RuntimeManager for MacOSRuntime {
         // Clean up stray processes
         cleanup_stray_runner_processes(None, "stop cleanup");
 
-        // Clean up Docker socket symlink
+        // Clean up engine API socket symlink
         let vm_name = common::runtime_vm_name();
         common::unlink_runtime_host_docker_socket(vm_name);
 
@@ -1624,10 +1773,10 @@ impl RuntimeManager for MacOSRuntime {
         Ok(())
     }
 
-    /// Check runtime health and Docker responsiveness.
+    /// Check runtime health and CrateBay Engine responsiveness.
     async fn health_check(&self) -> Result<HealthStatus, AppError> {
         let runner_alive = self.is_runner_alive();
-        let socket_path = self.docker_socket_path();
+        let socket_path = self.engine_socket_path();
         let socket_exists = socket_path.exists();
 
         let (docker_responsive, docker_version) = if socket_exists {
@@ -1635,9 +1784,13 @@ impl RuntimeManager for MacOSRuntime {
         } else {
             (false, None)
         };
+        let engine_responsive = runner_alive
+            && crate::runtime::query_built_in_ready_engine_status(self)
+                .map(|_| true)
+                .unwrap_or(false);
 
         let current_state = self.get_state()?;
-        let runtime_state = if docker_responsive {
+        let runtime_state = if engine_responsive {
             let mut failures = self.consecutive_health_failures.lock_or_recover()?;
             *failures = 0;
             RuntimeState::Ready
@@ -1681,55 +1834,54 @@ impl RuntimeManager for MacOSRuntime {
 
         Ok(HealthStatus {
             runtime_state,
+            engine_responsive,
+            compatibility_responsive: docker_responsive,
+            compatibility_version: docker_version.clone(),
             docker_responsive,
             docker_version,
             uptime_seconds,
             last_check: chrono::Utc::now().to_rfc3339(),
+            engine_source: Some("builtin".to_string()),
             docker_source: Some("builtin".to_string()),
+            engine: crate::runtime::built_in_engine_status(),
         })
     }
 
-    /// Get the Docker socket path managed by the runtime.
+    /// Get the CrateBay Engine socket path managed by the runtime.
     ///
-    /// Returns the canonical `~/.cratebay/runtime/docker.sock` path which
-    /// is a symlink to the per-VM actual socket.
-    fn docker_socket_path(&self) -> PathBuf {
-        common::host_docker_socket_path().to_path_buf()
+    /// Returns the canonical `~/.cratebay/runtime/engine.sock` path which
+    /// is a symlink to the per-VM actual socket. A `docker.sock` compatibility
+    /// alias is maintained alongside it for external clients.
+    fn engine_socket_path(&self) -> PathBuf {
+        common::host_engine_socket_path().to_path_buf()
     }
 
     /// Get current resource usage of the VM.
     ///
-    /// When Docker is responsive, queries container count via the API.
-    /// CPU and memory metrics require VZ.framework instrumentation
-    /// (not yet implemented).
+    /// When CrateBay Engine is responsive, queries container count via the API.
+    /// CPU and memory are host-side runner process approximations until guest
+    /// instrumentation is available. Disk usage reports the host-allocated
+    /// size of the sparse runtime disk image.
     async fn resource_usage(&self) -> Result<ResourceUsage, AppError> {
-        let mut container_count = 0;
+        let socket_path = self.engine_socket_path();
+        let container_count = match crate::runtime::query_built_in_native_containers(self) {
+            Ok(containers) => containers.count as u32,
+            Err(_) => compatibility_container_count(&socket_path)
+                .await
+                .unwrap_or_default(),
+        };
 
-        // Try to get container count from Docker API
-        let socket_path = self.docker_socket_path();
-        if socket_path.exists() {
-            if let Ok(docker) = bollard::Docker::connect_with_unix(
-                socket_path.to_str().unwrap_or_default(),
-                5,
-                bollard::API_DEFAULT_VERSION,
-            ) {
-                if let Ok(containers) = docker
-                    .list_containers(Some(bollard::container::ListContainersOptions::<String> {
-                        all: false,
-                        ..Default::default()
-                    }))
-                    .await
-                {
-                    container_count = containers.len() as u32;
-                }
-            }
-        }
+        let runner_usage = self
+            .current_runner_pid()
+            .and_then(runner_resource_usage)
+            .unwrap_or_default();
+        let disk_used_gb = common::file_allocated_gb(&vm_disk_path());
 
         Ok(ResourceUsage {
-            cpu_percent: 0.0,  // Requires VZ.framework instrumentation
-            memory_used_mb: 0, // Requires VZ.framework instrumentation
+            cpu_percent: runner_usage.cpu_percent,
+            memory_used_mb: runner_usage.memory_used_mb,
             memory_total_mb: self.config.memory_mb,
-            disk_used_gb: 0.0, // Could query via Docker system info
+            disk_used_gb,
             disk_total_gb: self.config.disk_gb as f32,
             container_count,
         })
@@ -1750,7 +1902,11 @@ mod tests {
     struct EnvGuard {
         _lock_guard: std::sync::MutexGuard<'static, ()>,
         old_data_dir: Option<std::ffi::OsString>,
+        old_http_proxy: Option<std::ffi::OsString>,
+        old_http_proxy_bridge: Option<std::ffi::OsString>,
+        old_http_proxy_bind_host: Option<std::ffi::OsString>,
         old_http_proxy_bind_port: Option<std::ffi::OsString>,
+        old_http_proxy_guest_host: Option<std::ffi::OsString>,
         _temp: tempfile::TempDir,
     }
 
@@ -1760,16 +1916,30 @@ mod tests {
             let lock_guard = lock.lock().expect("ENV_LOCK poisoned");
 
             let old_data_dir = std::env::var_os("CRATEBAY_DATA_DIR");
+            let old_http_proxy = std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY");
+            let old_http_proxy_bridge = std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE");
+            let old_http_proxy_bind_host =
+                std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST");
             let old_http_proxy_bind_port =
                 std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
+            let old_http_proxy_guest_host =
+                std::env::var_os("CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST");
             let temp = tempfile::tempdir().expect("create tempdir");
             std::env::set_var("CRATEBAY_DATA_DIR", temp.path());
+            std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY");
+            std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE");
+            std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST");
             std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
+            std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST");
 
             Self {
                 _lock_guard: lock_guard,
                 old_data_dir,
+                old_http_proxy,
+                old_http_proxy_bridge,
+                old_http_proxy_bind_host,
                 old_http_proxy_bind_port,
+                old_http_proxy_guest_host,
                 _temp: temp,
             }
         }
@@ -1783,10 +1953,34 @@ mod tests {
                 std::env::remove_var("CRATEBAY_DATA_DIR");
             }
 
+            if let Some(old) = self.old_http_proxy.clone() {
+                std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY", old);
+            } else {
+                std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY");
+            }
+
+            if let Some(old) = self.old_http_proxy_bridge.clone() {
+                std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE", old);
+            } else {
+                std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE");
+            }
+
+            if let Some(old) = self.old_http_proxy_bind_host.clone() {
+                std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST", old);
+            } else {
+                std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST");
+            }
+
             if let Some(old) = self.old_http_proxy_bind_port.clone() {
                 std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT", old);
             } else {
                 std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT");
+            }
+
+            if let Some(old) = self.old_http_proxy_guest_host.clone() {
+                std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST", old);
+            } else {
+                std::env::remove_var("CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST");
             }
         }
     }
@@ -1810,13 +2004,13 @@ mod tests {
     }
 
     #[test]
-    fn docker_socket_path_is_correct() {
+    fn engine_socket_path_is_correct() {
         let rt = test_runtime();
-        let path = rt.docker_socket_path();
+        let path = rt.engine_socket_path();
         let s = path.to_string_lossy();
         assert!(
-            s.contains("docker.sock"),
-            "should contain docker.sock: {}",
+            s.contains("engine.sock"),
+            "should contain engine.sock: {}",
             s
         );
     }
@@ -1892,6 +2086,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_ps_cpu_rss_reads_runner_metrics() {
+        let usage = parse_ps_cpu_rss(" 12.5 524288\n").unwrap();
+
+        assert_eq!(usage.cpu_percent, 12.5);
+        assert_eq!(usage.memory_used_mb, 512);
+    }
+
+    #[test]
+    fn parse_ps_cpu_rss_rounds_rss_up_to_mebibytes() {
+        let usage = parse_ps_cpu_rss("0.0 1025\n").unwrap();
+
+        assert_eq!(usage.memory_used_mb, 2);
+    }
+
+    #[test]
+    fn parse_ps_cpu_rss_rejects_malformed_output() {
+        assert!(parse_ps_cpu_rss("CPU RSS\n").is_none());
+    }
+
+    #[test]
     fn build_cmdline_contains_console() {
         let rt = test_runtime();
         let cmdline = rt.build_cmdline(None);
@@ -1930,6 +2144,28 @@ mod tests {
         std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT", "45678");
         let port = MacOSRuntime::auto_runtime_http_proxy_port();
         assert_eq!(port, 45678);
+    }
+
+    #[test]
+    fn resolve_runtime_http_proxy_bridge_uses_isolated_auto_port() {
+        let _guard = EnvGuard::with_temp_data_dir();
+        std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY", "proxy.example.com:8080");
+        std::env::set_var("CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE", "1");
+
+        let port = MacOSRuntime::auto_runtime_http_proxy_port();
+        let proxy = MacOSRuntime::resolve_runtime_http_proxy_config()
+            .expect("bridge proxy should resolve from explicit proxy env");
+
+        assert!(
+            (52000..62000).contains(&port),
+            "bridge proxy port should be isolated from the default port: {}",
+            port
+        );
+        assert_eq!(proxy.guest_proxy_endpoint, format!("192.168.64.1:{}", port));
+        assert_eq!(
+            proxy.host_tcp_forward_spec,
+            Some(format!("0.0.0.0:{}=proxy.example.com:8080", port))
+        );
     }
 
     #[test]
@@ -1983,6 +2219,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_fails_without_images() {
+        let _guard = EnvGuard::with_temp_data_dir();
         let rt = test_runtime();
         // If images aren't ready and disk doesn't exist, start should fail
         if !rt.images_ready() {
@@ -2005,10 +2242,20 @@ mod tests {
 
     #[tokio::test]
     async fn resource_usage_returns_configured_totals() {
+        let _guard = EnvGuard::with_temp_data_dir();
         let rt = test_runtime();
         let usage = rt.resource_usage().await.unwrap();
         assert_eq!(usage.memory_total_mb, 2048);
-        assert_eq!(usage.disk_total_gb, 20.0);
+        assert_eq!(usage.disk_total_gb, 35.0);
+        assert_eq!(usage.disk_used_gb, 0.0);
+    }
+
+    #[test]
+    fn resource_usage_prefers_native_container_count_before_compatibility_fallback() {
+        let source = include_str!("macos.rs");
+
+        assert!(source.contains("query_built_in_native_containers"));
+        assert!(source.contains("compatibility_container_count"));
     }
 
     #[test]
@@ -2072,6 +2319,7 @@ mod tests {
 
     #[tokio::test]
     async fn resource_usage_with_custom_config() {
+        let _guard = EnvGuard::with_temp_data_dir();
         let config = RuntimeConfig {
             cpu_cores: 4,
             memory_mb: 4096,

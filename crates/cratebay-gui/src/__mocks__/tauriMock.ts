@@ -40,7 +40,9 @@ export const mockInvoke = vi.fn(
 /**
  * The mocked listen function. Returns a no-op unlisten function.
  */
-export const mockListen = vi.fn(() => Promise.resolve(() => {}));
+type ListenMock = (event: string, handler: (payload: unknown) => void) => Promise<() => void>;
+
+export const mockListen = vi.fn<ListenMock>(() => Promise.resolve(() => {}));
 
 /**
  * The mocked emit function. No-op.

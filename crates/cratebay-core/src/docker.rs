@@ -1,9 +1,9 @@
-//! Docker connection management.
+//! CrateBay Engine compatibility client management.
 //!
-//! All Docker operations use `bollard` with `Arc<Docker>` for shared access.
+//! Compatibility operations use `bollard` with `Arc<Docker>` for shared access.
 //! The default connection path is the CrateBay built-in runtime. External
-//! Docker-compatible endpoints are only used when explicitly configured via
-//! `DOCKER_HOST` or a caller-provided host string.
+//! Docker-compatible endpoints are only used when a caller provides a host
+//! string explicitly.
 
 use bollard::Docker;
 use std::time::Duration;
@@ -20,18 +20,6 @@ enum DockerHostTarget {
 
 const DOCKER_PING_TIMEOUT_SECS: u64 = 5;
 const DOCKER_DEFAULT_TIMEOUT_SECS: u64 = 120;
-
-fn normalize_explicit_host(raw: Option<String>) -> Option<String> {
-    raw.and_then(|host| {
-        let host = host.trim();
-        (!host.is_empty()).then(|| host.to_string())
-    })
-}
-
-/// Return the explicit Docker-compatible host selected via `DOCKER_HOST`, if any.
-pub fn explicit_host_override() -> Option<String> {
-    normalize_explicit_host(std::env::var("DOCKER_HOST").ok())
-}
 
 /// Returns `true` when the source string represents the built-in runtime.
 pub fn is_builtin_source(source: Option<&str>) -> bool {
@@ -154,37 +142,29 @@ async fn try_connect_target(target: DockerHostTarget) -> Option<Docker> {
     }
 }
 
-/// Create a Docker client connection to an explicit Docker-compatible host.
+/// Create a client connection to an explicit Engine-compatible host.
 pub async fn connect_host(host: &str) -> Result<Docker, AppError> {
     let target = parse_docker_host_target(host).ok_or_else(|| {
-        AppError::Runtime(format!("Unsupported Docker host format: {}", host.trim()))
+        AppError::Runtime(format!("Unsupported Engine host format: {}", host.trim()))
     })?;
 
     try_connect_target(target)
         .await
-        .ok_or_else(|| AppError::Runtime(format!("Docker host is not reachable: {}", host.trim())))
+        .ok_or_else(|| AppError::Runtime(format!("Engine host is not reachable: {}", host.trim())))
 }
 
-/// Create a Docker client connection without starting the runtime.
+/// Create a CrateBay Engine compatibility client without starting the runtime.
 ///
 /// Attempts connections in priority order:
-/// 1. `DOCKER_HOST` environment variable (explicit compatibility override)
-/// 2. Already-running built-in runtime socket
-/// 3. Already-running built-in runtime TCP (Linux/Windows)
+/// 1. Already-running built-in runtime socket
+/// 2. Already-running built-in runtime TCP (Linux/Windows)
 ///
 /// This intentionally does not probe Bollard local defaults; CrateBay's
-/// product path is the built-in runtime unless a Docker host was explicit.
+/// product path is the built-in runtime.
 pub async fn connect() -> Result<Docker, AppError> {
-    // 1. DOCKER_HOST environment variable (supports unix/tcp/http/npipe)
-    if let Some(host) = explicit_host_override() {
-        let docker = connect_host(&host).await?;
-        tracing::info!("Connected via DOCKER_HOST");
-        return Ok(docker);
-    }
-
-    // 2. Try built-in runtime socket
+    // 1. Try built-in runtime socket.
     let runtime_mgr = runtime::create_runtime_manager();
-    let runtime_socket = runtime_mgr.docker_socket_path();
+    let runtime_socket = runtime_mgr.engine_socket_path();
     if runtime_socket.exists() {
         tracing::debug!(
             "Trying built-in runtime socket: {}",
@@ -209,14 +189,15 @@ pub async fn connect() -> Result<Docker, AppError> {
         }
     }
 
-    // 3. Try built-in runtime TCP endpoint (Linux/Windows)
+    // 2. Try built-in runtime TCP endpoint (Linux/Windows).
     //
-    // On Linux and Windows the built-in runtime exposes Docker via a TCP
-    // endpoint (hostfwd / WSL localhost forwarding). `docker_socket_path()`
-    // may not exist, so we attempt these endpoints opportunistically.
+    // On Linux and Windows the built-in runtime exposes the compatibility API
+    // via a TCP endpoint (hostfwd / WSL localhost forwarding).
+    // `engine_socket_path()` may not exist, so we attempt these endpoints
+    // opportunistically.
     #[cfg(target_os = "linux")]
     {
-        let host = runtime::linux::linux_docker_host();
+        let host = runtime::linux::linux_engine_host();
         if let Some(target) = parse_docker_host_target(&host) {
             if let Some(docker) = try_connect_target(target).await {
                 tracing::info!("Connected via built-in Linux runtime TCP endpoint");
@@ -227,7 +208,7 @@ pub async fn connect() -> Result<Docker, AppError> {
 
     #[cfg(target_os = "windows")]
     {
-        let host = runtime::windows::windows_docker_host();
+        let host = runtime::windows::windows_engine_host();
         if let Some(target) = parse_docker_host_target(&host) {
             if let Some(docker) = try_connect_target(target).await {
                 tracing::info!("Connected via built-in Windows runtime TCP endpoint");
@@ -236,26 +217,31 @@ pub async fn connect() -> Result<Docker, AppError> {
         }
 
         // Optional future: named pipe proxy for the built-in runtime.
-        let pipe = r"\\.\pipe\cratebay-docker";
-        if let Some(target) = parse_docker_host_target(pipe) {
+        for pipe in [r"\\.\pipe\cratebay-engine", r"\\.\pipe\cratebay-docker"] {
+            let Some(target) = parse_docker_host_target(pipe) else {
+                continue;
+            };
             if let Some(docker) = try_connect_target(target).await {
-                tracing::info!("Connected via built-in Windows runtime named pipe");
+                tracing::info!(
+                    "Connected via built-in Windows runtime named pipe: {}",
+                    pipe
+                );
                 return Ok(docker);
             }
         }
     }
 
     Err(AppError::Runtime(
-        "Built-in runtime Docker endpoint is not reachable".to_string(),
+        "Built-in CrateBay Engine endpoint is not reachable".to_string(),
     ))
 }
 
-/// Attempt to connect, returning None if Docker is not available.
+/// Attempt to connect, returning None if CrateBay Engine is not available.
 pub async fn try_connect() -> Option<Docker> {
     connect().await.ok()
 }
 
-/// Check if Docker daemon is accessible.
+/// Check if the CrateBay Engine compatibility API is accessible.
 pub async fn is_available(docker: &Docker) -> bool {
     matches!(
         tokio::time::timeout(Duration::from_secs(DOCKER_PING_TIMEOUT_SECS), docker.ping()).await,
@@ -263,7 +249,7 @@ pub async fn is_available(docker: &Docker) -> bool {
     )
 }
 
-/// Get Docker version information.
+/// Get CrateBay Engine compatibility version information.
 pub async fn version(docker: &Docker) -> Result<bollard::system::Version, AppError> {
     docker.version().await.map_err(AppError::Docker)
 }
@@ -318,16 +304,6 @@ mod tests {
         assert!(parse_docker_host_target("").is_none());
         assert!(parse_docker_host_target("desktop-linux").is_none());
         assert!(parse_docker_host_target("orbstack").is_none());
-    }
-
-    #[test]
-    fn normalize_explicit_host_trims_and_ignores_blank_values() {
-        assert_eq!(
-            normalize_explicit_host(Some("  tcp://127.0.0.1:2375  ".to_string())),
-            Some("tcp://127.0.0.1:2375".to_string())
-        );
-        assert_eq!(normalize_explicit_host(Some("   ".to_string())), None);
-        assert_eq!(normalize_explicit_host(None), None);
     }
 
     #[test]

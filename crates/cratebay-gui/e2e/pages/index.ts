@@ -28,9 +28,11 @@ export class BasePage {
 export class AppLayoutPage extends BasePage {
   readonly containersNavButton = '[data-testid="nav-containers"]';
   readonly imagesNavButton = '[data-testid="nav-images"]';
+  readonly podsNavButton = '[data-testid="nav-pods"]';
+  readonly volumesNavButton = '[data-testid="nav-volumes"]';
+  readonly networksNavButton = '[data-testid="nav-networks"]';
   readonly settingsNavButton = '[data-testid="nav-settings"]';
   readonly appTitle = '[data-testid="app-title"]';
-  readonly containersPodsTab = '[data-testid="containers-tab-pods"]';
 
   async navigateToContainers() {
     await this.click(this.containersNavButton);
@@ -43,9 +45,17 @@ export class AppLayoutPage extends BasePage {
   }
 
   async navigateToPods() {
-    await this.click(this.containersNavButton);
+    await this.click(this.podsNavButton);
     await this.waitForNavigation();
-    await this.click(this.containersPodsTab);
+  }
+
+  async navigateToVolumes() {
+    await this.click(this.volumesNavButton);
+    await this.waitForNavigation();
+  }
+
+  async navigateToNetworks() {
+    await this.click(this.networksNavButton);
     await this.waitForNavigation();
   }
 
@@ -77,21 +87,23 @@ export class ImagesPageObject extends AppLayoutPage {
 
 export class PodsPageObject extends AppLayoutPage {
   readonly podsPage = '[data-testid="pods-page"]';
-  readonly containersTabs = '[data-testid="containers-section-tabs"]';
 
   async verifyPodsLoaded() {
-    await this.waitForElement(this.containersTabs);
     await this.waitForElement(this.podsPage);
   }
 }
 
 export class SettingsPageObject extends AppLayoutPage {
-  readonly generalTab = '[data-testid="settings-tab-general"]';
-  readonly runtimeTab = '[data-testid="settings-tab-runtime"]';
-  readonly aboutTab = '[data-testid="settings-tab-about"]';
+  readonly settingsPage = '[data-testid="settings-page"]';
+  readonly generalSection = '[data-testid="settings-section-general"]';
+  readonly updatesSection = '[data-testid="settings-section-updates"]';
+  readonly aboutSection = '[data-testid="settings-section-about"]';
+  readonly runtimeSection = '[data-testid="settings-section-runtime"]';
+  readonly runtimeDiagnostics = '[data-testid="runtime-diagnostics"]';
 
   async verifySettingsLoaded() {
-    await this.waitForElement(this.generalTab);
+    await this.waitForElement(this.settingsPage);
+    await this.waitForElement(this.generalSection);
   }
 }
 

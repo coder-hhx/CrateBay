@@ -10,6 +10,7 @@ pub mod event_names {
     pub const CONTAINER_STATUS_CHANGE: &str = "container:status-change";
     pub const RUNTIME_HEALTH: &str = "runtime:health";
     pub const RUNTIME_PROVISION: &str = "runtime:provision";
+    pub const ENGINE_CONNECTED: &str = "engine:connected";
 }
 
 /// Build a scoped image pull progress event name.

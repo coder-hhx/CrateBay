@@ -1,7 +1,7 @@
 //! CrateBay Core — shared library for all CrateBay binaries.
 //!
 //! This crate contains business logic, storage, runtime management,
-//! and Docker integration. Binary crates (gui, cli) depend on this.
+//! and Engine compatibility integration. Binary crates (gui, cli) depend on this.
 
 pub mod audit;
 pub mod bundle_images;
@@ -15,6 +15,7 @@ pub mod models;
 pub mod pod;
 pub mod proxy;
 pub mod runtime;
+pub mod settings;
 pub mod storage;
 pub mod validation;
 

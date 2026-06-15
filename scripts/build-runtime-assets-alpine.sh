@@ -104,11 +104,12 @@ if command -v rustup >/dev/null 2>&1; then
   cargo_cmd=(rustup run stable cargo)
 fi
 
-echo "== Build CrateBay guest agent (${target_triple}) =="
+echo "== Build CrateBay guest binaries (${target_triple}) =="
 if command -v cargo-zigbuild >/dev/null 2>&1; then
   "${cargo_cmd[@]}" zigbuild --release -p cratebay-guest-agent --target "$target_triple"
+  "${cargo_cmd[@]}" zigbuild --release -p cratebay-engine-adapter --target "$target_triple"
 else
-  echo "ERROR: cargo-zigbuild is required to cross-compile the guest agent." >&2
+  echo "ERROR: cargo-zigbuild is required to cross-compile guest binaries." >&2
   echo "  Install:" >&2
   echo "    brew install zig" >&2
   echo "    rustup target add ${target_triple}" >&2
@@ -124,18 +125,26 @@ fi
 
 cp "$guest_agent_bin" "$tmp_dir/cratebay-guest-agent"
 chmod 0755 "$tmp_dir/cratebay-guest-agent"
+engine_adapter_bin="$repo_root/target/${target_triple}/release/cratebay-engine-adapter"
+if [[ ! -f "$engine_adapter_bin" ]]; then
+  echo "ERROR: engine adapter binary not found: $engine_adapter_bin" >&2
+  exit 1
+fi
+
+cp "$engine_adapter_bin" "$tmp_dir/cratebay-engine-adapter"
+chmod 0755 "$tmp_dir/cratebay-engine-adapter"
 
 echo ""
 echo "== Download runtime kernel+initramfs (${arch}) =="
 release_base="${alpine_mirror}/${alpine_version}/releases/${arch}/netboot"
-curl -fL --retry 3 --retry-delay 1 -o "$tmp_dir/initramfs.gz" "${release_base}/initramfs-${netboot_flavor}"
+curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$tmp_dir/initramfs.gz" "${release_base}/initramfs-${netboot_flavor}"
 if [[ "$arch" == "aarch64" ]]; then
   ubuntu_kernel_url="${ubuntu_cloud_base}/${ubuntu_release}/release/unpacked/ubuntu-${ubuntu_release}-server-cloudimg-arm64-vmlinuz-generic"
-  curl -fL --retry 3 --retry-delay 1 -o "$tmp_dir/ubuntu-vmlinuz.gz" "$ubuntu_kernel_url"
+  curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$tmp_dir/ubuntu-vmlinuz.gz" "$ubuntu_kernel_url"
   gzip -dc "$tmp_dir/ubuntu-vmlinuz.gz" >"$tmp_dir/vmlinuz"
 else
-  curl -fL --retry 3 --retry-delay 1 -o "$tmp_dir/vmlinuz" "${release_base}/vmlinuz-${netboot_flavor}"
-  curl -fL --retry 3 --retry-delay 1 -o "$tmp_dir/modloop" "${release_base}/modloop-${netboot_flavor}"
+  curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$tmp_dir/vmlinuz" "${release_base}/vmlinuz-${netboot_flavor}"
+  curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$tmp_dir/modloop" "${release_base}/modloop-${netboot_flavor}"
 fi
 
 echo ""
@@ -278,6 +287,8 @@ required_modules = [
     "xt_tcpudp",
     "xt_comment",
     "overlay",
+    "fuse",
+    "virtiofs",
     "vsock",
     "vmw_vsock_virtio_transport_common",
     "vmw_vsock_virtio_transport",
@@ -377,13 +388,14 @@ else
 fi
 
 echo ""
-echo "== Resolve Alpine package dependencies (docker-engine + e2fsprogs) =="
+echo "== Resolve Alpine package dependencies (CrateBay containerd engine) =="
 python3 - "$alpine_version" "$arch" >"$tmp_dir/pkglist.txt" <<'PY'
 import io
 import os
 import re
 import sys
 import tarfile
+import time
 import urllib.request
 
 alpine_version = sys.argv[1]
@@ -399,8 +411,19 @@ pkg = {}  # name -> {"repo":..., "ver":..., "deps":[...], "provides":[...]}
 provides = {}  # token -> set(names)
 
 def fetch_index(url: str) -> str:
-    with urllib.request.urlopen(url) as resp:
-        data = resp.read()
+    last_error = None
+    for attempt in range(1, 6):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                data = resp.read()
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt == 5:
+                raise
+            time.sleep(min(2 ** attempt, 10))
+    else:
+        raise last_error
     tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
     raw = tf.extractfile("APKINDEX").read()
     return raw.decode("utf-8", "replace")
@@ -442,7 +465,7 @@ def resolve(tok: str):
         return sorted(provides[t])[0]
     return None
 
-roots = ["docker-engine", "e2fsprogs", "containerd-ctr"]
+roots = ["containerd", "containerd-ctr", "runc", "cni-plugins", "iptables", "iptables-legacy", "iproute2", "e2fsprogs", "e2fsprogs-extra"]
 want = set()
 stack = list(roots)
 
@@ -475,7 +498,7 @@ download_apk() {
   local version="$3"
   local out="$4"
   local url="${alpine_mirror}/${alpine_version}/${repo}/${arch}/${name}-${version}.apk"
-  curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"
+  curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$out" "$url"
 }
 
 echo ""
@@ -488,10 +511,12 @@ while IFS='|' read -r repo name version; do
 done <"$tmp_dir/pkglist.txt"
 
 echo ""
-echo "== Install cratebay-guest-agent into initramfs =="
+echo "== Install CrateBay guest binaries into initramfs =="
 mkdir -p "$tmp_dir/initrd-root/usr/local/bin"
 cp "$tmp_dir/cratebay-guest-agent" "$tmp_dir/initrd-root/usr/local/bin/cratebay-guest-agent"
 chmod 0755 "$tmp_dir/initrd-root/usr/local/bin/cratebay-guest-agent"
+cp "$tmp_dir/cratebay-engine-adapter" "$tmp_dir/initrd-root/usr/local/bin/cratebay-engine-adapter"
+chmod 0755 "$tmp_dir/initrd-root/usr/local/bin/cratebay-engine-adapter"
 
 echo ""
 echo "== Write udhcpc DHCP script =="
@@ -573,6 +598,14 @@ set -eu
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# BusyBox applet links can shadow iproute2 in PATH. CrateBay pod networking
+# needs `ip netns`, so point the adapter at the full iproute2 binary.
+if [ -x /sbin/ip ]; then
+  export CRATEBAY_IP=/sbin/ip
+elif [ -x /usr/sbin/ip ]; then
+  export CRATEBAY_IP=/usr/sbin/ip
+fi
+
 # Alpine netboot initramfs ships BusyBox without applet symlinks (only /bin/sh).
 # Install symlinks so commands like `mkdir`/`mount` are available.
 if [ -x /bin/busybox ]; then
@@ -582,7 +615,7 @@ if [ -x /bin/busybox ]; then
   /bin/busybox --install -s /usr/sbin >/dev/null 2>&1 || true
 fi
 
-# Provide a stable /etc/os-release so Docker can report OS info.
+# Provide a stable /etc/os-release so the compatibility API can report OS info.
 mkdir -p /etc /usr/lib
 if [ ! -f /etc/os-release ]; then
   cat >/etc/os-release <<'EOF'
@@ -616,7 +649,7 @@ cmdline_value() {
 
 log "booting..."
 
-mkdir -p /proc /sys /dev /run /tmp /var /var/lib /var/lib/docker /sys/fs/cgroup
+mkdir -p /proc /sys /dev /run /tmp /var /var/lib /var/lib/cratebay-engine /sys/fs/cgroup
 
 mount -t proc proc /proc || true
 mount -t sysfs sysfs /sys || true
@@ -641,8 +674,8 @@ fi
 
 # Try loading common virtio/kernel modules (ok if built-in).
 #
-# NOTE: Docker networking requires bridge + veth + netfilter/NAT modules on
-# some kernels. We load a broad set best-effort to reduce "dockerd starts but
+# NOTE: Container networking requires bridge + veth + netfilter/NAT modules on
+# some kernels. We load a broad set best-effort to reduce "engine starts but
 # exits early" scenarios on minimal netboot kernels.
 if [ -f /etc/cratebay-kmods.list ]; then
   while IFS= read -r module_path; do
@@ -653,6 +686,7 @@ if [ -f /etc/cratebay-kmods.list ]; then
 fi
 for m in \
   virtio_pci virtio_blk virtio_net virtio_vsock vmw_vsock_virtio_transport vsock \
+  fuse virtiofs \
   overlay bridge veth br_netfilter \
   nf_tables nf_tables_inet nf_tables_ipv4 nf_tables_ipv6 nf_tables_bridge nft_compat nft_chain_nat nft_ct nft_counter \
   nf_conntrack nf_nat ip_tables iptable_nat iptable_filter iptable_mangle iptable_raw x_tables \
@@ -668,7 +702,7 @@ else
   log "WARN: vsock: /proc/net/vsock missing"
 fi
 
-# cgroup v2 setup (required for modern Docker).
+# cgroup v2 setup (required for the CrateBay containerd engine).
 if mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null; then
   if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     mkdir -p /sys/fs/cgroup/init
@@ -737,14 +771,37 @@ if [ -n "$iface" ]; then
   fi
 fi
 
-# Prepare persistent disk (/dev/vda) for Docker data-root.
+# Prepare persistent disk (/dev/vda) for CrateBay engine state.
 if [ -b /dev/vda ]; then
-  mkdir -p /var/lib/docker
-  if ! mount -t ext4 -o rw,noatime /dev/vda /var/lib/docker 2>/dev/null; then
+  mkdir -p /var/lib/cratebay-engine
+  /sbin/e2fsck -pf /dev/vda >/dev/null 2>&1 || true
+  /usr/sbin/resize2fs /dev/vda >/dev/null 2>&1 || true
+  if ! mount -t ext4 -o rw,noatime /dev/vda /var/lib/cratebay-engine 2>/dev/null; then
     log "formatting /dev/vda as ext4 (first boot)"
     mkfs.ext4 -F /dev/vda >/dev/null 2>&1 || mkfs.ext4 /dev/vda >/dev/null 2>&1 || true
-    mount -t ext4 -o rw,noatime /dev/vda /var/lib/docker 2>/dev/null || true
+    mount -t ext4 -o rw,noatime /dev/vda /var/lib/cratebay-engine 2>/dev/null || true
   fi
+fi
+
+# Mount host shares passed by the macOS VZ runner. CrateBay shares /Users by
+# default so Docker/Compose bind mounts such as /Users/me/project:/workspace
+# resolve inside the guest VM.
+modprobe fuse >/tmp/cratebay-modprobe-fuse.log 2>&1 || true
+modprobe virtiofs >/tmp/cratebay-modprobe-virtiofs.log 2>&1 || true
+if grep -qw virtiofs /proc/filesystems 2>/dev/null; then
+  log "virtiofs=available"
+  mkdir -p /Users
+  if mountpoint -q /Users 2>/dev/null; then
+    log "mounted_share=Users:/Users already"
+  elif mount_output="$(mount -t virtiofs Users /Users 2>&1)"; then
+    log "mounted_share=Users:/Users"
+  else
+    log "WARN: failed to mount virtiofs share Users:/Users: ${mount_output}"
+  fi
+else
+  fuse_err="$(tr '\n' ';' </tmp/cratebay-modprobe-fuse.log 2>/dev/null || true)"
+  virtiofs_err="$(tr '\n' ';' </tmp/cratebay-modprobe-virtiofs.log 2>/dev/null || true)"
+  log "WARN: virtiofs filesystem unavailable; fuse_modprobe=${fuse_err}; virtiofs_modprobe=${virtiofs_err}"
 fi
 
 # Ensure CA bundle exists (generated by the package's triggers on a real install).
@@ -752,18 +809,38 @@ if command -v update-ca-certificates >/dev/null 2>&1; then
   update-ca-certificates >/dev/null 2>&1 || true
 fi
 
-log "starting dockerd..."
-# Best-effort sysctls commonly required for Docker networking.
+log "starting CrateBay containerd engine..."
+# Best-effort sysctls commonly required for container networking.
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 sysctl -w net.bridge.bridge-nf-call-iptables=1 >/dev/null 2>&1 || true
 sysctl -w net.bridge.bridge-nf-call-ip6tables=1 >/dev/null 2>&1 || true
+if command -v iptables-legacy >/dev/null 2>&1; then
+  ln -sf "$(command -v iptables-legacy)" /sbin/iptables
+  ln -sf "$(command -v iptables-legacy-save)" /sbin/iptables-save 2>/dev/null || true
+  ln -sf "$(command -v iptables-legacy-restore)" /sbin/iptables-restore 2>/dev/null || true
+  log "iptables_backend=legacy"
+fi
+if command -v ip6tables-legacy >/dev/null 2>&1; then
+  ln -sf "$(command -v ip6tables-legacy)" /sbin/ip6tables
+  ln -sf "$(command -v ip6tables-legacy-save)" /sbin/ip6tables-save 2>/dev/null || true
+  ln -sf "$(command -v ip6tables-legacy-restore)" /sbin/ip6tables-restore 2>/dev/null || true
+fi
 
 runtime_http_proxy="$(cmdline_value cratebay_http_proxy || true)"
-docker_proxy_port="$(cmdline_value cratebay_docker_proxy_port || true)"
-if [ -z "$docker_proxy_port" ]; then
-  docker_proxy_port="${CRATEBAY_DOCKER_PROXY_PORT:-${CRATEBAY_DOCKER_VSOCK_PORT:-6237}}"
+runtime_engine="$(cmdline_value cratebay_runtime_engine || true)"
+if [ -z "$runtime_engine" ]; then
+  runtime_engine=containerd
 fi
-docker_api_port="${CRATEBAY_GUEST_DOCKER_API_PORT:-2375}"
+if [ "$runtime_engine" != "containerd" ]; then
+  log "WARN: unsupported cratebay_runtime_engine=${runtime_engine}; falling back to containerd"
+fi
+engine_proxy_port="$(cmdline_value cratebay_engine_proxy_port || true)"
+if [ -z "$engine_proxy_port" ]; then
+  engine_proxy_port="$(cmdline_value cratebay_docker_proxy_port || true)"
+fi
+if [ -z "$engine_proxy_port" ]; then
+  engine_proxy_port="${CRATEBAY_ENGINE_PROXY_PORT:-${CRATEBAY_ENGINE_VSOCK_PORT:-${CRATEBAY_DOCKER_PROXY_PORT:-${CRATEBAY_DOCKER_VSOCK_PORT:-6237}}}}"
+fi
 if [ -n "$runtime_http_proxy" ]; then
   export HTTP_PROXY="http://${runtime_http_proxy}"
   export HTTPS_PROXY="http://${runtime_http_proxy}"
@@ -771,59 +848,113 @@ if [ -n "$runtime_http_proxy" ]; then
   export https_proxy="$HTTPS_PROXY"
   export NO_PROXY="127.0.0.1,localhost,::1"
   export no_proxy="$NO_PROXY"
-  log "docker_proxy=${HTTP_PROXY}"
+  log "engine_proxy=${HTTP_PROXY}"
 fi
-export DOCKER_RAMDISK=1
 
-mkdir -p /etc/docker
-daemon_config=/etc/docker/daemon.json
-if [ -n "$runtime_http_proxy" ]; then
-  cat >"$daemon_config" <<EOF
+engine_root=/var/lib/cratebay-engine
+containerd_root="${engine_root}/containerd"
+containerd_state=/run/containerd
+containerd_sock="${containerd_state}/containerd.sock"
+adapter_sock=/run/cratebay/engine.sock
+legacy_adapter_sock=/run/cratebay/docker.sock
+cratebay_namespace="${CRATEBAY_CONTAINERD_NAMESPACE:-cratebay}"
+mkdir -p "$containerd_root" "$engine_root/tmp" "$containerd_state" /run/cratebay /etc/containerd /etc/cni/net.d /var/lib/cni
+chmod 1777 "$engine_root/tmp" || true
+export TMPDIR="$engine_root/tmp"
+
+cat >/etc/containerd/config.toml <<EOF
+version = 2
+root = "$containerd_root"
+state = "$containerd_state"
+
+[grpc]
+  address = "$containerd_sock"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+  NoPivotRoot = true
+EOF
+
+cat >/etc/cni/net.d/10-cratebay.conflist <<'EOF'
 {
-  "proxies": {
-    "http-proxy": "http://${runtime_http_proxy}",
-    "https-proxy": "http://${runtime_http_proxy}",
-    "no-proxy": "127.0.0.1,localhost,::1"
-  }
+  "cniVersion": "1.0.0",
+  "name": "cratebay",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "cratebay0",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [[{ "subnet": "10.88.0.0/16" }]],
+        "routes": [{ "dst": "0.0.0.0/0" }]
+      }
+    },
+    {
+      "type": "firewall"
+    }
+  ]
 }
 EOF
-else
-  printf '{}\n' >"$daemon_config"
-fi
 
-set -- dockerd \
-  --config-file="$daemon_config" \
-  --host=unix:///var/run/docker.sock \
-  --host="tcp://127.0.0.1:${docker_api_port}" \
-  --tls=false \
-  --data-root=/var/lib/docker
-"$@" &
-dockerd_pid="$!"
+if command -v containerd >/dev/null 2>&1; then
+  containerd \
+    --config /etc/containerd/config.toml \
+    --address "$containerd_sock" \
+    --root "$containerd_root" \
+    --state "$containerd_state" &
+  containerd_pid="$!"
+else
+  containerd_pid=""
+  log "ERROR: containerd binary is missing"
+fi
 
 for _ in $(seq 1 400); do
-  [ -S /var/run/docker.sock ] && break
+  [ -S "$containerd_sock" ] && break
   sleep 0.05
 done
-if ! kill -0 "$dockerd_pid" >/dev/null 2>&1; then
-  log "ERROR: dockerd exited early"
-elif [ ! -S /var/run/docker.sock ]; then
-  log "ERROR: dockerd did not create /var/run/docker.sock"
+if [ -n "$containerd_pid" ] && ! kill -0 "$containerd_pid" >/dev/null 2>&1; then
+  log "ERROR: containerd exited early"
+elif [ ! -S "$containerd_sock" ]; then
+  log "ERROR: containerd did not create $containerd_sock"
 fi
 
-# Best-effort: log containerd version for troubleshooting.
-if command -v ctr >/dev/null 2>&1; then
-  for sock in /var/run/docker/containerd/containerd.sock /run/containerd/containerd.sock; do
-    if [ -S "$sock" ]; then
-      log "ctr version (address=$sock)"
-      ctr --address "$sock" version 2>&1 | head -n 5 || true
-    fi
-  done
+if command -v ctr >/dev/null 2>&1 && [ -S "$containerd_sock" ]; then
+  log "ctr version (address=$containerd_sock)"
+  ctr --address "$containerd_sock" version 2>&1 | head -n 8 || true
+fi
+
+if [ -x /usr/local/bin/cratebay-engine-adapter ]; then
+  log "starting cratebay-engine-adapter (${adapter_sock} -> ${containerd_sock})"
+  CRATEBAY_CONTAINERD_SOCKET="$containerd_sock" \
+  CRATEBAY_CONTAINERD_NAMESPACE="$cratebay_namespace" \
+    /usr/local/bin/cratebay-engine-adapter \
+      --socket "$adapter_sock" \
+      --containerd-sock "$containerd_sock" \
+      --namespace "$cratebay_namespace" &
+  adapter_pid="$!"
+else
+  adapter_pid=""
+  log "ERROR: cratebay-engine-adapter is missing"
+fi
+
+for _ in $(seq 1 400); do
+  [ -S "$adapter_sock" ] && break
+  sleep 0.05
+done
+if [ -n "$adapter_pid" ] && ! kill -0 "$adapter_pid" >/dev/null 2>&1; then
+  log "ERROR: cratebay-engine-adapter exited early"
+elif [ ! -S "$adapter_sock" ]; then
+  log "ERROR: cratebay-engine-adapter did not create $adapter_sock"
+fi
+if [ -S "$adapter_sock" ]; then
+  ln -sf "$adapter_sock" "$legacy_adapter_sock" 2>/dev/null || true
 fi
 
 if [ -x /usr/local/bin/cratebay-guest-agent ]; then
   if [ -e /proc/net/vsock ]; then
-    log "starting cratebay-guest-agent (vsock -> /var/run/docker.sock)"
-    /usr/local/bin/cratebay-guest-agent --port "${docker_proxy_port}" --docker-sock /var/run/docker.sock &
+    log "starting cratebay-guest-agent (vsock -> ${adapter_sock})"
+    /usr/local/bin/cratebay-guest-agent --port "${engine_proxy_port}" --engine-sock "$adapter_sock" &
     agent_pid="$!"
   else
     agent_pid=""
@@ -837,19 +968,26 @@ if [ -x /usr/local/bin/cratebay-guest-agent ]; then
   # the host IP since VZ NAT routes through it.
   agent_connect_target="$(cmdline_value cratebay_agent_connect || true)"
   if [ -z "$agent_connect_target" ] && [ ! -e /proc/net/vsock ] && [ -n "$default_gw" ]; then
-    agent_connect_target="${default_gw}:${docker_proxy_port}"
+    agent_connect_target="${default_gw}:${engine_proxy_port}"
   fi
   if [ -n "$agent_connect_target" ]; then
-    log "starting cratebay-guest-agent (tcp connect ${agent_connect_target} -> 127.0.0.1:${docker_api_port})"
-    /usr/local/bin/cratebay-guest-agent --connect "${agent_connect_target}" --docker-host-tcp "127.0.0.1:${docker_api_port}" &
+    agent_connect_pool_size="$(cmdline_value cratebay_agent_connect_pool_size || true)"
+    if [ -z "$agent_connect_pool_size" ]; then
+      agent_connect_pool_size=32
+    fi
+    log "starting cratebay-guest-agent (tcp connect ${agent_connect_target} -> ${adapter_sock}, pool=${agent_connect_pool_size})"
+    /usr/local/bin/cratebay-guest-agent \
+      --connect "${agent_connect_target}" \
+      --connect-pool-size "${agent_connect_pool_size}" \
+      --engine-sock "$adapter_sock" &
     agent_connect_pid="$!"
   else
     agent_connect_pid=""
   fi
 
   # Also start TCP listen agent as fallback (e.g. for QEMU hostfwd or direct access).
-  log "starting cratebay-guest-agent (tcp listen ${docker_proxy_port} -> 127.0.0.1:${docker_api_port})"
-  /usr/local/bin/cratebay-guest-agent --tcp --port "${docker_proxy_port}" --docker-host-tcp "127.0.0.1:${docker_api_port}" &
+  log "starting cratebay-guest-agent (tcp listen ${engine_proxy_port} -> ${adapter_sock})"
+  /usr/local/bin/cratebay-guest-agent --tcp --port "${engine_proxy_port}" --engine-sock "$adapter_sock" &
   agent_tcp_pid="$!"
 
   sleep 0.2

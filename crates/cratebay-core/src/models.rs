@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::runtime::RuntimeEngineStatus;
+
 // ---------------------------------------------------------------------------
 // Container models
 // ---------------------------------------------------------------------------
 
-/// Container information returned from Docker API.
+/// Container information returned from CrateBay Engine or its compatibility API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerInfo {
@@ -71,6 +73,7 @@ pub struct ContainerCreateRequest {
     pub auto_start: Option<bool>,
     pub labels: Option<HashMap<String, String>>,
     pub template_id: Option<String>,
+    pub registry_mirrors: Option<Vec<String>>,
 }
 
 /// Request to run a one-shot container and collect its output.
@@ -82,6 +85,7 @@ pub struct ContainerRunRequest {
     pub entrypoint: Option<String>,
     pub command: Vec<String>,
     pub env: Option<Vec<String>>,
+    pub ports: Option<Vec<PortMapping>>,
     pub volumes: Option<Vec<VolumeMount>>,
     pub cpu_cores: Option<u32>,
     pub memory_mb: Option<u64>,
@@ -94,6 +98,7 @@ pub struct ContainerRunRequest {
     pub remove: bool,
     pub timeout_secs: Option<u64>,
     pub max_output_bytes: Option<u64>,
+    pub registry_mirrors: Option<Vec<String>>,
 }
 
 /// Result of a one-shot container run.
@@ -189,17 +194,20 @@ pub struct ContainerStats {
     pub memory_percent: f64,
 }
 
-/// Docker image information.
+/// OCI image information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DockerImageInfo {
+pub struct ImageInfo {
     pub id: String,
     pub repo_tags: Vec<String>,
     pub size: i64,
     pub created: i64,
 }
 
-/// Docker local image info for the Images page.
+/// Compatibility alias for older callers.
+pub type DockerImageInfo = ImageInfo;
+
+/// Local image info for the Images page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalImageInfo {
@@ -212,7 +220,7 @@ pub struct LocalImageInfo {
     pub created: i64,
 }
 
-/// Docker registry search result.
+/// Registry image search result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageSearchResult {
@@ -224,7 +232,7 @@ pub struct ImageSearchResult {
     pub official: bool,
 }
 
-/// Docker image inspection info.
+/// Image inspection info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInspectInfo {
@@ -248,7 +256,7 @@ pub struct PodContainerInfo {
     pub ipv6_address: Option<String>,
 }
 
-/// Pod / group information backed by a Docker network.
+/// Pod / group information backed by a CrateBay Engine network.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PodInfo {
@@ -327,18 +335,26 @@ impl AuditAction {
     }
 }
 
-/// Docker connection status.
+/// CrateBay Engine compatibility endpoint status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DockerStatus {
+pub struct EngineEndpointStatus {
     pub connected: bool,
     pub version: Option<String>,
     pub api_version: Option<String>,
     pub os: Option<String>,
     pub arch: Option<String>,
+    pub engine_source: String,
+    /// Compatibility alias for older frontend and automation clients.
     pub source: String,
     pub socket_path: Option<String>,
 }
+
+/// Compatibility alias for older frontend and automation clients.
+///
+/// Field names stay Docker-shaped in some payloads for compatibility. They
+/// describe CrateBay Engine's compatibility API, not the runtime backend.
+pub type DockerStatus = EngineEndpointStatus;
 
 // ---------------------------------------------------------------------------
 // Runtime / System models
@@ -377,8 +393,23 @@ pub struct RuntimeStatusInfo {
     pub cpu_cores: u32,
     pub memory_mb: u64,
     pub disk_gb: f32,
-    /// Whether Docker inside the runtime is responsive.
+    /// Whether the native CrateBay Engine path is responsive.
+    pub engine_responsive: bool,
+    /// Whether the CrateBay Engine compatibility endpoint is responsive.
+    pub compatibility_responsive: bool,
+    /// CrateBay Engine compatibility endpoint version, when available.
+    pub compatibility_version: Option<String>,
+    /// Which runtime source backs this status.
+    pub engine_source: Option<String>,
+    /// Compatibility alias for older frontend and automation clients.
+    pub docker_source: Option<String>,
+    /// Whether the CrateBay Engine compatibility endpoint is responsive.
+    ///
+    /// Kept for older frontend and automation clients. Prefer
+    /// `engineResponsive` or `compatibilityResponsive`.
     pub docker_responsive: bool,
+    /// Underlying CrateBay engine metadata.
+    pub engine: RuntimeEngineStatus,
     pub uptime_seconds: Option<u64>,
     pub resource_usage: Option<ResourceUsage>,
 }

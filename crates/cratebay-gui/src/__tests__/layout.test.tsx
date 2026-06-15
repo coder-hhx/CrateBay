@@ -43,6 +43,7 @@ describe("AppLayout", () => {
       currentPage: "containers",
       sidebarOpen: true,
       sidebarWidth: 260,
+      engineConnected: false,
       dockerConnected: false,
       runtimeStatus: "stopped",
       theme: "dark",
@@ -79,6 +80,10 @@ describe("AppLayout", () => {
     expect(containerElements.length).toBeGreaterThanOrEqual(1);
     const settingsElements = screen.getAllByText("Settings");
     expect(settingsElements.length).toBeGreaterThanOrEqual(1);
+    const volumesElements = screen.getAllByText("Volumes");
+    expect(volumesElements.length).toBeGreaterThanOrEqual(1);
+    const networksElements = screen.getAllByText("Networks");
+    expect(networksElements.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -92,6 +97,9 @@ describe("Sidebar", () => {
       currentPage: "containers",
       sidebarOpen: true,
       sidebarWidth: 260,
+      engineConnected: false,
+      dockerConnected: false,
+      runtimeStatus: "stopped",
     });
   });
 
@@ -104,6 +112,8 @@ describe("Sidebar", () => {
 
     expect(screen.getByText("Containers")).toBeInTheDocument();
     expect(screen.getByText("Images")).toBeInTheDocument();
+    expect(screen.getByText("Volumes")).toBeInTheDocument();
+    expect(screen.getByText("Networks")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
@@ -122,6 +132,12 @@ describe("Sidebar", () => {
 
     fireEvent.click(screen.getByText("Images"));
     expect(useAppStore.getState().currentPage).toBe("images");
+
+    fireEvent.click(screen.getByText("Volumes"));
+    expect(useAppStore.getState().currentPage).toBe("volumes");
+
+    fireEvent.click(screen.getByText("Networks"));
+    expect(useAppStore.getState().currentPage).toBe("networks");
   });
 });
 
@@ -172,6 +188,7 @@ describe("StatusBar", () => {
   beforeEach(() => {
     resetLocale();
     useAppStore.setState({
+      engineConnected: false,
       dockerConnected: false,
       runtimeStatus: "stopped",
     });
@@ -182,16 +199,23 @@ describe("StatusBar", () => {
     expect(screen.getByText("Not Connected")).toBeInTheDocument();
   });
 
-  it("shows engine ready when docker connected", () => {
-    useAppStore.setState({ dockerConnected: true, runtimeStatus: "running" });
+  it("shows engine ready when native engine is connected", () => {
+    useAppStore.setState({ engineConnected: true, dockerConnected: true, runtimeStatus: "running" });
     render(<StatusBar />);
     expect(screen.getByText("Engine Ready")).toBeInTheDocument();
   });
 
-  it("shows engine ready when docker connected regardless of runtimeStatus", () => {
-    useAppStore.setState({ dockerConnected: true, runtimeStatus: "stopped" });
+  it("shows engine ready when native engine is connected regardless of runtimeStatus", () => {
+    useAppStore.setState({ engineConnected: true, dockerConnected: true, runtimeStatus: "stopped" });
     render(<StatusBar />);
     expect(screen.getByText("Engine Ready")).toBeInTheDocument();
+  });
+
+  it("does not show native engine ready for a compatibility-only endpoint", () => {
+    useAppStore.setState({ engineConnected: false, dockerConnected: true, runtimeStatus: "starting" });
+    render(<StatusBar />);
+    expect(screen.queryByText("Engine Ready")).not.toBeInTheDocument();
+    expect(screen.getByText("Engine Starting...")).toBeInTheDocument();
   });
 
   it("shows starting when runtime is starting", () => {

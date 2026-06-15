@@ -28,19 +28,22 @@ describe("runtime:health handling", () => {
       currentPage: "images",
       sidebarOpen: true,
       sidebarWidth: 260,
+      engineConnected: true,
       dockerConnected: true,
       runtimeStatus: "running",
+      builtinRuntimeReady: true,
       theme: "dark",
     });
     mockInvokeResponses({
-      docker_status: {
+      engine_status: {
         connected: true,
-        source: "runtime",
+        engine_source: "builtin",
+        source: "builtin",
         version: "25.0.0",
         api_version: "1.44",
         os: "linux",
         arch: "arm64",
-        socket_path: "/tmp/docker.sock",
+        socket_path: "/tmp/cratebay/engine.sock",
       },
       runtime_status: {
         state: "ready",
@@ -48,6 +51,8 @@ describe("runtime:health handling", () => {
         cpu_cores: 2,
         memory_mb: 2048,
         disk_gb: 20,
+        engine_responsive: true,
+        compatibility_responsive: true,
         docker_responsive: true,
         uptime_seconds: null,
         resource_usage: null,
@@ -86,6 +91,7 @@ describe("runtime:health handling", () => {
     });
 
     expect(useAppStore.getState().runtimeStatus).toBe("running");
+    expect(useAppStore.getState().engineConnected).toBe(true);
     expect(useAppStore.getState().dockerConnected).toBe(true);
   });
 
@@ -108,6 +114,8 @@ describe("runtime:health handling", () => {
     await act(async () => {
       runtimeHealthHandler?.({
         runtime_state: "Ready",
+        engine_responsive: true,
+        compatibility_responsive: true,
         docker_responsive: true,
         docker_version: "25.0.0",
         uptime_seconds: 10,
@@ -128,6 +136,7 @@ describe("runtime:health handling", () => {
     });
 
     expect(useAppStore.getState().runtimeStatus).toBe("starting");
+    expect(useAppStore.getState().engineConnected).toBe(false);
     expect(useAppStore.getState().dockerConnected).toBe(false);
   });
 
@@ -142,7 +151,11 @@ describe("runtime:health handling", () => {
       }) as any,
     );
 
-    useAppStore.setState({ runtimeStatus: "starting", dockerConnected: false });
+    useAppStore.setState({
+      runtimeStatus: "starting",
+      engineConnected: false,
+      dockerConnected: false,
+    });
 
     render(<App />);
     await act(async () => {
@@ -152,6 +165,8 @@ describe("runtime:health handling", () => {
     await act(async () => {
       runtimeHealthHandler?.({
         runtime_state: "Ready",
+        engine_responsive: true,
+        compatibility_responsive: true,
         docker_responsive: true,
         docker_version: "25.0.0",
         uptime_seconds: 10,
@@ -160,6 +175,223 @@ describe("runtime:health handling", () => {
     });
 
     expect(useAppStore.getState().runtimeStatus).toBe("running");
+    expect(useAppStore.getState().engineConnected).toBe(true);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
+  });
+
+  it("accepts native health events without legacy compatibility aliases", async () => {
+    let runtimeHealthHandler: ((payload: unknown) => void) | null = null;
+    mockListen.mockImplementation(
+      ((event: string, handler: (payload: unknown) => void) => {
+        if (event === "runtime:health") {
+          runtimeHealthHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      }) as any,
+    );
+
+    useAppStore.setState({
+      runtimeStatus: "starting",
+      engineConnected: false,
+      dockerConnected: false,
+      builtinRuntimeReady: false,
+    });
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      runtimeHealthHandler?.({
+        runtime_state: "Ready",
+        engine_responsive: true,
+        engine_source: "builtin",
+        uptime_seconds: 10,
+        last_check: new Date().toISOString(),
+      });
+    });
+
+    expect(useAppStore.getState().runtimeStatus).toBe("running");
+    expect(useAppStore.getState().engineConnected).toBe(true);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
+    expect(useAppStore.getState().builtinRuntimeReady).toBe(true);
+  });
+
+  it("accepts camelCase runtime health event fields", async () => {
+    let runtimeHealthHandler: ((payload: unknown) => void) | null = null;
+    mockListen.mockImplementation(
+      ((event: string, handler: (payload: unknown) => void) => {
+        if (event === "runtime:health") {
+          runtimeHealthHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      }) as any,
+    );
+
+    useAppStore.setState({
+      runtimeStatus: "starting",
+      engineConnected: false,
+      dockerConnected: false,
+      builtinRuntimeReady: false,
+    });
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      runtimeHealthHandler?.({
+        runtimeState: "Ready",
+        engineResponsive: true,
+        engineSource: "builtin",
+        compatibilityResponsive: false,
+        uptimeSeconds: 10,
+        lastCheck: new Date().toISOString(),
+      });
+    });
+
+    expect(useAppStore.getState().runtimeStatus).toBe("running");
+    expect(useAppStore.getState().engineConnected).toBe(true);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
+    expect(useAppStore.getState().builtinRuntimeReady).toBe(true);
+  });
+
+  it("does not promote compatibility source to built-in runtime readiness", async () => {
+    let runtimeHealthHandler: ((payload: unknown) => void) | null = null;
+    mockListen.mockImplementation(
+      ((event: string, handler: (payload: unknown) => void) => {
+        if (event === "runtime:health") {
+          runtimeHealthHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      }) as any,
+    );
+
+    useAppStore.setState({
+      runtimeStatus: "starting",
+      engineConnected: false,
+      dockerConnected: false,
+      builtinRuntimeReady: false,
+    });
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      runtimeHealthHandler?.({
+        runtime_state: "Ready",
+        engine_responsive: true,
+        compatibility_responsive: true,
+        docker_responsive: true,
+        docker_source: "builtin",
+        docker_version: "25.0.0",
+        uptime_seconds: 10,
+        last_check: new Date().toISOString(),
+      });
+    });
+
+    expect(useAppStore.getState().runtimeStatus).toBe("running");
+    expect(useAppStore.getState().engineConnected).toBe(true);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
+    expect(useAppStore.getState().builtinRuntimeReady).toBe(false);
+  });
+
+  it("keeps native engine disconnected when health only reports compatibility", async () => {
+    let runtimeHealthHandler: ((payload: unknown) => void) | null = null;
+    mockListen.mockImplementation(
+      ((event: string, handler: (payload: unknown) => void) => {
+        if (event === "runtime:health") {
+          runtimeHealthHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      }) as any,
+    );
+
+    useAppStore.setState({
+      runtimeStatus: "starting",
+      engineConnected: false,
+      dockerConnected: false,
+    });
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      runtimeHealthHandler?.({
+        runtime_state: "Starting",
+        engine_responsive: false,
+        compatibility_responsive: true,
+        docker_responsive: true,
+        docker_version: "25.0.0",
+        uptime_seconds: 10,
+        last_check: new Date().toISOString(),
+      });
+    });
+
+    expect(useAppStore.getState().runtimeStatus).toBe("starting");
+    expect(useAppStore.getState().engineConnected).toBe(false);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
+  });
+
+  it("does not use compatibility-only connectivity for downgrade grace", async () => {
+    let runtimeHealthHandler: ((payload: unknown) => void) | null = null;
+    mockListen.mockImplementation(
+      ((event: string, handler: (payload: unknown) => void) => {
+        if (event === "runtime:health") {
+          runtimeHealthHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      }) as any,
+    );
+
+    useAppStore.setState({
+      runtimeStatus: "running",
+      engineConnected: false,
+      dockerConnected: true,
+    });
+
+    mockInvokeResponses({
+      engine_status: {
+        connected: true,
+        version: "25.0.0",
+        api_version: "1.44",
+        os: "linux",
+        arch: "arm64",
+        socket_path: "/tmp/cratebay/engine.sock",
+      },
+      runtime_status: {
+        state: "starting",
+        engine_responsive: false,
+        compatibility_responsive: true,
+        docker_responsive: true,
+      },
+    });
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      runtimeHealthHandler?.({
+        runtime_state: "Starting",
+        engine_responsive: false,
+        compatibility_responsive: true,
+        docker_responsive: true,
+        docker_version: "25.0.0",
+        uptime_seconds: 10,
+        last_check: new Date().toISOString(),
+      });
+    });
+
+    expect(useAppStore.getState().runtimeStatus).toBe("starting");
+    expect(useAppStore.getState().engineConnected).toBe(false);
     expect(useAppStore.getState().dockerConnected).toBe(true);
   });
 });

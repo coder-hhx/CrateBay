@@ -3,7 +3,7 @@ name = "cratebay-guest-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Guest-side agent for CrateBay Runtime (vsock <-> docker.sock proxy)"
+description = "Guest-side agent for CrateBay Runtime Engine endpoint forwarding"
 
 [[bin]]
 name = "cratebay-guest-agent"

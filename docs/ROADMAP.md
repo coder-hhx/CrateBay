@@ -10,16 +10,18 @@ Desktop.
   and remove.
 - Keep container lifecycle actions reliable: create, start, stop, delete, exec,
   logs, inspect, and stats.
-- Keep pod grouping reliable through Docker network backed pods.
+- Keep pod grouping reliable through CrateBay Engine managed networks.
+- Keep persistent volume management available in both CLI and desktop.
+- Keep managed network lifecycle available in both CLI and desktop.
 - Keep the CLI and runtime usable without the desktop app.
 - Keep bundled development images loadable from the app bundle.
 
 ## Desktop
 
-- Keep first-level navigation to Containers, Images, and Settings.
-- Keep Pods as a secondary tab under Containers.
+- Keep first-level navigation to Dashboard, Containers, Images, Pods, Volumes,
+  Networks, and Settings.
 - Keep polished import/export and pack-container controls in the Images view.
-- Keep Pods visible as a first-class grouping view inside Containers, not a hidden filter.
+- Keep Pods, Volumes, and Networks visible as first-class resource views, not hidden filters.
 - Keep runtime health visible without making runtime management the whole app.
 
 ## Runtime

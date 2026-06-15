@@ -1,7 +1,7 @@
 //! Linux runtime — KVM/QEMU integration.
 //!
 //! Uses KVM-accelerated QEMU to run a lightweight Linux VM
-//! with Docker Engine inside.
+//! with CrateBay Engine inside.
 //!
 //! # Architecture (runtime-spec.md §2.2)
 //!
@@ -17,16 +17,16 @@
 //! │               ├── -netdev user (hostfwd Docker port)
 //! │               └── -serial file:console.log
 //! │                   └── Alpine Linux
-//! │                       └── Docker Engine
-//! │                           └── Exposed via TCP port forwarding
+//! │                       └── CrateBay Engine
+//! │                           └── Compatibility API exposed via TCP port forwarding
 //! ```
 //!
 //! # Lifecycle
 //!
 //! 1. **provision()** — Install runtime image from bundled assets via `common::ensure_runtime_image_ready()`
-//! 2. **start()** — Spawn daemonized QEMU, write PID file, wait for Docker TCP readiness
+//! 2. **start()** — Spawn daemonized QEMU, write PID file, wait for engine API readiness
 //! 3. **stop()** — SIGTERM → wait → SIGKILL → cleanup PID file
-//! 4. **detect()** — Check KVM, QEMU binary, image files, PID, Docker health
+//! 4. **detect()** — Check KVM, QEMU binary, image files, PID, engine health
 //!
 //! Ported from `master:crates/cratebay-core/src/runtime.rs` (Linux QEMU section)
 //! and adapted for the v2 `RuntimeManager` trait with `AppError` error model.
@@ -51,7 +51,7 @@ use super::{HealthStatus, ProvisionProgress, RuntimeConfig, RuntimeManager, Runt
 /// Grace period for SIGTERM before escalating to SIGKILL.
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
-/// Timeout for Docker to become responsive after QEMU starts.
+/// Timeout for CrateBay Engine to become responsive after QEMU starts.
 const DOCKER_READY_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Number of ping attempts performed in each health check cycle.
@@ -110,13 +110,13 @@ fn kill_process(pid: u32, signal: i32) {
 }
 
 // ---------------------------------------------------------------------------
-// Docker TCP port configuration
+// Engine TCP port configuration
 // ---------------------------------------------------------------------------
 
-/// Docker TCP port exposed by the QEMU VM on the host.
+/// Engine compatibility TCP port exposed by the QEMU VM on the host.
 ///
 /// Override via `CRATEBAY_LINUX_DOCKER_PORT`. Defaults to [`common::DEFAULT_LINUX_DOCKER_PORT`].
-fn linux_docker_port() -> u16 {
+fn linux_engine_port() -> u16 {
     std::env::var("CRATEBAY_LINUX_DOCKER_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
@@ -124,9 +124,19 @@ fn linux_docker_port() -> u16 {
         .unwrap_or(common::DEFAULT_LINUX_DOCKER_PORT)
 }
 
-/// Docker host string: `tcp://127.0.0.1:<port>`.
+/// Compatibility alias for Docker-compatible endpoint callers.
+fn linux_docker_port() -> u16 {
+    linux_engine_port()
+}
+
+/// CrateBay Engine compatibility host string: `tcp://127.0.0.1:<port>`.
+pub fn linux_engine_host() -> String {
+    format!("tcp://127.0.0.1:{}", linux_engine_port())
+}
+
+/// Compatibility alias for Docker-compatible endpoint callers.
 pub fn linux_docker_host() -> String {
-    format!("tcp://127.0.0.1:{}", linux_docker_port())
+    linux_engine_host()
 }
 
 // ---------------------------------------------------------------------------
@@ -307,14 +317,14 @@ fn build_kernel_cmdline() -> String {
 
 /// Check that the Docker TCP port is not already in use by another service.
 fn ensure_host_port_available(host: &str) -> Result<(), AppError> {
-    let (tcp_host, port) = common::docker_host_tcp_endpoint(host)
-        .ok_or_else(|| AppError::Runtime(format!("Invalid Docker host '{}'", host)))?;
+    let (tcp_host, port) = common::engine_host_tcp_endpoint(host)
+        .ok_or_else(|| AppError::Runtime(format!("Invalid Engine host '{}'", host)))?;
 
     std::net::TcpListener::bind((tcp_host.as_str(), port))
         .map(drop)
         .map_err(|error| {
             AppError::Runtime(format!(
-                "Linux runtime Docker host {} is already in use; stop the conflicting service \
+                "Linux runtime Engine host {} is already in use; stop the conflicting service \
              or set CRATEBAY_LINUX_DOCKER_PORT to a different port ({})",
                 host, error
             ))
@@ -325,7 +335,7 @@ fn ensure_host_port_available(host: &str) -> Result<(), AppError> {
 // Disk management
 // ---------------------------------------------------------------------------
 
-/// Ensure the runtime disk image exists (sparse/thin-provisioned 20 GB).
+/// Ensure the runtime disk image exists (sparse/thin-provisioned).
 fn ensure_runtime_disk() -> Result<PathBuf, AppError> {
     let path = runtime_disk_path();
     if let Some(parent) = path.parent() {
@@ -334,7 +344,8 @@ fn ensure_runtime_disk() -> Result<PathBuf, AppError> {
 
     if !path.exists() {
         let file = std::fs::File::create(&path)?;
-        file.set_len(20_u64 * 1024 * 1024 * 1024)?;
+        let disk_gb = RuntimeConfig::default().disk_gb as u64;
+        file.set_len(disk_gb * 1024 * 1024 * 1024)?;
         tracing::info!("Created sparse runtime disk: {}", path.display());
     }
 
@@ -378,7 +389,7 @@ fn tail_console_log() -> String {
 /// Linux runtime manager using KVM/QEMU.
 ///
 /// Manages a lightweight QEMU virtual machine with KVM hardware acceleration
-/// running Alpine Linux + Docker Engine. Docker is exposed to the host via
+/// running Alpine Linux + CrateBay Engine. The compatibility API is exposed to the host via
 /// TCP port forwarding through QEMU's user-mode networking.
 ///
 /// The QEMU process is daemonized (via `-daemonize` flag) with its PID stored
@@ -388,7 +399,7 @@ pub struct LinuxRuntime {
     state: Arc<Mutex<RuntimeState>>,
     /// Timestamp (seconds since epoch) when QEMU was started.
     started_at: Arc<Mutex<Option<i64>>>,
-    /// Number of consecutive health-check cycles with failed Docker ping.
+    /// Number of consecutive health-check cycles with failed engine ping.
     consecutive_health_failures: Arc<Mutex<u8>>,
 }
 
@@ -408,7 +419,7 @@ impl LinuxRuntime {
         for attempt in 0..HEALTH_PING_ATTEMPTS {
             let host_check = host.to_string();
             let responsive = tokio::task::spawn_blocking(move || {
-                common::docker_http_ping_host(&host_check).is_ok()
+                common::engine_http_ping_host(&host_check).is_ok()
             })
             .await
             .unwrap_or(false);
@@ -625,26 +636,23 @@ impl RuntimeManager for LinuxRuntime {
     ///
     /// Checks:
     /// 1. Whether a QEMU process is running (via PID file).
-    /// 2. Whether Docker is responsive (via TCP ping).
+    /// 2. Whether CrateBay Engine is responsive (via TCP ping).
     /// 3. Whether runtime images are provisioned.
     /// 4. KVM and QEMU binary availability.
     async fn get_state(&self) -> Result<RuntimeState, AppError> {
-        let host = linux_docker_host();
-
-        // If QEMU is running, check Docker readiness.
+        // If QEMU is running, check engine readiness.
         if Self::is_running() {
-            let docker_ok =
-                tokio::task::spawn_blocking(move || common::docker_http_ping_host(&host).is_ok())
-                    .await
-                    .unwrap_or(false);
+            let engine_responsive = crate::runtime::query_built_in_ready_engine_status(self)
+                .map(|_| true)
+                .unwrap_or(false);
 
-            if docker_ok {
+            if engine_responsive {
                 let mut state = self.state.lock().await;
                 *state = RuntimeState::Ready;
                 return Ok(RuntimeState::Ready);
             }
 
-            // QEMU running but Docker not responsive — still booting.
+            // QEMU running but CrateBay Engine not responsive — still booting.
             let mut state = self.state.lock().await;
             *state = RuntimeState::Starting;
             return Ok(RuntimeState::Starting);
@@ -805,11 +813,11 @@ impl RuntimeManager for LinuxRuntime {
     /// Start the QEMU VM (§11.2).
     ///
     /// 1. Check prerequisites (images, QEMU binary).
-    /// 2. If already running and Docker responsive, return early.
+    /// 2. If already running and CrateBay Engine responsive, return early.
     /// 3. Stop any existing stale QEMU process.
     /// 4. Check port availability.
     /// 5. Spawn daemonized QEMU with PID file.
-    /// 6. Wait for Docker TCP readiness (45 s timeout).
+    /// 6. Wait for engine API readiness (45 s timeout).
     async fn start(&self) -> Result<(), AppError> {
         // Guard: Check current state.
         {
@@ -827,35 +835,33 @@ impl RuntimeManager for LinuxRuntime {
             }
         }
 
-        let host = linux_docker_host();
+        let host = linux_engine_host();
 
-        // If Docker is already responsive on our port, check if it's our process.
-        let host_check = host.clone();
-        let docker_already_up =
-            tokio::task::spawn_blocking(move || common::docker_http_ping_host(&host_check).is_ok())
-                .await
-                .unwrap_or(false);
+        // If the engine API is already responsive on our port, check if it's our process.
+        let native_already_up = crate::runtime::query_built_in_ready_engine_status(self)
+            .map(|_| true)
+            .unwrap_or(false);
 
-        if docker_already_up {
+        if native_already_up {
             if Self::is_running() {
-                // Our QEMU is already running and Docker is up.
+                // Our QEMU is already running and CrateBay Engine is up.
                 let mut state = self.state.lock().await;
                 *state = RuntimeState::Ready;
                 return Ok(());
             }
             // Port is taken by another service.
             return Err(AppError::Runtime(format!(
-                "Linux runtime Docker host {} is already serving another endpoint; \
+                "Linux runtime engine host {} is already serving another endpoint; \
                  stop the conflicting service or set CRATEBAY_LINUX_DOCKER_PORT to a different port",
                 host
             )));
         }
 
-        // If QEMU is running but Docker isn't ready, give it a short grace period.
+        // If QEMU is running but CrateBay Engine isn't ready, give it a short grace period.
         if Self::is_running() {
             let host_wait = host.clone();
             let wait_result = tokio::task::spawn_blocking(move || {
-                common::wait_for_docker_tcp(&host_wait, Duration::from_secs(5))
+                wait_for_native_engine_contract_tcp(&host_wait, Duration::from_secs(5))
             })
             .await
             .unwrap_or(Err("Task panicked".to_string()));
@@ -866,7 +872,7 @@ impl RuntimeManager for LinuxRuntime {
                 return Ok(());
             }
 
-            // QEMU running but Docker not responsive — kill and restart.
+            // QEMU running but CrateBay Engine not responsive — kill and restart.
             tracing::warn!("Stale QEMU process detected, stopping before restart");
             tokio::task::spawn_blocking(Self::stop_qemu_impl)
                 .await
@@ -905,8 +911,8 @@ impl RuntimeManager for LinuxRuntime {
             .map_err(|e| AppError::Runtime(format!("Disk ensure task panicked: {}", e)))??;
 
         let image_paths = crate::images::image_paths(&image_id);
-        let host_port = linux_docker_port();
-        let guest_port = common::docker_proxy_port();
+        let host_port = linux_engine_port();
+        let guest_port = common::engine_proxy_port();
 
         // Spawn QEMU.
         let qp = qemu_path.clone();
@@ -922,23 +928,26 @@ impl RuntimeManager for LinuxRuntime {
             *started = Some(chrono::Utc::now().timestamp());
         }
 
-        // Wait for Docker to become responsive.
+        // Wait for CrateBay Engine to become responsive.
         let host_wait = host.clone();
         let wait_result = tokio::task::spawn_blocking(move || {
-            common::wait_for_docker_tcp(&host_wait, DOCKER_READY_TIMEOUT)
+            wait_for_native_engine_contract_tcp(&host_wait, DOCKER_READY_TIMEOUT)
         })
         .await
-        .map_err(|e| AppError::Runtime(format!("Docker wait task panicked: {}", e)))?;
+        .map_err(|e| AppError::Runtime(format!("Engine contract wait task panicked: {}", e)))?;
 
         match wait_result {
             Ok(()) => {
                 let mut state = self.state.lock().await;
                 *state = RuntimeState::Ready;
-                tracing::info!("Docker is responsive on {} — Linux runtime is Ready", host);
+                tracing::info!(
+                    "CrateBay Engine API is responsive on {} — Linux runtime is Ready",
+                    host
+                );
                 Ok(())
             }
             Err(error) => {
-                // Docker did not come up. Stop QEMU and report failure.
+                // CrateBay Engine did not come up. Stop QEMU and report failure.
                 let _ = tokio::task::spawn_blocking(Self::stop_qemu_impl).await;
                 let console_tail = tokio::task::spawn_blocking(tail_console_log)
                     .await
@@ -999,13 +1008,17 @@ impl RuntimeManager for LinuxRuntime {
     /// 3. Derive runtime state from health signals.
     async fn health_check(&self) -> Result<HealthStatus, AppError> {
         let vm_running = Self::is_running();
-        let host = linux_docker_host();
+        let host = linux_engine_host();
 
         let (docker_responsive, _) = if vm_running {
             (Self::docker_ping_with_retry(&host).await, None::<String>)
         } else {
             (false, None)
         };
+        let engine_responsive = vm_running
+            && crate::runtime::query_built_in_ready_engine_status(self)
+                .map(|_| true)
+                .unwrap_or(false);
 
         // Calculate uptime.
         let uptime_seconds = if vm_running {
@@ -1024,7 +1037,7 @@ impl RuntimeManager for LinuxRuntime {
             state.clone()
         };
 
-        let runtime_state = if docker_responsive {
+        let runtime_state = if engine_responsive {
             let mut failures = self.consecutive_health_failures.lock().await;
             *failures = 0;
             RuntimeState::Ready
@@ -1062,24 +1075,29 @@ impl RuntimeManager for LinuxRuntime {
 
         Ok(HealthStatus {
             runtime_state,
+            engine_responsive,
+            compatibility_responsive: docker_responsive,
+            compatibility_version: None,
             docker_responsive,
-            docker_version: None, // Would require a full Docker API call
+            docker_version: None, // Would require a full compatibility API call
             uptime_seconds,
             last_check: chrono::Utc::now().to_rfc3339(),
+            engine_source: Some("builtin".to_string()),
             docker_source: Some("builtin".to_string()),
+            engine: crate::runtime::built_in_engine_status(),
         })
     }
 
-    /// Docker socket path (§4.1).
+    /// CrateBay Engine socket path (§4.1).
     ///
     /// On Linux the runtime uses TCP port forwarding, but the trait requires
     /// returning a `PathBuf`. We return a synthetic path that indicates TCP
-    /// mode; the GUI layer should use `linux_docker_host()` for actual connection.
-    fn docker_socket_path(&self) -> PathBuf {
-        // Return the canonical host docker socket path.
+    /// mode; the GUI layer should use `linux_engine_host()` for actual connection.
+    fn engine_socket_path(&self) -> PathBuf {
+        // Return the canonical host Engine socket path.
         // The actual connection goes through TCP, but this provides a
         // consistent path for the trait interface.
-        common::host_docker_socket_path().to_path_buf()
+        common::host_engine_socket_path().to_path_buf()
     }
 
     /// Get current resource usage of the QEMU VM (§7.3).
@@ -1093,15 +1111,8 @@ impl RuntimeManager for LinuxRuntime {
             Some(pid) if pid_alive(pid) => {
                 let cpu_percent = read_proc_cpu_percent(pid).await;
                 let memory_used_mb = read_proc_memory_mb(pid).await;
-
-                // Disk usage: check the runtime disk size.
-                let disk_used_gb = {
-                    let disk = runtime_disk_path();
-                    tokio::fs::metadata(&disk)
-                        .await
-                        .map(|m| m.len() as f32 / (1024.0 * 1024.0 * 1024.0))
-                        .unwrap_or(0.0)
-                };
+                let disk_used_gb = common::file_allocated_gb(&runtime_disk_path());
+                let container_count = linux_container_count(self).await.unwrap_or_default();
 
                 Ok(ResourceUsage {
                     cpu_percent,
@@ -1109,7 +1120,7 @@ impl RuntimeManager for LinuxRuntime {
                     memory_total_mb: self.config.memory_mb,
                     disk_used_gb,
                     disk_total_gb: self.config.disk_gb as f32,
-                    container_count: 0, // Would need Docker API call
+                    container_count,
                 })
             }
             _ => {
@@ -1201,6 +1212,45 @@ async fn read_proc_memory_mb(pid: u32) -> u64 {
     (rss_pages * page_size) / (1024 * 1024)
 }
 
+async fn linux_container_count(runtime: &LinuxRuntime) -> Option<u32> {
+    if let Ok(containers) = crate::runtime::query_built_in_native_containers(runtime) {
+        return Some(containers.count as u32);
+    }
+
+    compatibility_container_count()
+}
+
+fn compatibility_container_count() -> Option<u32> {
+    let payload =
+        common::engine_http_get_json_tcp_host(&linux_engine_host(), "/containers/json?all=true")
+            .ok()?;
+
+    payload.as_array().map(|containers| containers.len() as u32)
+}
+
+fn native_engine_contract_ready_on_host(host: &str) -> Result<(), String> {
+    let payload = common::engine_http_get_json_tcp_host(host, "/cratebay/engine")?;
+    crate::runtime::built_in_engine_contract_ready(&payload).map_err(|error| error.to_string())
+}
+
+fn wait_for_native_engine_contract_tcp(
+    host: &str,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_error = "CrateBay Engine native contract is still starting".to_string();
+
+    while std::time::Instant::now() < deadline {
+        match native_engine_contract_ready_on_host(host) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    Err(last_error)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1214,7 +1264,7 @@ mod tests {
         let rt = LinuxRuntime::new();
         assert_eq!(rt.config.cpu_cores, 2);
         assert_eq!(rt.config.memory_mb, 2048);
-        assert_eq!(rt.config.disk_gb, 20);
+        assert_eq!(rt.config.disk_gb, 35);
     }
 
     #[test]
@@ -1224,19 +1274,19 @@ mod tests {
     }
 
     #[test]
-    fn docker_socket_path_contains_docker_sock() {
+    fn engine_socket_path_contains_engine_sock() {
         let rt = LinuxRuntime::new();
-        let path = rt.docker_socket_path();
+        let path = rt.engine_socket_path();
         assert!(
-            path.to_string_lossy().contains("docker.sock"),
-            "path should contain docker.sock: {:?}",
+            path.to_string_lossy().contains("engine.sock"),
+            "path should contain engine.sock: {:?}",
             path
         );
     }
 
     #[test]
-    fn linux_docker_host_is_tcp() {
-        let host = linux_docker_host();
+    fn linux_engine_host_is_tcp() {
+        let host = linux_engine_host();
         assert!(
             host.starts_with("tcp://127.0.0.1:"),
             "host should be tcp://127.0.0.1:<port>: {}",
@@ -1405,6 +1455,21 @@ mod tests {
         assert_eq!(usage.memory_used_mb, 0);
         assert_eq!(usage.container_count, 0);
         assert_eq!(usage.memory_total_mb, 2048);
+    }
+
+    #[test]
+    fn resource_usage_prefers_native_container_count_before_compatibility_fallback() {
+        let source = include_str!("linux.rs");
+
+        assert!(source.contains("query_built_in_native_containers"));
+        assert!(source.contains("compatibility_container_count"));
+    }
+
+    #[test]
+    fn resource_usage_reads_host_allocated_disk_usage() {
+        let source = include_str!("linux.rs");
+
+        assert!(source.contains("common::file_allocated_gb"));
     }
 
     #[tokio::test]

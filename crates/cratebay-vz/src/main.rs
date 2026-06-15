@@ -967,7 +967,7 @@ fn rewrite_http_request_preface(request: &[u8]) -> Option<Vec<u8>> {
         rewritten.extend_from_slice(b"Content-Length: 0\r\n");
     }
     // Reverse TCP mode still uses one tunnel per accepted Unix client.
-    // Force connection close so dockerd releases the upstream TCP connection
+    // Force connection close so the upstream engine releases the TCP connection
     // and guest-agent workers can return to the pool for the next request.
     rewritten.extend_from_slice(b"Connection: close\r\n");
     rewritten.extend_from_slice(b"\r\n");
@@ -977,7 +977,7 @@ fn rewrite_http_request_preface(request: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::rewrite_http_request_preface;
+    use super::{parse_http_proxy_url, rewrite_http_proxy_request, rewrite_http_request_preface};
 
     #[test]
     fn rewrites_plain_http_request_for_connection_close_proxying() {
@@ -1009,6 +1009,62 @@ mod tests {
     fn skips_upgrade_requests() {
         let request = b"POST /exec/1/start HTTP/1.1\r\nHost: docker\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n";
         assert!(rewrite_http_request_preface(request).is_none());
+    }
+
+    #[test]
+    fn rewrites_absolute_http_proxy_request_to_origin_form() {
+        let request = "GET http://oci-gz.example.test/docker/blob?q=1 HTTP/1.1\r\nHost: oci-gz.example.test\r\nProxy-Connection: Keep-Alive\r\nUser-Agent: buildkit\r\n\r\n";
+        let (host, port, rewritten) =
+            rewrite_http_proxy_request(request).expect("absolute http proxy request");
+
+        assert_eq!(host, "oci-gz.example.test");
+        assert_eq!(port, 80);
+        assert!(rewritten.starts_with("GET /docker/blob?q=1 HTTP/1.1\r\n"));
+        assert!(rewritten.contains("Host: oci-gz.example.test\r\n"));
+        assert!(rewritten.contains("User-Agent: buildkit\r\n"));
+        assert!(!rewritten.contains("Proxy-Connection"));
+    }
+
+    #[test]
+    fn rewrites_curl_absolute_http_proxy_request() {
+        let request = "GET http://oci-gz-1258344702.cos-internal.ap-guangzhou.tencentcos.cn/ HTTP/1.1\r\nHost: oci-gz-1258344702.cos-internal.ap-guangzhou.tencentcos.cn\r\nUser-Agent: curl/8.7.1\r\nAccept: */*\r\nProxy-Connection: Keep-Alive\r\n\r\n";
+        let (host, port, rewritten) =
+            rewrite_http_proxy_request(request).expect("curl absolute http proxy request");
+
+        assert_eq!(
+            host,
+            "oci-gz-1258344702.cos-internal.ap-guangzhou.tencentcos.cn"
+        );
+        assert_eq!(port, 80);
+        assert!(rewritten.starts_with("GET / HTTP/1.1\r\n"));
+        assert!(rewritten
+            .contains("Host: oci-gz-1258344702.cos-internal.ap-guangzhou.tencentcos.cn\r\n"));
+        assert!(rewritten.contains("Accept: */*\r\n"));
+        assert!(!rewritten.contains("Proxy-Connection"));
+    }
+
+    #[test]
+    fn forwards_origin_form_http_proxy_request_using_host_header() {
+        let request = "GET /docker/blob?q=1 HTTP/1.1\r\nHost: oci-gz.example.test:8080\r\nProxy-Connection: Keep-Alive\r\nUser-Agent: buildkit\r\n\r\n";
+        let (host, port, rewritten) =
+            rewrite_http_proxy_request(request).expect("origin-form http proxy request");
+
+        assert_eq!(host, "oci-gz.example.test");
+        assert_eq!(port, 8080);
+        assert!(rewritten.starts_with("GET /docker/blob?q=1 HTTP/1.1\r\n"));
+        assert!(rewritten.contains("Host: oci-gz.example.test:8080\r\n"));
+        assert!(rewritten.contains("User-Agent: buildkit\r\n"));
+        assert!(!rewritten.contains("Proxy-Connection"));
+    }
+
+    #[test]
+    fn parses_http_proxy_url_with_explicit_port() {
+        let (host, port, path) = parse_http_proxy_url("http://cache.example.test:8080/layers/data")
+            .expect("http proxy url");
+
+        assert_eq!(host, "cache.example.test");
+        assert_eq!(port, 8080);
+        assert_eq!(path, "/layers/data");
     }
 }
 
@@ -1231,43 +1287,199 @@ fn handle_http_connect_client(mut client: std::net::TcpStream) -> Result<(), Str
     let request_text = String::from_utf8_lossy(request_head);
     let first_line = request_text
         .lines()
-        .next()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
         .ok_or_else(|| "empty proxy request".to_string())?;
-    let Some(rest) = first_line.strip_prefix("CONNECT ") else {
+    let mut first_parts = first_line.split_whitespace();
+    let method = first_parts
+        .next()
+        .ok_or_else(|| "empty proxy request method".to_string())?;
+    if method.eq_ignore_ascii_case("CONNECT") {
+        let target = first_parts
+            .next()
+            .ok_or_else(|| format!("invalid CONNECT request '{}'", first_line))?;
+        let (target_host, target_port) = parse_host_port(target, "CONNECT target")?;
+        let server = connect_target_tcp(target_host.as_str(), target_port)?;
+        let _ = server.set_nodelay(true);
+        let _ = client.set_nodelay(true);
+        let _ = client.set_read_timeout(None);
+
+        client
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .map_err(|error| format!("write proxy response: {}", error))?;
+        client
+            .flush()
+            .map_err(|error| format!("flush proxy response: {}", error))?;
+
+        let mut server = server;
+        if !buffered_body.is_empty() {
+            server
+                .write_all(buffered_body)
+                .map_err(|error| format!("forward buffered client bytes: {}", error))?;
+            server
+                .flush()
+                .map_err(|error| format!("flush buffered client bytes: {}", error))?;
+        }
+
+        return proxy_bidirectional_host_tcp(client, server);
+    }
+
+    let Some((target_host, target_port, rewritten_head)) =
+        rewrite_http_proxy_request(request_text.as_ref())
+    else {
+        let preview = request_text.chars().take(512).collect::<String>();
+        tracing::warn!(
+            "unsupported http proxy request first_line={:?} head={:?}",
+            first_line,
+            preview
+        );
         client
             .write_all(b"HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n")
             .map_err(|error| format!("write 501: {}", error))?;
         return Err(format!("unsupported proxy request '{}'", first_line));
     };
-
-    let target = rest
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| format!("invalid CONNECT request '{}'", first_line))?;
-    let (target_host, target_port) = parse_host_port(target, "CONNECT target")?;
-    let server = connect_target_tcp(target_host.as_str(), target_port)?;
+    let mut server = connect_target_tcp(target_host.as_str(), target_port)?;
     let _ = server.set_nodelay(true);
     let _ = client.set_nodelay(true);
     let _ = client.set_read_timeout(None);
-
-    client
-        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        .map_err(|error| format!("write proxy response: {}", error))?;
-    client
-        .flush()
-        .map_err(|error| format!("flush proxy response: {}", error))?;
-
-    let mut server = server;
+    server
+        .write_all(rewritten_head.as_bytes())
+        .map_err(|error| format!("write forwarded proxy request: {}", error))?;
     if !buffered_body.is_empty() {
         server
             .write_all(buffered_body)
-            .map_err(|error| format!("forward buffered client bytes: {}", error))?;
-        server
-            .flush()
-            .map_err(|error| format!("flush buffered client bytes: {}", error))?;
+            .map_err(|error| format!("forward buffered proxy body: {}", error))?;
     }
+    server
+        .flush()
+        .map_err(|error| format!("flush forwarded proxy request: {}", error))?;
 
     proxy_bidirectional_host_tcp(client, server)
+}
+
+#[cfg(target_os = "macos")]
+fn rewrite_http_proxy_request(request_head: &str) -> Option<(String, u16, String)> {
+    let lines = request_head
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect::<Vec<_>>();
+    let (first_line_index, first_line) = lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())?;
+    let first_line = first_line.trim();
+    let header_lines = &lines[first_line_index + 1..];
+    let mut first_parts = first_line.split_whitespace();
+    let method = first_parts.next()?;
+    let target = first_parts.next()?;
+    let version = first_parts.next().unwrap_or("HTTP/1.1");
+    let (host, port, path) = if has_http_proxy_scheme(target) {
+        parse_http_proxy_url(target)?
+    } else if target.starts_with('/') {
+        let (host, port) = http_host_header(header_lines)?;
+        (host, port, target.to_string())
+    } else {
+        return None;
+    };
+
+    let mut rewritten = String::new();
+    rewritten.push_str(method);
+    rewritten.push(' ');
+    rewritten.push_str(&path);
+    rewritten.push(' ');
+    rewritten.push_str(version);
+    rewritten.push_str("\r\n");
+
+    let mut has_host = false;
+    for line in header_lines {
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, _)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("proxy-connection") {
+            continue;
+        }
+        if name.eq_ignore_ascii_case("host") {
+            has_host = true;
+        }
+        rewritten.push_str(line);
+        rewritten.push_str("\r\n");
+    }
+    if !has_host {
+        rewritten.push_str("Host: ");
+        rewritten.push_str(&host);
+        if port != 80 {
+            rewritten.push(':');
+            rewritten.push_str(&port.to_string());
+        }
+        rewritten.push_str("\r\n");
+    }
+    rewritten.push_str("\r\n");
+
+    Some((host, port, rewritten))
+}
+
+#[cfg(target_os = "macos")]
+fn http_host_header(lines: &[&str]) -> Option<(String, u16)> {
+    let host = lines.iter().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.eq_ignore_ascii_case("host") {
+            Some(value.trim())
+        } else {
+            None
+        }
+    })?;
+    if host.starts_with('[') {
+        parse_host_port(host, "HTTP host header").ok()
+    } else if let Some((name, port)) = host.rsplit_once(':') {
+        Some((name.to_string(), port.parse::<u16>().ok()?))
+    } else if !host.is_empty() {
+        Some((host.to_string(), 80))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_http_proxy_url(target: &str) -> Option<(String, u16, String)> {
+    let rest = strip_http_proxy_scheme(target)?;
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or_else(|| (rest, "/".to_string()));
+    if authority.trim().is_empty() {
+        return None;
+    }
+    let (host, port) = if authority.starts_with('[') {
+        parse_host_port(authority, "HTTP proxy target").ok()?
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        (host.to_string(), port.parse::<u16>().ok()?)
+    } else {
+        (authority.to_string(), 80)
+    };
+    if host.trim().is_empty() {
+        return None;
+    }
+    Some((host, port, path))
+}
+
+#[cfg(target_os = "macos")]
+fn has_http_proxy_scheme(target: &str) -> bool {
+    target
+        .as_bytes()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"http://"))
+}
+
+#[cfg(target_os = "macos")]
+fn strip_http_proxy_scheme(target: &str) -> Option<&str> {
+    if has_http_proxy_scheme(target) {
+        Some(&target[7..])
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]

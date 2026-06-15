@@ -2,7 +2,8 @@
 
 This directory is bundled into the desktop app as a resource.
 
-CrateBay's Windows runtime uses **WSL2** with a custom distro containing Docker.
+CrateBay's Windows runtime uses **WSL2** with a custom distro containing CrateBay Engine
+(`containerd` + `runc` + CNI + the CrateBay compatibility adapter).
 Provisioning imports a deterministic `rootfs.tar` as a WSL distro.
 
 ## Expected layout
@@ -24,4 +25,3 @@ Fetch prebuilt assets from GitHub Releases (default tag can be overridden via
 ./scripts/fetch-wsl-runtime-assets.sh x86_64
 ./scripts/fetch-wsl-runtime-assets.sh aarch64
 ```
-

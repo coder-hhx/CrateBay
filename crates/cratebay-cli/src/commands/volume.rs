@@ -6,11 +6,11 @@ use bollard::Docker;
 
 use super::{print_structured, OutputFormat};
 
-pub async fn create(docker: &Docker, name: &str) -> Result<()> {
+pub async fn create(docker: &Docker, name: &str, driver: Option<String>) -> Result<()> {
     let volume = docker
         .create_volume(CreateVolumeOptions {
             name: name.to_string(),
-            driver: String::new(),
+            driver: driver.unwrap_or_default(),
             driver_opts: HashMap::new(),
             labels: HashMap::new(),
         })

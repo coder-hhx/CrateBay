@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createI18n } from "@/lib/i18n";
 import { invoke, listen } from "@/lib/tauri";
 import { useAppStore } from "@/stores/appStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -9,10 +10,26 @@ import type {
   ContainerFilter,
   DockerImageInfo,
 } from "@/types/container";
+import type { Translations } from "@/types/i18n";
 import type { LocalImageInfo } from "@/types/image";
 
 // Re-export types for backward compatibility
 export type { ContainerInfo, ContainerCreateRequest, ContainerTemplate, DockerImageInfo, LocalImageInfo };
+
+type ContainerTextKey = keyof Translations["containers"];
+
+function containerText(key: ContainerTextKey, values?: Record<string, string | number>): string {
+  const language = useSettingsStore.getState().settings.language;
+  let text = createI18n(language).t("containers", key);
+
+  if (values !== undefined) {
+    for (const [name, value] of Object.entries(values)) {
+      text = text.split(`{${name}}`).join(String(value));
+    }
+  }
+
+  return text;
+}
 
 interface ContainerState {
   // Container list
@@ -23,7 +40,7 @@ interface ContainerState {
   _fetchAbortController: AbortController | null;
   _transitionalRefreshTimer: ReturnType<typeof setTimeout> | null;
 
-  // Docker images
+  // Engine images
   images: LocalImageInfo[];
   imagesLoading: boolean;
   fetchImages: () => Promise<void>;
@@ -36,7 +53,7 @@ interface ContainerState {
   createContainer: (req: ContainerCreateRequest) => Promise<ContainerInfo>;
   startContainer: (id: string) => Promise<void>;
   stopContainer: (id: string) => Promise<void>;
-  deleteContainer: (id: string) => Promise<void>;
+  deleteContainer: (id: string, force?: boolean) => Promise<void>;
 
   // Templates
   templates: ContainerTemplate[];
@@ -85,7 +102,7 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
           if (get()._fetchAbortController === requestController) {
             set({
               loading: false,
-              error: "刷新超时：runtime 可能正在启动或 Docker 无响应（稍后会自动更新）",
+              error: containerText("refreshTimeout"),
             });
           }
         },
@@ -147,7 +164,7 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
             error:
               message.length > 0 && message !== "[object Object]"
                 ? message
-                : "刷新失败：请检查 runtime 连接状态",
+                : containerText("refreshFailed"),
           });
         }
       }
@@ -224,13 +241,13 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
         const hasMirrors = mirrors.length > 0;
         const pullChannelId = `pull-${Date.now()}`;
 
-        updatePlaceholder("正在拉取镜像...");
+        updatePlaceholder(containerText("pullingImage"));
         notify({
           type: "info",
-          title: `正在拉取镜像 ${req.image}`,
+          title: containerText("pullImageTitle", { image: req.image }),
           message: hasMirrors
-            ? `使用镜像加速源拉取，共 ${mirrors.length} 个源...`
-            : "首次使用此镜像需要下载，请稍候...",
+            ? containerText("pullImageMirrors", { count: mirrors.length })
+            : containerText("pullImageHint"),
           dismissable: true,
         });
 
@@ -249,7 +266,7 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
           // 5-minute overall timeout for pull
           const timeoutId = setTimeout(() => {
             unlistenFn?.();
-            resolve({ success: false, error: "镜像拉取超时（5分钟）" });
+            resolve({ success: false, error: containerText("pullImageTimeout") });
           }, 300000);
 
           void listen<{
@@ -261,7 +278,9 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
             // Update placeholder with real-time status
             if (!progress.complete) {
               const pct = progress.progress_percent;
-              const statusMsg = pct > 0 ? `拉取中 ${pct}%` : progress.status || "拉取中...";
+              const statusMsg = pct > 0
+                ? containerText("pullingProgress", { pct })
+                : containerText("pullingProgressFallback");
               updatePlaceholder(statusMsg);
             }
 
@@ -283,27 +302,29 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
           // Pull failed — remove placeholder
           set((state) => ({
             containers: state.containers.filter((c) => c.id !== placeholderId),
-            error: pullResult.error || "镜像拉取失败",
+            error: pullResult.error || containerText("pullFailed"),
           }));
           notify({
             type: "error",
-            title: "镜像拉取失败",
-            message: pullResult.error || "未知错误",
+            title: containerText("pullFailed"),
+            message: pullResult.error || containerText("unknownError"),
             dismissable: true,
           });
-          throw new Error(pullResult.error || "镜像拉取失败");
+          throw new Error(pullResult.error || containerText("pullFailed"));
         }
 
         notify({
           type: "success",
-          title: `镜像 ${req.image} 拉取完成`,
+          title: containerText("pullComplete", { image: req.image }),
           dismissable: true,
         });
       }
 
       // Step 3: Create container (image already available)
-      updatePlaceholder("正在创建容器...");
-      const container = await invoke<ContainerInfo>("container_create", { request: req });
+      updatePlaceholder(containerText("creatingContainer"));
+      const mirrors = useSettingsStore.getState().settings.registryMirrors;
+      const createRequest = mirrors.length > 0 ? { ...req, registryMirrors: mirrors } : req;
+      const container = await invoke<ContainerInfo>("container_create", { request: createRequest });
       // Replace placeholder with real container
       set((state) => ({
         containers: state.containers.map((c) =>
@@ -319,22 +340,21 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
         // Container was created but auto-start failed (e.g. invalid CMD for the image)
         notify({
           type: "warning",
-          title: `容器 ${req.name} 已创建`,
-          message: "容器创建成功但未能自动启动，可能是镜像不支持默认命令。请尝试手动启动。",
+          title: containerText("containerCreatedTitle", { name: req.name }),
+          message: containerText("containerCreatedNoAutoStart"),
           dismissable: true,
         });
       } else if (container.status !== "running" && container.status !== "paused") {
         notify({
           type: "warning",
-          title: `容器 ${req.name} 已创建`,
-          message:
-            "容器已启动但很快退出/停止。常见原因：镜像默认命令执行完毕或命令不存在。可在创建时指定命令（例如 `sleep infinity`）后重试。",
+          title: containerText("containerCreatedTitle", { name: req.name }),
+          message: containerText("containerExitedQuickly"),
           dismissable: true,
         });
       } else {
         notify({
           type: "success",
-          title: `容器 ${req.name} 创建成功`,
+          title: containerText("containerCreateSuccess", { name: req.name }),
           dismissable: true,
         });
       }
@@ -349,7 +369,7 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       }));
       notify({
         type: "error",
-        title: "容器创建失败",
+        title: containerText("containerCreateFailed"),
         message,
         dismissable: true,
       });
@@ -369,8 +389,8 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       }));
       notify({
         type: "info",
-        title: "正在启动容器...",
-        message: "如果 runtime 尚未就绪，启动可能需要几十秒",
+        title: containerText("startingContainer"),
+        message: containerText("runtimeStartMayTakeSeconds"),
         dismissable: true,
       });
       await invoke("container_start", { id });
@@ -380,9 +400,8 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       if (updated && updated.status !== "running" && updated.status !== "paused") {
         notify({
           type: "warning",
-          title: "容器未保持运行",
-          message:
-            "容器已启动但很快退出/停止。常见原因：镜像默认命令执行完毕或命令不存在。可在创建时指定命令（例如 `sleep infinity`）后重试。",
+          title: containerText("containerDidNotStayRunning"),
+          message: containerText("containerExitedQuickly"),
           dismissable: true,
         });
       }
@@ -392,7 +411,7 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       set({ error: message });
       notify({
         type: "error",
-        title: "启动失败",
+        title: containerText("startFailed"),
         message,
         dismissable: true,
       });
@@ -417,24 +436,47 @@ export const useContainerStore = create<ContainerState>()((set, get) => ({
       set({ error: message });
       notify({
         type: "error",
-        title: "停止失败",
+        title: containerText("stopFailed"),
         message,
         dismissable: true,
       });
     }
   },
 
-  deleteContainer: async (id) => {
+  deleteContainer: async (id, force = false) => {
+    const notify = useAppStore.getState().addNotification;
+    const previousContainers = get().containers;
+    const target = previousContainers.find((c) => c.id === id);
     try {
-      await invoke("container_delete", { id });
+      set((state) => ({
+        containers: state.containers.map((c) =>
+          c.id === id ? { ...c, status: "removing", state: "removing" } : c,
+        ),
+        error: null,
+      }));
+      await invoke("container_delete", { id, force });
       set((state) => ({
         containers: state.containers.filter((c) => c.id !== id),
         selectedContainerId: state.selectedContainerId === id ? null : state.selectedContainerId,
       }));
+      await get().fetchContainers();
+      notify({
+        type: "success",
+        title: containerText("deleteSuccess"),
+        message: target?.name ?? id,
+        dismissable: true,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[containerStore] deleteContainer failed:", message);
-      set({ error: message });
+      set({ containers: previousContainers, error: message });
+      notify({
+        type: "error",
+        title: containerText("deleteFailed"),
+        message,
+        dismissable: true,
+      });
+      throw err;
     }
   },
 

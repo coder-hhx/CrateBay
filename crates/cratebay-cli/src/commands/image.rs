@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use cratebay_core::bundle_images;
 use cratebay_core::container;
 use cratebay_core::models::ImageSearchResult;
+use cratebay_core::runtime::RuntimeManager;
 
 use super::{print_structured, OutputFormat};
 
@@ -82,8 +83,8 @@ pub async fn pull(docker: &Docker, image: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete(docker: &Docker, id: &str) -> Result<()> {
-    container::image_remove(docker, id, false).await?;
+pub async fn delete(docker: &Docker, id: &str, force: bool) -> Result<()> {
+    container::image_remove(docker, id, force).await?;
     println!("Deleted {}", id);
     Ok(())
 }
@@ -133,6 +134,51 @@ pub async fn preload_bundled(
     };
 
     let results = bundle_images::load_bundle_images_from_dir(docker, &bundle_dir).await;
+
+    match format {
+        OutputFormat::Table => {
+            println!("Bundle image directory: {}", bundle_dir.display());
+            println!("{:<28} {:<10} MESSAGE", "IMAGE", "STATUS",);
+            for result in &results {
+                let status = if result.loaded {
+                    "loaded"
+                } else if result.skipped {
+                    "skipped"
+                } else {
+                    "failed"
+                };
+                println!(
+                    "{:<28} {:<10} {}",
+                    result.image_name, status, result.message
+                );
+            }
+            Ok(())
+        }
+        _ => print_structured(&results, format),
+    }?;
+
+    if bundle_preload_failed(&results) {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+pub async fn preload_bundled_native(
+    runtime: &dyn RuntimeManager,
+    dir: Option<String>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let bundle_dir = match dir {
+        Some(dir) => PathBuf::from(dir),
+        None => bundle_images::find_bundle_image_dir().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No bundle-images directory found. Set CRATEBAY_BUNDLE_IMAGES_DIR or pass --dir."
+            )
+        })?,
+    };
+
+    let results = bundle_images::load_bundle_images_from_dir_native(runtime, &bundle_dir).await;
 
     match format {
         OutputFormat::Table => {

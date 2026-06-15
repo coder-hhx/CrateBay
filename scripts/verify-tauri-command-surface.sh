@@ -24,7 +24,7 @@ if [[ ! -s "$frontend_file_list" ]]; then
 fi
 
 while IFS= read -r file_path; do
-  perl -ne 'while (/invoke(?:<[^>]+>)?\(\s*"([^"]+)"/g) { print "$1\n" unless $1 =~ /\$/ }' "$file_path"
+  perl -ne 'while (/\b(?:invoke|loadResource)(?:<[^()]*)?\s*\(\s*"([^"]+)"/g) { print "$1\n" unless $1 =~ /\$/ }' "$file_path"
 done <"$frontend_file_list" | sort -u >"$frontend_invokes"
 
 perl -ne 'while (/commands::[A-Za-z0-9_]+::([A-Za-z0-9_]+)/g) { print "$1\n" }' \

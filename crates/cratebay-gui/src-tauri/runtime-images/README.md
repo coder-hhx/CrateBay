@@ -24,7 +24,8 @@ runtime-images/
 Notes:
 
 - Release builds should include **only the matching host arch** to keep the app smaller.
-- The runtime OS image must boot a Linux guest that starts `dockerd` and
-  `cratebay-guest-agent` (see `docs/RUNTIME.md`).
+- The runtime OS image must boot a Linux guest that starts CrateBay Engine
+  (`containerd`, `cratebay-engine-adapter`, and `cratebay-guest-agent`; see
+  `docs/RUNTIME.md`).
 - Newer "Runtime Lite" bundles are initramfs-first and do not require a
   prebuilt `rootfs.img`; the VM disk is created on first boot.

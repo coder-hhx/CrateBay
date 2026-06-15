@@ -4,480 +4,432 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, for example v0.9.1
+        required: true
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_VERSION: "24"
+  PNPM_VERSION: "10.32.1"
 
 jobs:
-  preflight:
-    name: Release Preflight
+  metadata:
+    name: Release Metadata
     runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v6
         with:
-          version: 9
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Runtime native guard
+        run: ./scripts/runtime-native-guard.sh
+
+      - uses: actions/setup-node@v6
         with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            qemu-system-x86 \
-            squashfs-tools
-
-      - name: Install Zig
-        run: bash scripts/install-zig.sh
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked --force
-
-      - name: Add musl target for runtime guest agent
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-preflight
-
-      - name: Build preflight runtime assets
-        run: |
-          bash scripts/build-runtime-assets-alpine.sh x86_64
-          bash scripts/build-runtime-assets-linux.sh x86_64
-
-      - name: Run release-readiness gate
-        run: ./scripts/release-readiness.sh
+      - name: Resolve version from tag
+        id: version
         env:
-          CRATEBAY_RELEASE_STAGE: ${{ startsWith(github.ref_name, 'v1.') && 'ga' || 'preview' }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/release/prepare-app-version-from-tag.mjs "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT" --json
 
-  # -----------------------------------------------------------
-  # Build release binaries
-  # -----------------------------------------------------------
-  bundle-images:
-    name: Bundled Container Images
-    runs-on: ubuntu-latest
-    needs: preflight
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Linux runtime build dependencies
-        run: |
-          sudo apt-get install -y \
-            patchelf \
-            qemu-system-x86 \
-            squashfs-tools
-
-      - name: Install Zig
-        run: bash scripts/install-zig.sh
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked --force
-
-      - name: Add musl target for runtime guest agent
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-bundle-images
-
-      - name: Build host runtime assets
-        run: |
-          bash scripts/build-runtime-assets-alpine.sh x86_64
-          bash scripts/build-runtime-assets-linux.sh x86_64
-
-      - name: Build bundled container images
-        run: bash scripts/build-bundle-images.sh
-
-      - name: Verify bundled container images
-        run: bash scripts/verify-bundle-images.sh crates/cratebay-gui/src-tauri/bundle-images
-
-      - name: Upload bundled container images
-        uses: actions/upload-artifact@v7
-        with:
-          name: bundle-images
-          path: crates/cratebay-gui/src-tauri/bundle-images/*.tar.gz
-          if-no-files-found: error
-
-  build:
-    name: Build (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    needs: preflight
+  headless:
+    name: Headless ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    needs: metadata
+    env:
+      CRATEBAY_RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+      CRATEBAY_APP_VERSION: ${{ needs.metadata.outputs.app_version }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS-aarch64
-            os: macos-latest
+          - platform: macos-aarch64
+            runner: macos-14
             target: aarch64-apple-darwin
-            cli-artifact: cratebay-macos-aarch64
             ext: ""
-          - name: macOS-x86_64
-            os: macos-13
+          - platform: macos-x86_64
+            runner: macos-15-intel
             target: x86_64-apple-darwin
-            cli-artifact: cratebay-macos-x86_64
             ext: ""
-          - name: Linux-x86_64
-            os: ubuntu-latest
+          - platform: linux-x86_64
+            runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            cli-artifact: cratebay-linux-x86_64
             ext: ""
-          - name: Linux-aarch64
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            cli-artifact: cratebay-linux-aarch64
-            ext: ""
-          - name: Windows-x86_64
-            os: windows-latest
+          - platform: windows-x86_64
+            runner: windows-latest
             target: x86_64-pc-windows-msvc
-            cli-artifact: cratebay-windows-x86_64
             ext: ".exe"
-          - name: Windows-aarch64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
-            cli-artifact: cratebay-windows-aarch64
-            ext: ".exe"
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.release_tag }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Linux: system libraries required by Tauri / WebKitGTK
-      - name: Install Linux system dependencies
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+            protobuf-compiler \
+            zip \
+            patchelf \
+            qemu-system-x86 \
+            squashfs-tools
 
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install protobuf squashfs zig zstd
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        run: choco install protoc zig -y --no-progress
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked --force
+
+      - name: Install Zig on Linux
+        if: runner.os == 'Linux'
+        run: bash scripts/install-zig.sh
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          key: headless-${{ matrix.target }}
 
-      # -- Build CLI --
-      - name: Install cross-compilation dependencies (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Build headless runtime assets
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+          set -euo pipefail
+          arch="${{ matrix.target }}"
+          arch="${arch%%-*}"
+          case "$RUNNER_OS" in
+            macOS)
+              rustup target add "${arch}-unknown-linux-musl"
+              bash scripts/build-runtime-assets-alpine.sh "$arch"
+              bash scripts/prepare-tauri-external-bins.sh "${{ matrix.target }}"
+              ;;
+            Linux)
+              rustup target add "${arch}-unknown-linux-musl"
+              bash scripts/build-runtime-assets-alpine.sh "$arch"
+              bash scripts/build-runtime-assets-linux.sh "$arch"
+              ;;
+            Windows)
+              rustup target add "${arch}-unknown-linux-musl"
+              bash scripts/build-runtime-assets-wsl.sh "$arch"
+              ;;
+          esac
 
-      - name: Build CLI (release)
+      - name: Build CLI
         run: cargo build --release --target ${{ matrix.target }} -p cratebay-cli
 
-      # -- Upload CLI binary --
-      - name: Upload CLI artifact
-        uses: actions/upload-artifact@v7
+      - name: Package headless runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="CrateBay-${CRATEBAY_RELEASE_TAG}-headless-${{ matrix.platform }}.zip"
+          binary="target/${{ matrix.target }}/release/cratebay${{ matrix.ext }}"
+          runtime_arch="${{ matrix.target }}"
+          runtime_arch="${runtime_arch%%-*}"
+          test -f "$binary"
+          rm -rf staging dist
+          mkdir -p staging/bin dist
+          cp "$binary" "staging/bin/cratebay${{ matrix.ext }}"
+          case "$RUNNER_OS" in
+            macOS)
+              runner="crates/cratebay-gui/src-tauri/bin/cratebay-vz-${{ matrix.target }}"
+              test -f "$runner"
+              cp "$runner" staging/bin/cratebay-vz
+              chmod 0755 staging/bin/cratebay-vz
+              mkdir -p staging/resources
+              cp -a crates/cratebay-gui/src-tauri/runtime-images staging/resources/runtime-images
+              ;;
+            Linux)
+              mkdir -p staging/resources
+              cp -a crates/cratebay-gui/src-tauri/runtime-images staging/resources/runtime-images
+              cp -a crates/cratebay-gui/src-tauri/runtime-linux staging/resources/runtime-linux
+              ;;
+            Windows)
+              mkdir -p staging/resources
+              cp -a crates/cratebay-gui/src-tauri/runtime-wsl staging/resources/runtime-wsl
+              ;;
+          esac
+          cat > staging/README.txt <<EOF
+          CrateBay headless sandbox backend for LiveAgent.
+
+          Install this package through LiveAgent's Sandbox panel or CrateBayInstall tool.
+          Version: ${CRATEBAY_RELEASE_TAG}
+          Platform: ${{ matrix.platform }}
+          Runtime: CrateBay Engine (containerd/runc/CNI with compatibility API adapter)
+          EOF
+          test -x "staging/bin/cratebay${{ matrix.ext }}"
+          test -s staging/README.txt
+          case "$RUNNER_OS" in
+            macOS)
+              test -x staging/bin/cratebay-vz
+              test -f "staging/resources/runtime-images/cratebay-runtime-${runtime_arch}/vmlinuz"
+              test -f "staging/resources/runtime-images/cratebay-runtime-${runtime_arch}/initramfs"
+              ;;
+            Linux)
+              test -f "staging/resources/runtime-images/cratebay-runtime-${runtime_arch}/vmlinuz"
+              test -f "staging/resources/runtime-images/cratebay-runtime-${runtime_arch}/initramfs"
+              test -x "staging/resources/runtime-linux/cratebay-runtime-linux-${runtime_arch}/qemu-system-${runtime_arch}"
+              ;;
+            Windows)
+              test -f "staging/resources/runtime-wsl/cratebay-runtime-wsl-${runtime_arch}/rootfs.tar"
+              ;;
+          esac
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command "Compress-Archive -Path staging/* -DestinationPath dist/$asset -Force"
+          else
+            (cd staging && zip -qr "../dist/$asset" .)
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            hash="$(sha256sum "dist/$asset" | awk '{print $1}')"
+          else
+            hash="$(shasum -a 256 "dist/$asset" | awk '{print $1}')"
+          fi
+          printf '%s  %s\n' "$hash" "$asset" > "dist/$asset.sha256"
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.cli-artifact }}
-          path: target/${{ matrix.target }}/release/cratebay${{ matrix.ext }}
+          name: cratebay-headless-${{ matrix.platform }}
+          path: dist/*
           if-no-files-found: error
 
-  # -----------------------------------------------------------
-  # Build Tauri desktop app (GUI)
-  # -----------------------------------------------------------
-  build-gui:
-    name: Tauri App (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    needs: [preflight, bundle-images]
+  desktop:
+    name: Desktop ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    needs: metadata
+    env:
+      CRATEBAY_APP_VERSION: ${{ needs.metadata.outputs.app_version }}
+      CRATEBAY_RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+      CRATEBAY_UPDATE_REPOSITORY: ${{ github.repository }}
+      CRATEBAY_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS-aarch64
-            os: macos-latest
+          - platform: macOS-aarch64
+            runner: macos-14
             target: aarch64-apple-darwin
-            artifact: cratebay-gui-macos-aarch64
-          - name: macOS-x86_64
-            os: macos-13
+          - platform: macOS-x86_64
+            runner: macos-15-intel
             target: x86_64-apple-darwin
-            artifact: cratebay-gui-macos-x86_64
-          - name: Linux-x86_64
-            os: ubuntu-latest
+          - platform: Linux-x86_64
+            runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: cratebay-gui-linux-x86_64
-          - name: Linux-aarch64
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: cratebay-gui-linux-aarch64
-          - name: Windows-x86_64
-            os: windows-latest
+          - platform: Windows-x64
+            runner: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: cratebay-gui-windows-x86_64
-          - name: Windows-aarch64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact: cratebay-gui-windows-aarch64
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.release_tag }}
 
-      - name: Build CrateBay Runtime assets (Windows WSL2 only)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          arch="$(echo '${{ matrix.target }}' | cut -d- -f1)"
-          bash scripts/build-runtime-assets-wsl.sh "${arch}"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pnpm
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install macOS runtime asset build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install squashfs zig
-          cargo install cargo-zigbuild --locked --force
-
-      - name: Add Linux musl target for bundled runtime
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          arch="$(echo '${{ matrix.target }}' | cut -d- -f1)"
-          rustup target add "${arch}-unknown-linux-musl"
-
-      - name: Build CrateBay Runtime assets (macOS only)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          arch="$(echo '${{ matrix.target }}' | cut -d- -f1)"
-          bash scripts/build-runtime-assets-alpine.sh "${arch}"
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: crates/cratebay-gui/pnpm-lock.yaml
-
-      # Linux: system libraries required by Tauri / WebKitGTK
-      - name: Install Linux system dependencies
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
+            protobuf-compiler \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             qemu-system-x86 \
             squashfs-tools
 
-      - name: Install cross-compilation dependencies (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            libgtk-3-dev:arm64 \
-            libwebkit2gtk-4.1-dev:arm64 \
-            libappindicator3-dev:arm64 \
-            librsvg2-dev:arm64 \
-            patchelf
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-          export PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install protobuf squashfs zig
 
-      - name: Install Zig (Linux only)
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: choco install protoc -y --no-progress
+
+      - name: Install cargo-zigbuild
+        if: runner.os != 'Windows'
+        run: cargo install cargo-zigbuild --locked --force
+
+      - name: Install Zig on Linux
         if: runner.os == 'Linux'
         run: bash scripts/install-zig.sh
 
-      - name: Install cargo-zigbuild (Linux only)
-        if: runner.os == 'Linux'
-        run: cargo install cargo-zigbuild --locked --force
-
-      - name: Add Linux musl target for bundled runtime (Linux only)
-        if: runner.os == 'Linux'
+      - name: Build bundled runtime assets
         shell: bash
         run: |
-          arch="$(echo '${{ matrix.target }}' | cut -d- -f1)"
-          rustup target add "${arch}-unknown-linux-musl"
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            macOS)
+              arch="${{ matrix.target }}"
+              arch="${arch%%-*}"
+              rustup target add "${arch}-unknown-linux-musl"
+              bash scripts/build-runtime-assets-alpine.sh "$arch"
+              bash scripts/prepare-tauri-external-bins.sh "${{ matrix.target }}"
+              ;;
+            Linux)
+              rustup target add x86_64-unknown-linux-musl
+              bash scripts/build-runtime-assets-alpine.sh x86_64
+              bash scripts/build-runtime-assets-linux.sh x86_64
+              ;;
+            Windows)
+              bash scripts/build-runtime-assets-wsl.sh x86_64
+              ;;
+          esac
 
-      - name: Build CrateBay Runtime assets (Linux only)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          arch="$(echo '${{ matrix.target }}' | cut -d- -f1)"
-          bash scripts/build-runtime-assets-alpine.sh "${arch}"
-          bash scripts/build-runtime-assets-linux.sh "${arch}"
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: gui-release-${{ matrix.target }}
+          workspaces: crates/cratebay-gui/src-tauri
+          key: desktop-${{ matrix.target }}
 
       - name: Install frontend dependencies
         working-directory: crates/cratebay-gui
         run: pnpm install --frozen-lockfile
 
-      # macOS: prepare cratebay-vz external binary with entitlements
-      - name: Prepare external binaries (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: bash scripts/prepare-tauri-external-bins.sh "${{ matrix.target }}"
+      - name: Prepare generated Tauri version config
+        working-directory: crates/cratebay-gui
+        run: node ../../scripts/release/prepare-app-version-from-tag.mjs "$CRATEBAY_RELEASE_TAG" --github-env "$GITHUB_ENV" --tauri-config src-tauri/tauri.version.generated.conf.json
 
-      - name: Download bundled container images
-        uses: actions/download-artifact@v8
-        with:
-          name: bundle-images
-          path: crates/cratebay-gui/src-tauri/bundle-images
+      - name: Build Tauri desktop
+        working-directory: crates/cratebay-gui
+        run: pnpm tauri build --config "$CRATEBAY_TAURI_VERSION_CONFIG" --target ${{ matrix.target }}
 
-      - name: Verify bundled container images
-        shell: bash
-        run: bash scripts/verify-bundle-images.sh crates/cratebay-gui/src-tauri/bundle-images
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing (Apple Developer ID)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        with:
-          projectPath: crates/cratebay-gui
-          args: --target ${{ matrix.target }}
-
-      # macOS: re-sign cratebay-vz with virtualization entitlements after Tauri bundling
-      - name: Sign cratebay-vz with virtualization entitlements (macOS)
-        if: runner.os == 'macOS'
+      - name: Stage desktop artifacts
         shell: bash
         run: |
-          VZ_BIN="target/${{ matrix.target }}/release/bundle/macos/CrateBay.app/Contents/MacOS/cratebay-vz"
-          if [ -f "$VZ_BIN" ]; then
-            identity="${APPLE_SIGNING_IDENTITY:--}"
-            codesign --force --sign "$identity" \
-              --options runtime \
-              --entitlements scripts/macos-entitlements.plist \
-              "$VZ_BIN"
-            # Re-sign the outer app bundle
-            APP_BUNDLE="target/${{ matrix.target }}/release/bundle/macos/CrateBay.app"
-            codesign --force --sign "$identity" --options runtime "$APP_BUNDLE"
-            echo "Re-signed cratebay-vz with virtualization entitlements"
-          fi
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          set -euo pipefail
+          mkdir -p dist
+          bundle_root="target/${{ matrix.target }}/release/bundle"
+          case "$RUNNER_OS" in
+            macOS)
+              dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
+              updater_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
+              test -n "$dmg_path"
+              test -n "$updater_path"
+              test -f "$updater_path.sig"
+              cp "$dmg_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.dmg"
+              cp "$updater_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.app.tar.gz"
+              cp "$updater_path.sig" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.app.tar.gz.sig"
+              ;;
+            Linux)
+              appimage_path="$(find "$bundle_root/appimage" -maxdepth 1 -name '*.AppImage' -print -quit)"
+              deb_path="$(find "$bundle_root/deb" -maxdepth 1 -name '*.deb' -print -quit)"
+              test -n "$appimage_path"
+              test -n "$deb_path"
+              test -f "$appimage_path.sig"
+              cp "$appimage_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.AppImage"
+              cp "$appimage_path.sig" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.AppImage.sig"
+              cp "$deb_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.deb"
+              ;;
+            Windows)
+              msi_path="$(find "$bundle_root/msi" -maxdepth 1 -name '*.msi' -print -quit)"
+              setup_path="$(find "$bundle_root/nsis" -maxdepth 1 -name '*.exe' -print -quit)"
+              test -n "$msi_path"
+              test -n "$setup_path"
+              test -f "$setup_path.sig"
+              cp "$msi_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}.msi"
+              cp "$setup_path" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}-Setup.exe"
+              cp "$setup_path.sig" "dist/CrateBay-${CRATEBAY_RELEASE_TAG}-${{ matrix.platform }}-Setup.exe.sig"
+              ;;
+          esac
 
-      - name: Verify release bundles
-        shell: bash
-        run: ./scripts/verify-release-artifacts.sh --mode ci --os "${{ runner.os }}" --target "${{ matrix.target }}"
-
-      # Tauri bundles end up in target/<target>/release/bundle/
-      - name: Upload Tauri bundle
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: |
-            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.target }}/release/bundle/macos/*.app
-            target/${{ matrix.target }}/release/bundle/deb/*.deb
-            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            target/${{ matrix.target }}/release/bundle/msi/*.msi
-            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          name: cratebay-desktop-${{ matrix.platform }}
+          path: dist/*
           if-no-files-found: error
 
-  # -----------------------------------------------------------
-  # Create GitHub Release & attach assets
-  # -----------------------------------------------------------
-  release:
+  publish:
     name: Publish Release
-    needs: [build, build-gui]
     runs-on: ubuntu-latest
+    needs: [metadata, headless, desktop]
+    env:
+      CRATEBAY_RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+      CRATEBAY_UPDATE_REPOSITORY: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.release_tag }}
 
-      - name: Download all artifacts
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: cratebay-*
           path: artifacts
 
-      - name: Display downloaded artifacts
-        run: find artifacts -type f | sort
-
-      - name: Generate SHA256 checksums
+      - name: Flatten release artifacts
         run: |
-          cd artifacts
-          find . -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.exe" -o -name "cratebay" \) -exec sha256sum {} + | sort > ../SHA256SUMS.txt
-          cd ..
-          echo "## SHA256 Checksums" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -maxdepth 3 -type f -print0 | while IFS= read -r -d '' file; do
+            cp "$file" "dist/$(basename "$file")"
+          done
+          find dist -type f | sort
 
-      - name: Verify downloaded release artifacts
-        run: ./scripts/verify-release-artifacts.sh --mode downloaded --artifacts-root artifacts
+      - name: Verify release artifacts
+        run: bash scripts/verify-release-artifacts.sh --mode downloaded --artifacts-root dist
 
-      - name: Create GitHub Release
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          printf '# CrateBay %s\n\nRelease %s.\n' "$CRATEBAY_RELEASE_TAG" "$CRATEBAY_RELEASE_TAG" > fallback-notes.md
+          node scripts/release/create-ai-release-notes.mjs \
+            "$CRATEBAY_RELEASE_TAG" \
+            release-notes.md \
+            fallback-notes.md
+
+      - name: Generate updater manifest
+        run: node scripts/release/create-tauri-updater-manifest.mjs dist dist/latest.json release-notes.md
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum * | sort) > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: CrateBay ${{ needs.metadata.outputs.release_tag }}
+          body_path: release-notes.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ needs.metadata.outputs.is_prerelease == 'true' }}
           files: |
-            artifacts/**/*
+            dist/*
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

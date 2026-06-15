@@ -16,6 +16,7 @@ describe("appStore", () => {
       theme: "dark",
       sidebarOpen: true,
       sidebarWidth: 260,
+      engineConnected: false,
       dockerConnected: false,
       runtimeStatus: "stopped",
       builtinRuntimeReady: false,
@@ -43,15 +44,28 @@ describe("appStore", () => {
   });
 
   it("updates runtime status flags", () => {
-    useAppStore.getState().setDockerConnected(true);
+    useAppStore.getState().setEngineConnected(true);
     useAppStore.getState().setRuntimeStatus("running");
     useAppStore.getState().setBuiltinRuntimeReady(true);
     useAppStore.getState().setRuntimeLoading(true);
 
-    expect(useAppStore.getState().dockerConnected).toBe(true);
+    expect(useAppStore.getState().engineConnected).toBe(true);
+    expect(useAppStore.getState().dockerConnected).toBe(false);
     expect(useAppStore.getState().runtimeStatus).toBe("running");
     expect(useAppStore.getState().builtinRuntimeReady).toBe(true);
     expect(useAppStore.getState().runtimeLoading).toBe(true);
+  });
+
+  it("clears builtin readiness when native engine disconnects", () => {
+    useAppStore.setState({
+      engineConnected: true,
+      builtinRuntimeReady: true,
+    });
+
+    useAppStore.getState().setEngineConnected(false);
+
+    expect(useAppStore.getState().engineConnected).toBe(false);
+    expect(useAppStore.getState().builtinRuntimeReady).toBe(false);
   });
 
   it("adds and dismisses notifications", () => {
@@ -65,6 +79,12 @@ describe("appStore", () => {
     const id = useAppStore.getState().notifications[0].id;
     useAppStore.getState().dismissNotification(id);
     expect(useAppStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("keeps the legacy dockerConnected setter scoped to compatibility", () => {
+    useAppStore.getState().setDockerConnected(true);
+    expect(useAppStore.getState().engineConnected).toBe(false);
+    expect(useAppStore.getState().dockerConnected).toBe(true);
   });
 });
 
@@ -80,6 +100,7 @@ describe("settingsStore", () => {
         runtimeHttpProxyBindHost: "0.0.0.0",
         runtimeHttpProxyBindPort: 3128,
         runtimeHttpProxyGuestHost: "192.168.64.1",
+        includePrereleases: false,
       },
     });
   });

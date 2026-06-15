@@ -56,7 +56,7 @@ export const usePullStore = create<PullState>()((set, get) => ({
           id: tempId,
           image: trimmedImage,
           progress: 0,
-          status: "准备中...",
+          status: "",
           complete: false,
           error: null,
           currentBytes: 0,
@@ -145,7 +145,7 @@ export const usePullStore = create<PullState>()((set, get) => ({
       set((state) => ({
         tasks: state.tasks.map((t) =>
           t.id === tempId || (!t.complete && t.image === trimmedImage)
-            ? { ...t, complete: true, error: message.length > 0 ? message : `拉取 ${trimmedImage} 失败` }
+            ? { ...t, complete: true, error: message.length > 0 ? message : `Failed to pull ${trimmedImage}` }
             : t,
         ),
       }));

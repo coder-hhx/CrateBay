@@ -1,23 +1,62 @@
 //! System-related Tauri commands.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bollard::Docker;
+use serde::Serialize;
+use serde_json::Value;
 use tauri::State;
 
 use crate::state::AppState;
 use cratebay_core::docker;
 use cratebay_core::error::AppError;
-use cratebay_core::models::{DockerStatus, RuntimeStatusInfo, SystemInfo};
-use cratebay_core::runtime::{RuntimeConfig, RuntimeState};
+use cratebay_core::models::{DockerStatus, EngineEndpointStatus, RuntimeStatusInfo, SystemInfo};
+use cratebay_core::runtime::{self, RuntimeConfig, RuntimeState};
+use cratebay_core::settings::{
+    SETTINGS_KEY_RUNTIME_HTTP_PROXY, SETTINGS_KEY_RUNTIME_HTTP_PROXY_BIND_HOST,
+    SETTINGS_KEY_RUNTIME_HTTP_PROXY_BIND_PORT, SETTINGS_KEY_RUNTIME_HTTP_PROXY_BRIDGE,
+    SETTINGS_KEY_RUNTIME_HTTP_PROXY_GUEST_HOST,
+};
 use cratebay_core::{storage, MutexExt};
 
-const SETTINGS_KEY_RUNTIME_HTTP_PROXY: &str = "runtimeHttpProxy";
-const SETTINGS_KEY_RUNTIME_HTTP_PROXY_BRIDGE: &str = "runtimeHttpProxyBridge";
-const SETTINGS_KEY_RUNTIME_HTTP_PROXY_BIND_HOST: &str = "runtimeHttpProxyBindHost";
-const SETTINGS_KEY_RUNTIME_HTTP_PROXY_BIND_PORT: &str = "runtimeHttpProxyBindPort";
-const SETTINGS_KEY_RUNTIME_HTTP_PROXY_GUEST_HOST: &str = "runtimeHttpProxyGuestHost";
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDiagnosticsInfo {
+    ok: bool,
+    runtime: RuntimeStatusInfo,
+    engine_contract: RuntimeDiagnosticSection,
+    substrate: RuntimeDiagnosticSection,
+    storage_gc: RuntimeDiagnosticSection,
+    shim_tasks: RuntimeDiagnosticSection,
+    generated_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDiagnosticSection {
+    ok: bool,
+    value: Option<Value>,
+    error: Option<String>,
+}
+
+impl RuntimeDiagnosticSection {
+    fn ok(value: Value) -> Self {
+        Self {
+            ok: true,
+            value: Some(value),
+            error: None,
+        }
+    }
+
+    fn err(error: impl ToString) -> Self {
+        Self {
+            ok: false,
+            value: None,
+            error: Some(error.to_string()),
+        }
+    }
+}
 
 /// Get system information.
 #[tauri::command]
@@ -43,22 +82,44 @@ pub async fn system_info(state: State<'_, AppState>) -> Result<SystemInfo, AppEr
     })
 }
 
-/// Get Docker connection status.
+/// Get CrateBay Engine compatibility endpoint status.
 ///
-/// Checks the current Docker connection in AppState (may have been
+/// Checks the current Engine client in AppState (may have been
 /// updated by the runtime auto-start background thread).
 #[tauri::command]
+pub async fn engine_status(state: State<'_, AppState>) -> Result<EngineEndpointStatus, AppError> {
+    engine_status_impl(state).await
+}
+
+/// Compatibility alias for older frontends and automation.
+#[tauri::command]
 pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatus, AppError> {
+    engine_status_impl(state).await
+}
+
+async fn engine_status_impl(state: State<'_, AppState>) -> Result<EngineEndpointStatus, AppError> {
+    if let Ok(engine) = runtime::query_built_in_ready_engine_status(state.runtime.as_ref()) {
+        return Ok(EngineEndpointStatus {
+            connected: true,
+            version: Some(engine.kind),
+            api_version: Some(engine.api),
+            os: Some("linux".to_string()),
+            arch: Some(std::env::consts::ARCH.to_string()),
+            engine_source: "builtin".to_string(),
+            source: "builtin".to_string(),
+            socket_path: Some(built_in_engine_endpoint(&state)),
+        });
+    }
+
     let docker_opt = {
         let guard = state
-            .docker
+            .engine_compatibility
             .lock()
-            .map_err(|e| AppError::Runtime(format!("Docker state lock poisoned: {}", e)))?;
+            .map_err(|e| AppError::Runtime(format!("Engine state lock poisoned: {}", e)))?;
         guard.clone()
     };
     let source = state
-        .docker_source()
-        .or_else(docker::explicit_host_override)
+        .engine_compatibility_source()
         .unwrap_or_else(|| "builtin".to_string());
 
     match docker_opt {
@@ -67,59 +128,62 @@ pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatus, A
             if is_available {
                 let version_info = docker::version(&d).await.ok();
                 let socket_path = if docker::is_builtin_source(Some(source.as_str())) {
-                    Some(built_in_docker_endpoint(&state))
+                    Some(built_in_engine_endpoint(&state))
                 } else {
                     Some(source.clone())
                 };
-                Ok(DockerStatus {
+                Ok(EngineEndpointStatus {
                     connected: true,
                     version: version_info.as_ref().and_then(|v| v.version.clone()),
                     api_version: version_info.as_ref().and_then(|v| v.api_version.clone()),
                     os: version_info.as_ref().and_then(|v| v.os.clone()),
                     arch: version_info.as_ref().and_then(|v| v.arch.clone()),
+                    engine_source: source.clone(),
                     source,
                     socket_path,
                 })
             } else {
-                Ok(DockerStatus {
+                Ok(EngineEndpointStatus {
                     connected: false,
                     version: None,
                     api_version: None,
                     os: None,
                     arch: None,
+                    engine_source: source.clone(),
                     source,
                     socket_path: None,
                 })
             }
         }
-        None => Ok(DockerStatus {
+        None => Ok(EngineEndpointStatus {
             connected: false,
             version: None,
             api_version: None,
             os: None,
             arch: None,
+            engine_source: source.clone(),
             source,
             socket_path: None,
         }),
     }
 }
 
-fn built_in_docker_endpoint(state: &State<'_, AppState>) -> String {
+fn built_in_engine_endpoint(state: &State<'_, AppState>) -> String {
     #[cfg(target_os = "linux")]
     {
-        cratebay_core::runtime::linux::linux_docker_host()
+        cratebay_core::runtime::linux::linux_engine_host()
     }
 
     #[cfg(target_os = "windows")]
     {
-        cratebay_core::runtime::windows::windows_docker_host()
+        cratebay_core::runtime::windows::windows_engine_host()
     }
 
     #[cfg(all(unix, not(target_os = "linux")))]
     {
         state
             .runtime
-            .docker_socket_path()
+            .engine_socket_path()
             .to_string_lossy()
             .to_string()
     }
@@ -136,6 +200,10 @@ fn built_in_docker_endpoint(state: &State<'_, AppState>) -> String {
 /// including health, configuration, and resource usage.
 #[tauri::command]
 pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusInfo, AppError> {
+    runtime_status_impl(&state).await
+}
+
+async fn runtime_status_impl(state: &State<'_, AppState>) -> Result<RuntimeStatusInfo, AppError> {
     let platform = match std::env::consts::OS {
         "macos" => "macos-vz",
         "linux" => "linux-kvm",
@@ -147,9 +215,9 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
     let mut health = state.runtime.health_check().await?;
     let config = RuntimeConfig::default();
 
-    // Reconcile transient ping failures with the shared AppState Docker client.
-    // This avoids reporting "starting" while an already-connected client is healthy.
-    let docker_source = state.docker_source();
+    // Reconcile transient compatibility ping failures with the shared AppState
+    // client without promoting native runtime readiness.
+    let docker_source = state.engine_compatibility_source();
     if docker::is_builtin_source(docker_source.as_deref())
         && !health.docker_responsive
         && matches!(
@@ -159,9 +227,9 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
     {
         let docker_opt = {
             let guard = state
-                .docker
+                .engine_compatibility
                 .lock()
-                .map_err(|e| AppError::Runtime(format!("Docker state lock poisoned: {}", e)))?;
+                .map_err(|e| AppError::Runtime(format!("Engine state lock poisoned: {}", e)))?;
             guard.clone()
         };
 
@@ -169,7 +237,6 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
             for attempt in 0..3 {
                 if docker::is_available(&docker_client).await {
                     health.docker_responsive = true;
-                    health.runtime_state = RuntimeState::Ready;
                     break;
                 }
                 if attempt < 2 {
@@ -179,18 +246,111 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
         }
     }
 
+    let native_engine = runtime::query_built_in_ready_engine_status(state.runtime.as_ref()).ok();
+    let engine_responsive = health.engine_responsive || native_engine.is_some();
+    let compatibility_responsive = health.compatibility_responsive || health.docker_responsive;
+    let runtime_state =
+        reconcile_runtime_state_with_native_engine(health.runtime_state.clone(), engine_responsive);
+
     // Try to get resource usage (non-fatal if it fails)
     let resource_usage = state.runtime.resource_usage().await.ok();
+    let engine = native_engine.unwrap_or_else(|| health.engine.clone());
+    let (engine_source, docker_source) =
+        runtime_status_sources(&health, engine_responsive, compatibility_responsive);
 
     Ok(RuntimeStatusInfo {
-        state: format_runtime_state(&health.runtime_state),
+        state: format_runtime_state(&runtime_state),
         platform: platform.to_string(),
         cpu_cores: config.cpu_cores,
         memory_mb: config.memory_mb,
         disk_gb: config.disk_gb as f32,
-        docker_responsive: health.docker_responsive,
+        engine_responsive,
+        compatibility_responsive,
+        compatibility_version: health
+            .compatibility_version
+            .clone()
+            .or_else(|| health.docker_version.clone()),
+        engine_source,
+        docker_source,
+        docker_responsive: compatibility_responsive,
+        engine,
         uptime_seconds: health.uptime_seconds,
         resource_usage,
+    })
+}
+
+fn diagnostic_section(
+    query: impl FnOnce() -> Result<Value, cratebay_core::AppError>,
+) -> RuntimeDiagnosticSection {
+    match query() {
+        Ok(value) => RuntimeDiagnosticSection::ok(value),
+        Err(error) => RuntimeDiagnosticSection::err(error),
+    }
+}
+
+fn runtime_status_sources(
+    health: &runtime::HealthStatus,
+    engine_responsive: bool,
+    compatibility_responsive: bool,
+) -> (Option<String>, Option<String>) {
+    let engine_source = health
+        .engine_source
+        .clone()
+        .or_else(|| engine_responsive.then(|| "builtin".to_string()));
+    let compatibility_source = health
+        .docker_source
+        .clone()
+        .or_else(|| {
+            compatibility_responsive
+                .then(|| health.engine_source.clone())
+                .flatten()
+        })
+        .or_else(|| compatibility_responsive.then(|| "builtin".to_string()));
+
+    (engine_source, compatibility_source)
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+/// Return one coherent diagnostics snapshot for Settings and automation.
+#[tauri::command]
+pub async fn runtime_diagnostics(
+    state: State<'_, AppState>,
+    prune_exited_containers: bool,
+) -> Result<RuntimeDiagnosticsInfo, AppError> {
+    let runtime_info = runtime_status_impl(&state).await?;
+    let engine_contract =
+        diagnostic_section(|| runtime::query_built_in_engine_contract(state.runtime.as_ref()));
+    let substrate =
+        diagnostic_section(|| runtime::query_built_in_native_substrate(state.runtime.as_ref()));
+    let storage_gc = diagnostic_section(|| {
+        runtime::query_built_in_native_storage_gc(
+            state.runtime.as_ref(),
+            false,
+            prune_exited_containers,
+        )
+    });
+    let shim_tasks =
+        diagnostic_section(|| runtime::query_built_in_native_shim_tasks(state.runtime.as_ref()));
+    let ok = runtime_info.engine_responsive
+        && engine_contract.ok
+        && substrate.ok
+        && storage_gc.ok
+        && shim_tasks.ok;
+
+    Ok(RuntimeDiagnosticsInfo {
+        ok,
+        runtime: runtime_info,
+        engine_contract,
+        substrate,
+        storage_gc,
+        shim_tasks,
+        generated_at_unix: unix_now(),
     })
 }
 
@@ -201,8 +361,38 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusI
 #[tauri::command]
 pub async fn runtime_start(state: State<'_, AppState>) -> Result<String, AppError> {
     tracing::info!("Manual runtime start requested");
+    start_runtime_and_connect_engine(&state).await
+}
+
+/// Pre-download the built-in runtime image without starting the VM.
+#[tauri::command]
+pub async fn runtime_provision(state: State<'_, AppState>) -> Result<String, AppError> {
+    tracing::info!("Manual runtime provision requested");
 
     apply_runtime_http_proxy_env(&state)?;
+
+    let current = state.runtime.get_state().await?;
+    if current != RuntimeState::None {
+        return Ok("Runtime is already provisioned".to_string());
+    }
+
+    state
+        .runtime
+        .provision(Box::new(|progress| {
+            tracing::info!(
+                "Provision: {} - {:.1}% - {}",
+                progress.stage,
+                progress.percent,
+                progress.message
+            );
+        }))
+        .await?;
+
+    Ok("Runtime provisioning complete".to_string())
+}
+
+async fn start_runtime_and_connect_engine(state: &State<'_, AppState>) -> Result<String, AppError> {
+    apply_runtime_http_proxy_env(state)?;
 
     // Step 1: Detect
     let current = state.runtime.get_state().await?;
@@ -226,30 +416,57 @@ pub async fn runtime_start(state: State<'_, AppState>) -> Result<String, AppErro
 
     // Step 3: Start
     state.runtime.start().await?;
-    tracing::info!("Runtime started, waiting for Docker...");
+    tracing::info!("Runtime started, waiting for CrateBay Engine API...");
 
-    // Step 4: Wait for Docker and update AppState
+    // Step 4: Wait for the native CrateBay Engine contract and cache the
+    // compatibility client if it is also available for older call sites.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
     while std::time::Instant::now() < deadline {
-        if let Some(docker) = try_connect_runtime_docker(state.runtime.as_ref()).await {
-            tracing::info!("Docker connected via built-in runtime");
-            state.set_docker(Some(Arc::new(docker)), Some("builtin".to_string()));
-            return Ok("Runtime started and Docker connected".to_string());
+        if runtime::query_built_in_ready_engine_status(state.runtime.as_ref()).is_ok() {
+            tracing::info!("Native CrateBay Engine API connected via built-in runtime");
+            if let Some(docker) =
+                try_connect_runtime_engine_compatibility(state.runtime.as_ref()).await
+            {
+                state.set_engine_compatibility(Some(Arc::new(docker)), Some("builtin".to_string()));
+            }
+            return Ok("Runtime started and CrateBay Engine connected".to_string());
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    Ok("Runtime started but Docker not yet responsive".to_string())
+    Ok("Runtime started but CrateBay Engine is not yet responsive".to_string())
 }
 
-async fn try_connect_runtime_docker(
+/// Manually restart the built-in runtime.
+#[tauri::command]
+pub async fn runtime_restart(state: State<'_, AppState>) -> Result<String, AppError> {
+    tracing::info!("Manual runtime restart requested");
+
+    let current = state.runtime.get_state().await?;
+    if !matches!(
+        current,
+        RuntimeState::None | RuntimeState::Provisioned | RuntimeState::Stopped
+    ) {
+        state.runtime.stop().await?;
+        state.set_engine_compatibility(None, None);
+    }
+
+    let result = start_runtime_and_connect_engine(&state).await?;
+    if result.contains("not yet responsive") {
+        Ok(result.replace("Runtime started", "Runtime restarted"))
+    } else {
+        Ok("Runtime restarted and CrateBay Engine connected".to_string())
+    }
+}
+
+async fn try_connect_runtime_engine_compatibility(
     runtime: &dyn cratebay_core::runtime::RuntimeManager,
 ) -> Option<Docker> {
     // Linux runtime: TCP hostfwd endpoint.
     #[cfg(target_os = "linux")]
     {
         let _ = runtime;
-        let host = cratebay_core::runtime::linux::linux_docker_host();
+        let host = cratebay_core::runtime::linux::linux_engine_host();
         let http_host = host
             .strip_prefix("tcp://")
             .map(|rest| format!("http://{}", rest))
@@ -266,7 +483,7 @@ async fn try_connect_runtime_docker(
     #[cfg(target_os = "windows")]
     {
         let _ = runtime;
-        let host = cratebay_core::runtime::windows::windows_docker_host();
+        let host = cratebay_core::runtime::windows::windows_engine_host();
         let http_host = host
             .strip_prefix("tcp://")
             .map(|rest| format!("http://{}", rest))
@@ -282,7 +499,7 @@ async fn try_connect_runtime_docker(
     // macOS and other Unix platforms: Unix socket.
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        let socket_path = runtime.docker_socket_path();
+        let socket_path = runtime.engine_socket_path();
         let socket_str = socket_path.to_str().unwrap_or_default();
         let docker = Docker::connect_with_unix(socket_str, 5, bollard::API_DEFAULT_VERSION).ok()?;
         if docker.ping().await.is_ok() {
@@ -304,8 +521,8 @@ pub async fn runtime_stop(state: State<'_, AppState>) -> Result<String, AppError
     tracing::info!("Manual runtime stop requested");
     state.runtime.stop().await?;
 
-    // Clear Docker connection since runtime is stopping
-    state.set_docker(None, None);
+    // Clear Engine compatibility connection since runtime is stopping.
+    state.set_engine_compatibility(None, None);
 
     Ok("Runtime stopped".to_string())
 }
@@ -319,6 +536,17 @@ fn format_runtime_state(state: &RuntimeState) -> String {
         RuntimeState::Ready => "ready".to_string(),
         RuntimeState::Stopping | RuntimeState::Stopped => "stopped".to_string(),
         RuntimeState::Error(_) => "error".to_string(),
+    }
+}
+
+fn reconcile_runtime_state_with_native_engine(
+    state: RuntimeState,
+    engine_responsive: bool,
+) -> RuntimeState {
+    if engine_responsive {
+        RuntimeState::Ready
+    } else {
+        state
     }
 }
 
@@ -467,5 +695,138 @@ fn os_version() -> String {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         "unknown".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_health_status() -> runtime::HealthStatus {
+        runtime::HealthStatus {
+            runtime_state: RuntimeState::Starting,
+            engine_responsive: false,
+            compatibility_responsive: false,
+            compatibility_version: None,
+            docker_responsive: false,
+            docker_version: None,
+            uptime_seconds: None,
+            last_check: "2026-06-14T00:00:00Z".to_string(),
+            engine_source: None,
+            docker_source: None,
+            engine: runtime::built_in_engine_status(),
+        }
+    }
+
+    #[test]
+    fn native_engine_readiness_promotes_runtime_state_to_ready() {
+        assert_eq!(
+            reconcile_runtime_state_with_native_engine(RuntimeState::Starting, true),
+            RuntimeState::Ready
+        );
+        assert_eq!(
+            reconcile_runtime_state_with_native_engine(
+                RuntimeState::Error("compatibility ping failed".to_string()),
+                true,
+            ),
+            RuntimeState::Ready
+        );
+    }
+
+    #[test]
+    fn runtime_state_is_preserved_without_native_engine_readiness() {
+        assert_eq!(
+            reconcile_runtime_state_with_native_engine(RuntimeState::Starting, false),
+            RuntimeState::Starting
+        );
+        assert_eq!(
+            reconcile_runtime_state_with_native_engine(RuntimeState::Stopped, false),
+            RuntimeState::Stopped
+        );
+    }
+
+    #[test]
+    fn runtime_status_sources_keep_compatibility_separate() {
+        let mut health = test_health_status();
+        health.compatibility_responsive = true;
+        health.docker_responsive = true;
+        health.docker_source = Some("builtin".to_string());
+
+        let (engine_source, docker_source) = runtime_status_sources(&health, false, true);
+
+        assert_eq!(engine_source, None);
+        assert_eq!(docker_source, Some("builtin".to_string()));
+    }
+
+    #[test]
+    fn runtime_status_sources_mark_native_engine_without_compatibility() {
+        let health = test_health_status();
+
+        let (engine_source, docker_source) = runtime_status_sources(&health, true, false);
+
+        assert_eq!(engine_source, Some("builtin".to_string()));
+        assert_eq!(docker_source, None);
+    }
+
+    #[test]
+    fn runtime_diagnostics_exposes_aggregate_snapshot_contract() {
+        let payload = RuntimeDiagnosticsInfo {
+            ok: false,
+            runtime: RuntimeStatusInfo {
+                state: "stopped".to_string(),
+                platform: "macos-vz".to_string(),
+                cpu_cores: 2,
+                memory_mb: 2048,
+                disk_gb: 20.0,
+                engine_responsive: false,
+                compatibility_responsive: false,
+                compatibility_version: None,
+                engine_source: Some("builtin".to_string()),
+                docker_source: Some("builtin".to_string()),
+                docker_responsive: false,
+                engine: runtime::built_in_engine_status(),
+                uptime_seconds: None,
+                resource_usage: None,
+            },
+            engine_contract: RuntimeDiagnosticSection::err("engine offline"),
+            substrate: RuntimeDiagnosticSection::ok(serde_json::json!({
+                "network": { "stack": "CNI" }
+            })),
+            storage_gc: RuntimeDiagnosticSection::ok(serde_json::json!({
+                "candidateCount": 1
+            })),
+            shim_tasks: RuntimeDiagnosticSection::ok(serde_json::json!({
+                "items": []
+            })),
+            generated_at_unix: 1,
+        };
+
+        let json = serde_json::to_value(&payload).expect("diagnostics should serialize");
+
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["runtime"]["state"], "stopped");
+        assert_eq!(json["engineContract"]["ok"], false);
+        assert_eq!(json["engineContract"]["error"], "engine offline");
+        assert_eq!(json["substrate"]["value"]["network"]["stack"], "CNI");
+        assert_eq!(json["storageGc"]["value"]["candidateCount"], 1);
+        assert!(json["shimTasks"]["value"]["items"].is_array());
+    }
+
+    #[test]
+    fn engine_status_prefers_native_contract_before_compatibility_ping() {
+        let source = include_str!("system.rs");
+        let native_probe = source
+            .find("query_built_in_ready_engine_status")
+            .expect("engine_status should probe the native CrateBay Engine contract");
+        let compatibility_probe = source
+            .find("docker::is_available")
+            .expect("engine_status should keep compatibility fallback");
+
+        assert!(
+            native_probe < compatibility_probe,
+            "native Engine contract must be the primary engine_status signal"
+        );
+        assert!(source.contains("version: Some(engine.kind)"));
+        assert!(source.contains("api_version: Some(engine.api)"));
     }
 }

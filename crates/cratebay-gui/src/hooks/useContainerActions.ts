@@ -43,8 +43,8 @@ export function useContainerActions() {
   );
 
   const remove = useCallback(
-    async (id: string) => {
-      await deleteContainer(id);
+    async (id: string, force = false) => {
+      await deleteContainer(id, force);
     },
     [deleteContainer],
   );

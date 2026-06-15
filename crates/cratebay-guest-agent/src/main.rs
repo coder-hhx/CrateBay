@@ -18,19 +18,19 @@ fn run() -> Result<(), String> {
     let cfg = Config::from_env_and_args()?;
 
     eprintln!(
-        "cratebay-guest-agent: mode={:?} docker_socket={} docker_host_tcp={:?}",
+        "cratebay-guest-agent: mode={:?} engine_socket={} engine_host_tcp={:?}",
         cfg.listen,
-        cfg.docker_socket.display(),
-        cfg.docker_host_tcp
+        cfg.engine_socket.display(),
+        cfg.engine_host_tcp
     );
 
     match cfg.listen {
-        ListenMode::Vsock { port } => run_vsock(port, cfg.docker_socket),
-        ListenMode::Tcp { addr } => run_tcp(addr, cfg.docker_socket),
+        ListenMode::Vsock { port } => run_vsock(port, cfg.engine_socket),
+        ListenMode::Tcp { addr } => run_tcp(addr, cfg.engine_socket),
         ListenMode::Connect { addr } => run_connect(
             addr,
-            cfg.docker_socket,
-            cfg.docker_host_tcp,
+            cfg.engine_socket,
+            cfg.engine_host_tcp,
             cfg.connect_pool_size,
         ),
     }
@@ -63,8 +63,8 @@ fn raise_nofile_limit() {
 #[derive(Clone)]
 struct Config {
     listen: ListenMode,
-    docker_socket: std::path::PathBuf,
-    docker_host_tcp: Option<std::net::SocketAddr>,
+    engine_socket: std::path::PathBuf,
+    engine_host_tcp: Option<std::net::SocketAddr>,
     connect_pool_size: usize,
 }
 
@@ -81,25 +81,12 @@ impl Config {
     fn from_env_and_args() -> Result<Self, String> {
         use std::path::PathBuf;
 
-        let mut port: u32 = std::env::var("CRATEBAY_DOCKER_PROXY_PORT")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|v| *v > 0)
-            .or_else(|| {
-                std::env::var("CRATEBAY_DOCKER_VSOCK_PORT")
-                    .ok()
-                    .and_then(|v| v.parse::<u32>().ok())
-                    .filter(|v| *v > 0)
-            })
-            .unwrap_or(6237);
+        let mut port: u32 = env_proxy_port().unwrap_or(6237);
 
-        let mut docker_socket = std::env::var("CRATEBAY_GUEST_DOCKER_SOCK")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/var/run/docker.sock"));
-        let mut docker_host_tcp: Option<std::net::SocketAddr> =
-            std::env::var("CRATEBAY_GUEST_DOCKER_HOST")
+        let mut engine_socket = env_engine_socket_path();
+        let mut engine_host_tcp: Option<std::net::SocketAddr> =
+            std::env::var("CRATEBAY_GUEST_ENGINE_HOST")
+                .or_else(|_| std::env::var("CRATEBAY_GUEST_DOCKER_HOST"))
                 .ok()
                 .filter(|v| !v.trim().is_empty())
                 .and_then(|v| v.parse::<std::net::SocketAddr>().ok());
@@ -120,7 +107,7 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|v| *v > 0)
-            .unwrap_or(4);
+            .unwrap_or(32);
 
         let mut it = std::env::args().skip(1);
         while let Some(arg) = it.next() {
@@ -158,20 +145,20 @@ impl Config {
                             .map_err(|_| "Invalid --listen (expected ip:port)".to_string())?,
                     );
                 }
-                "--docker-sock" => {
+                "--engine-sock" | "--docker-sock" => {
                     let raw = it
                         .next()
-                        .ok_or_else(|| "--docker-sock requires a value".to_string())?;
-                    docker_socket = PathBuf::from(raw);
+                        .ok_or_else(|| format!("{} requires a value", arg))?;
+                    engine_socket = PathBuf::from(raw);
                 }
-                "--docker-host-tcp" => {
+                "--engine-host-tcp" | "--docker-host-tcp" => {
                     let raw = it
                         .next()
-                        .ok_or_else(|| "--docker-host-tcp requires a value".to_string())?;
-                    docker_host_tcp =
-                        Some(raw.parse::<std::net::SocketAddr>().map_err(|_| {
-                            "Invalid --docker-host-tcp (expected ip:port)".to_string()
-                        })?);
+                        .ok_or_else(|| format!("{} requires a value", arg))?;
+                    engine_host_tcp = Some(
+                        raw.parse::<std::net::SocketAddr>()
+                            .map_err(|_| format!("Invalid {} (expected ip:port)", arg))?,
+                    );
                 }
                 "--connect-pool-size" => {
                     let raw = it
@@ -207,23 +194,50 @@ impl Config {
 
         Ok(Self {
             listen,
-            docker_socket,
-            docker_host_tcp,
+            engine_socket,
+            engine_host_tcp,
             connect_pool_size,
         })
     }
 
     fn usage() -> &'static str {
-        "Usage:\n  cratebay-guest-agent [--tcp] [--connect <ip:port>] [--connect-pool-size <n>] [--port <port>] [--listen <ip:port>] [--docker-sock <path>] [--docker-host-tcp <ip:port>]\n\n\
-Modes:\n  (default) vsock: listen on AF_VSOCK port\n  --tcp               : listen on TCP (default 0.0.0.0:<port>)\n  --connect <ip:port> : connect outward over TCP and proxy to Docker socket\n  --connect-pool-size : number of concurrent reverse-TCP workers (default 4)\n\n\
-Env:\n  CRATEBAY_DOCKER_PROXY_PORT        Guest proxy listen port (default 6237)\n  \
-CRATEBAY_DOCKER_VSOCK_PORT         Back-compat for proxy port (default 6237)\n  \
+        "Usage:\n  cratebay-guest-agent [--tcp] [--connect <ip:port>] [--connect-pool-size <n>] [--port <port>] [--listen <ip:port>] [--engine-sock <path>] [--engine-host-tcp <ip:port>]\n\n\
+Modes:\n  (default) vsock: listen on AF_VSOCK port\n  --tcp               : listen on TCP (default 0.0.0.0:<port>)\n  --connect <ip:port> : connect outward over TCP and proxy to the CrateBay Engine compatibility endpoint\n  --connect-pool-size : number of concurrent reverse-TCP workers (default 32)\n\n\
+Env:\n  CRATEBAY_ENGINE_PROXY_PORT        Guest proxy listen port (default 6237)\n  \
+CRATEBAY_ENGINE_VSOCK_PORT         Back-compat for Engine proxy port (default 6237)\n  \
+CRATEBAY_DOCKER_PROXY_PORT        Legacy alias for proxy port (default 6237)\n  \
+CRATEBAY_DOCKER_VSOCK_PORT         Legacy alias for proxy port (default 6237)\n  \
 CRATEBAY_GUEST_TCP_LISTEN          TCP listen addr override (e.g. 0.0.0.0:6237)\n  \
 CRATEBAY_GUEST_TCP_CONNECT         TCP connect target override (e.g. 192.168.64.1:6237)\n  \
-CRATEBAY_GUEST_CONNECT_POOL_SIZE   Reverse-TCP worker pool size (default 4)\n  \
-CRATEBAY_GUEST_DOCKER_HOST         Guest Docker TCP endpoint override (e.g. 127.0.0.1:2375)\n  \
-CRATEBAY_GUEST_DOCKER_SOCK         Guest Docker unix socket path (default /var/run/docker.sock)\n"
+CRATEBAY_GUEST_CONNECT_POOL_SIZE   Reverse-TCP worker pool size (default 32)\n  \
+CRATEBAY_GUEST_ENGINE_HOST         Guest CrateBay Engine TCP endpoint override (e.g. 127.0.0.1:2375)\n  \
+CRATEBAY_GUEST_ENGINE_SOCK         Guest CrateBay Engine unix socket path (default /run/cratebay/engine.sock)\n  \
+CRATEBAY_GUEST_DOCKER_HOST         Back-compat alias for CRATEBAY_GUEST_ENGINE_HOST\n  \
+CRATEBAY_GUEST_DOCKER_SOCK         Back-compat alias for CRATEBAY_GUEST_ENGINE_SOCK\n"
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_positive_u32(raw: Option<String>) -> Option<u32> {
+    raw.and_then(|v| v.parse::<u32>().ok()).filter(|v| *v > 0)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn env_proxy_port() -> Option<u32> {
+    parse_positive_u32(std::env::var("CRATEBAY_ENGINE_PROXY_PORT").ok())
+        .or_else(|| parse_positive_u32(std::env::var("CRATEBAY_ENGINE_VSOCK_PORT").ok()))
+        .or_else(|| parse_positive_u32(std::env::var("CRATEBAY_DOCKER_PROXY_PORT").ok()))
+        .or_else(|| parse_positive_u32(std::env::var("CRATEBAY_DOCKER_VSOCK_PORT").ok()))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn env_engine_socket_path() -> std::path::PathBuf {
+    std::env::var("CRATEBAY_GUEST_ENGINE_SOCK")
+        .or_else(|_| std::env::var("CRATEBAY_GUEST_DOCKER_SOCK"))
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/run/cratebay/engine.sock"))
 }
 
 #[cfg(target_os = "linux")]
@@ -280,7 +294,7 @@ fn vsock_listen(port: u32) -> Result<i32, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn run_vsock(port: u32, docker_socket: std::path::PathBuf) -> Result<(), String> {
+fn run_vsock(port: u32, engine_socket: std::path::PathBuf) -> Result<(), String> {
     use std::os::fd::FromRawFd;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
@@ -290,7 +304,7 @@ fn run_vsock(port: u32, docker_socket: std::path::PathBuf) -> Result<(), String>
     eprintln!(
         "cratebay-guest-agent listening: vsock:{} -> {}",
         port,
-        docker_socket.display()
+        engine_socket.display()
     );
 
     loop {
@@ -303,32 +317,32 @@ fn run_vsock(port: u32, docker_socket: std::path::PathBuf) -> Result<(), String>
             ));
         }
 
-        let docker_socket = docker_socket.clone();
+        let engine_socket = engine_socket.clone();
         std::thread::spawn(move || {
             let client = unsafe { std::fs::File::from_raw_fd(conn_fd) };
             if let Err(error) =
-                wait_for_docker_socket_ready(&docker_socket, Duration::from_secs(30))
+                wait_for_engine_socket_ready(&engine_socket, Duration::from_secs(30))
             {
                 eprintln!(
                     "cratebay-guest-agent: wait for {} failed: {}",
-                    docker_socket.display(),
+                    engine_socket.display(),
                     error
                 );
                 return;
             }
-            let docker = match UnixStream::connect(&docker_socket) {
+            let engine = match UnixStream::connect(&engine_socket) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!(
                         "cratebay-guest-agent: connect {} failed: {}",
-                        docker_socket.display(),
+                        engine_socket.display(),
                         e
                     );
                     return;
                 }
             };
 
-            if let Err(e) = proxy_unix_to_file(docker, client) {
+            if let Err(e) = proxy_unix_to_file(engine, client) {
                 eprintln!("cratebay-guest-agent: proxy ended: {}", e);
             }
         });
@@ -336,7 +350,7 @@ fn run_vsock(port: u32, docker_socket: std::path::PathBuf) -> Result<(), String>
 }
 
 #[cfg(target_os = "linux")]
-fn run_tcp(addr: std::net::SocketAddr, docker_socket: std::path::PathBuf) -> Result<(), String> {
+fn run_tcp(addr: std::net::SocketAddr, engine_socket: std::path::PathBuf) -> Result<(), String> {
     use std::net::TcpListener;
     use std::net::TcpStream;
     use std::os::unix::net::UnixStream;
@@ -347,7 +361,7 @@ fn run_tcp(addr: std::net::SocketAddr, docker_socket: std::path::PathBuf) -> Res
     eprintln!(
         "cratebay-guest-agent listening: tcp:{} -> {}",
         addr,
-        docker_socket.display()
+        engine_socket.display()
     );
 
     for conn in listener.incoming() {
@@ -356,31 +370,31 @@ fn run_tcp(addr: std::net::SocketAddr, docker_socket: std::path::PathBuf) -> Res
             Err(e) => return Err(format!("accept tcp failed: {}", e)),
         };
 
-        let docker_socket = docker_socket.clone();
+        let engine_socket = engine_socket.clone();
         std::thread::spawn(move || {
             if let Err(error) =
-                wait_for_docker_socket_ready(&docker_socket, Duration::from_secs(30))
+                wait_for_engine_socket_ready(&engine_socket, Duration::from_secs(30))
             {
                 eprintln!(
                     "cratebay-guest-agent: wait for {} failed: {}",
-                    docker_socket.display(),
+                    engine_socket.display(),
                     error
                 );
                 return;
             }
-            let docker = match UnixStream::connect(&docker_socket) {
+            let engine = match UnixStream::connect(&engine_socket) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!(
                         "cratebay-guest-agent: connect {} failed: {}",
-                        docker_socket.display(),
+                        engine_socket.display(),
                         e
                     );
                     return;
                 }
             };
 
-            if let Err(e) = proxy_unix_to_tcp(docker, stream) {
+            if let Err(e) = proxy_unix_to_tcp(engine, stream) {
                 eprintln!("cratebay-guest-agent: proxy ended: {}", e);
             }
         });
@@ -392,27 +406,27 @@ fn run_tcp(addr: std::net::SocketAddr, docker_socket: std::path::PathBuf) -> Res
 #[cfg(target_os = "linux")]
 fn run_connect(
     addr: std::net::SocketAddr,
-    docker_socket: std::path::PathBuf,
-    docker_host_tcp: Option<std::net::SocketAddr>,
+    engine_socket: std::path::PathBuf,
+    engine_host_tcp: Option<std::net::SocketAddr>,
     connect_pool_size: usize,
 ) -> Result<(), String> {
-    let docker_target = docker_host_tcp
+    let engine_target = engine_host_tcp
         .map(|target| target.to_string())
-        .unwrap_or_else(|| docker_socket.display().to_string());
+        .unwrap_or_else(|| engine_socket.display().to_string());
     eprintln!(
         "connect: dialing {} (pool_size={})",
         addr, connect_pool_size
     );
     eprintln!(
         "cratebay-guest-agent connecting: tcp:{} -> {} (workers={})",
-        addr, docker_target, connect_pool_size
+        addr, engine_target, connect_pool_size
     );
 
     let mut workers = Vec::with_capacity(connect_pool_size);
     for worker_id in 0..connect_pool_size {
-        let docker_socket = docker_socket.clone();
+        let engine_socket = engine_socket.clone();
         workers.push(std::thread::spawn(move || {
-            run_connect_worker(worker_id, addr, docker_socket, docker_host_tcp)
+            run_connect_worker(worker_id, addr, engine_socket, engine_host_tcp)
         }));
     }
 
@@ -429,17 +443,17 @@ fn run_connect(
 fn run_connect_worker(
     worker_id: usize,
     addr: std::net::SocketAddr,
-    docker_socket: std::path::PathBuf,
-    docker_host_tcp: Option<std::net::SocketAddr>,
+    engine_socket: std::path::PathBuf,
+    engine_host_tcp: Option<std::net::SocketAddr>,
 ) {
     use std::net::TcpStream;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
     loop {
-        match docker_host_tcp {
+        match engine_host_tcp {
             Some(target) => {
-                if let Err(error) = wait_for_docker_host_ready(target, Duration::from_secs(30)) {
+                if let Err(error) = wait_for_engine_host_ready(target, Duration::from_secs(30)) {
                     eprintln!(
                         "cratebay-guest-agent[{}]: wait for {} failed: {}",
                         worker_id, target, error
@@ -450,12 +464,12 @@ fn run_connect_worker(
             }
             None => {
                 if let Err(error) =
-                    wait_for_docker_socket_ready(&docker_socket, Duration::from_secs(30))
+                    wait_for_engine_socket_ready(&engine_socket, Duration::from_secs(30))
                 {
                     eprintln!(
                         "cratebay-guest-agent[{}]: wait for {} failed: {}",
                         worker_id,
-                        docker_socket.display(),
+                        engine_socket.display(),
                         error
                     );
                     std::thread::sleep(Duration::from_millis(250));
@@ -472,8 +486,8 @@ fn run_connect_worker(
                     worker_id, addr
                 );
 
-                if let Some(target) = docker_host_tcp {
-                    let docker = match TcpStream::connect_timeout(&target, Duration::from_secs(2)) {
+                if let Some(target) = engine_host_tcp {
+                    let engine = match TcpStream::connect_timeout(&target, Duration::from_secs(2)) {
                         Ok(socket) => socket,
                         Err(error) => {
                             eprintln!(
@@ -484,13 +498,13 @@ fn run_connect_worker(
                             continue;
                         }
                     };
-                    let _ = docker.set_nodelay(true);
+                    let _ = engine.set_nodelay(true);
                     eprintln!(
-                        "cratebay-guest-agent[{}]: connected to docker tcp {}",
+                        "cratebay-guest-agent[{}]: connected to engine tcp {}",
                         worker_id, target
                     );
 
-                    if let Err(error) = proxy_tcp_to_tcp(docker, stream) {
+                    if let Err(error) = proxy_tcp_to_tcp(engine, stream) {
                         eprintln!(
                             "cratebay-guest-agent[{}]: proxy ended: {}",
                             worker_id, error
@@ -499,13 +513,13 @@ fn run_connect_worker(
                         eprintln!("cratebay-guest-agent[{}]: proxy completed", worker_id);
                     }
                 } else {
-                    let docker = match UnixStream::connect(&docker_socket) {
+                    let engine = match UnixStream::connect(&engine_socket) {
                         Ok(s) => s,
                         Err(error) => {
                             eprintln!(
                                 "cratebay-guest-agent[{}]: connect {} failed: {}",
                                 worker_id,
-                                docker_socket.display(),
+                                engine_socket.display(),
                                 error
                             );
                             std::thread::sleep(Duration::from_millis(250));
@@ -513,12 +527,12 @@ fn run_connect_worker(
                         }
                     };
                     eprintln!(
-                        "cratebay-guest-agent[{}]: connected to docker socket {}",
+                        "cratebay-guest-agent[{}]: connected to engine socket {}",
                         worker_id,
-                        docker_socket.display()
+                        engine_socket.display()
                     );
 
-                    if let Err(error) = proxy_unix_to_tcp(docker, stream) {
+                    if let Err(error) = proxy_unix_to_tcp(engine, stream) {
                         eprintln!(
                             "cratebay-guest-agent[{}]: proxy ended: {}",
                             worker_id, error
@@ -541,60 +555,60 @@ fn run_connect_worker(
 }
 
 #[cfg(target_os = "linux")]
-fn wait_for_docker_socket_ready(
-    docker_socket: &std::path::Path,
+fn wait_for_engine_socket_ready(
+    engine_socket: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if docker_socket.exists() && docker_ping_unix_socket(docker_socket).is_ok() {
+        if engine_socket.exists() && engine_ping_unix_socket(engine_socket).is_ok() {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     Err(format!(
-        "Docker socket was not ready within {}s: {}",
+        "CrateBay Engine socket was not ready within {}s: {}",
         timeout.as_secs(),
-        docker_socket.display()
+        engine_socket.display()
     ))
 }
 
 #[cfg(target_os = "linux")]
-fn wait_for_docker_host_ready(
-    docker_host: std::net::SocketAddr,
+fn wait_for_engine_host_ready(
+    engine_host: std::net::SocketAddr,
     timeout: std::time::Duration,
 ) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if docker_ping_tcp_host(docker_host).is_ok() {
+        if engine_ping_tcp_host(engine_host).is_ok() {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     Err(format!(
-        "Docker TCP endpoint was not ready within {}s: {}",
+        "CrateBay Engine TCP endpoint was not ready within {}s: {}",
         timeout.as_secs(),
-        docker_host
+        engine_host
     ))
 }
 
 #[cfg(target_os = "linux")]
-fn docker_ping_unix_socket(docker_socket: &std::path::Path) -> Result<(), String> {
+fn engine_ping_unix_socket(engine_socket: &std::path::Path) -> Result<(), String> {
     use std::io::{Read, Write as _};
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    let mut stream = UnixStream::connect(docker_socket)
-        .map_err(|e| format!("connect {}: {}", docker_socket.display(), e))?;
+    let mut stream = UnixStream::connect(engine_socket)
+        .map_err(|e| format!("connect {}: {}", engine_socket.display(), e))?;
 
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
 
     stream
         .write_all(
-            b"GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            b"GET /_ping HTTP/1.1\r\nHost: cratebay-engine\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         )
         .map_err(|e| format!("write _ping: {}", e))?;
 
@@ -627,20 +641,20 @@ fn docker_ping_unix_socket(docker_socket: &std::path::Path) -> Result<(), String
 }
 
 #[cfg(target_os = "linux")]
-fn docker_ping_tcp_host(docker_host: std::net::SocketAddr) -> Result<(), String> {
+fn engine_ping_tcp_host(engine_host: std::net::SocketAddr) -> Result<(), String> {
     use std::io::{Read, Write as _};
     use std::net::TcpStream;
     use std::time::Duration;
 
-    let mut stream = TcpStream::connect_timeout(&docker_host, Duration::from_secs(2))
-        .map_err(|e| format!("connect {}: {}", docker_host, e))?;
+    let mut stream = TcpStream::connect_timeout(&engine_host, Duration::from_secs(2))
+        .map_err(|e| format!("connect {}: {}", engine_host, e))?;
 
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
 
     stream
         .write_all(
-            b"GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            b"GET /_ping HTTP/1.1\r\nHost: cratebay-engine\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         )
         .map_err(|e| format!("write _ping: {}", e))?;
 
@@ -674,15 +688,15 @@ fn docker_ping_tcp_host(docker_host: std::net::SocketAddr) -> Result<(), String>
 
 #[cfg(target_os = "linux")]
 fn proxy_unix_to_file(
-    docker: std::os::unix::net::UnixStream,
+    engine: std::os::unix::net::UnixStream,
     client: std::fs::File,
 ) -> Result<(), String> {
     use std::os::fd::AsRawFd;
 
-    let mut docker_r = docker
+    let mut engine_r = engine
         .try_clone()
-        .map_err(|e| format!("docker clone: {}", e))?;
-    let mut docker_w = docker;
+        .map_err(|e| format!("engine clone: {}", e))?;
+    let mut engine_w = engine;
 
     let mut client_r = client
         .try_clone()
@@ -690,49 +704,49 @@ fn proxy_unix_to_file(
     let mut client_w = client;
 
     let t1 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut docker_r, &mut client_w)
-            .map_err(|e| format!("docker->client copy: {}", e))?;
+        std::io::copy(&mut engine_r, &mut client_w)
+            .map_err(|e| format!("engine->client copy: {}", e))?;
         let _ = unsafe { libc::shutdown(client_w.as_raw_fd(), libc::SHUT_WR) };
         Ok(())
     });
 
     let t2 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut client_r, &mut docker_w)
-            .map_err(|e| format!("client->docker copy: {}", e))?;
-        // Do not propagate client half-close into dockerd.
+        std::io::copy(&mut client_r, &mut engine_w)
+            .map_err(|e| format!("client->engine copy: {}", e))?;
+        // Do not propagate client half-close into the upstream engine socket.
         //
-        // Docker's HTTP API can return `500 {"message":"context canceled"}` for
-        // endpoints like `/version` if the client shuts down its write-half
-        // (FIN) immediately after sending the request. Many proxies propagate
-        // EOF by half-closing the upstream socket, but for dockerd this can
-        // cancel the request context even when the full request has already
-        // been received.
+        // The Engine compatibility HTTP API can return `500
+        // {"message":"context canceled"}` for endpoints like `/version` if the
+        // client shuts down its write-half (FIN) immediately after sending the
+        // request. Many proxies propagate EOF by half-closing the upstream
+        // socket, but this can cancel the request context even when the full
+        // request has already been received.
         //
-        // We keep the dockerd socket write-half open and rely on the overall
-        // connection lifecycle (client close or docker close) to tear down the
+        // We keep the upstream socket write-half open and rely on the overall
+        // connection lifecycle (client close or engine close) to tear down the
         // tunnel.
         Ok(())
     });
 
     t1.join()
-        .map_err(|_| "docker->client proxy thread panicked".to_string())??;
+        .map_err(|_| "engine->client proxy thread panicked".to_string())??;
     t2.join()
-        .map_err(|_| "client->docker proxy thread panicked".to_string())??;
+        .map_err(|_| "client->engine proxy thread panicked".to_string())??;
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn proxy_unix_to_tcp(
-    docker: std::os::unix::net::UnixStream,
+    engine: std::os::unix::net::UnixStream,
     client: std::net::TcpStream,
 ) -> Result<(), String> {
     use std::net::Shutdown;
     use std::os::fd::AsRawFd;
 
-    let mut docker_r = docker
+    let mut engine_r = engine
         .try_clone()
-        .map_err(|e| format!("docker clone: {}", e))?;
-    let mut docker_w = docker;
+        .map_err(|e| format!("engine clone: {}", e))?;
+    let mut engine_w = engine;
 
     let mut client_r = client
         .try_clone()
@@ -743,23 +757,23 @@ fn proxy_unix_to_tcp(
     let mut client_w = client;
 
     let t1 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut docker_r, &mut client_w)
-            .map_err(|e| format!("docker->client copy: {}", e))?;
+        std::io::copy(&mut engine_r, &mut client_w)
+            .map_err(|e| format!("engine->client copy: {}", e))?;
         let _ = unsafe { libc::shutdown(client_w.as_raw_fd(), libc::SHUT_WR) };
         Ok(())
     });
 
     let t2 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut client_r, &mut docker_w)
-            .map_err(|e| format!("client->docker copy: {}", e))?;
-        // Do not propagate client half-close into dockerd.
+        std::io::copy(&mut client_r, &mut engine_w)
+            .map_err(|e| format!("client->engine copy: {}", e))?;
+        // Do not propagate client half-close into the upstream engine socket.
         Ok(())
     });
 
     t1.join()
-        .map_err(|_| "docker->client proxy thread panicked".to_string())??;
+        .map_err(|_| "engine->client proxy thread panicked".to_string())??;
     t2.join()
-        .map_err(|_| "client->docker proxy thread panicked".to_string())??;
+        .map_err(|_| "client->engine proxy thread panicked".to_string())??;
 
     let _ = client_shutdown.shutdown(Shutdown::Both);
     Ok(())
@@ -767,15 +781,15 @@ fn proxy_unix_to_tcp(
 
 #[cfg(target_os = "linux")]
 fn proxy_tcp_to_tcp(
-    docker: std::net::TcpStream,
+    engine: std::net::TcpStream,
     client: std::net::TcpStream,
 ) -> Result<(), String> {
     use std::net::Shutdown;
 
-    let mut docker_r = docker
+    let mut engine_r = engine
         .try_clone()
-        .map_err(|e| format!("docker clone: {}", e))?;
-    let mut docker_w = docker;
+        .map_err(|e| format!("engine clone: {}", e))?;
+    let mut engine_w = engine;
 
     let mut client_r = client
         .try_clone()
@@ -783,22 +797,95 @@ fn proxy_tcp_to_tcp(
     let mut client_w = client;
 
     let t1 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut docker_r, &mut client_w)
-            .map_err(|e| format!("docker->client copy: {}", e))?;
+        std::io::copy(&mut engine_r, &mut client_w)
+            .map_err(|e| format!("engine->client copy: {}", e))?;
         let _ = client_w.shutdown(Shutdown::Write);
         Ok(())
     });
 
     let t2 = std::thread::spawn(move || -> Result<(), String> {
-        std::io::copy(&mut client_r, &mut docker_w)
-            .map_err(|e| format!("client->docker copy: {}", e))?;
-        // Do not propagate client half-close into dockerd.
+        std::io::copy(&mut client_r, &mut engine_w)
+            .map_err(|e| format!("client->engine copy: {}", e))?;
+        // Do not propagate client half-close into the upstream engine socket.
         Ok(())
     });
 
     t1.join()
-        .map_err(|_| "docker->client proxy thread panicked".to_string())??;
+        .map_err(|_| "engine->client proxy thread panicked".to_string())??;
     t2.join()
-        .map_err(|_| "client->docker proxy thread panicked".to_string())??;
+        .map_err(|_| "client->engine proxy thread panicked".to_string())??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn clear_env() {
+        for key in [
+            "CRATEBAY_ENGINE_PROXY_PORT",
+            "CRATEBAY_ENGINE_VSOCK_PORT",
+            "CRATEBAY_DOCKER_PROXY_PORT",
+            "CRATEBAY_DOCKER_VSOCK_PORT",
+            "CRATEBAY_GUEST_ENGINE_SOCK",
+            "CRATEBAY_GUEST_DOCKER_SOCK",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn engine_proxy_port_takes_priority_over_legacy_aliases() {
+        let _guard = env_lock();
+        clear_env();
+        std::env::set_var("CRATEBAY_DOCKER_PROXY_PORT", "7000");
+        std::env::set_var("CRATEBAY_ENGINE_PROXY_PORT", "6237");
+
+        assert_eq!(super::env_proxy_port(), Some(6237));
+
+        clear_env();
+    }
+
+    #[test]
+    fn legacy_proxy_port_is_still_supported() {
+        let _guard = env_lock();
+        clear_env();
+        std::env::set_var("CRATEBAY_DOCKER_PROXY_PORT", "7000");
+
+        assert_eq!(super::env_proxy_port(), Some(7000));
+
+        clear_env();
+    }
+
+    #[test]
+    fn engine_socket_defaults_to_engine_sock() {
+        let _guard = env_lock();
+        clear_env();
+
+        assert_eq!(
+            super::env_engine_socket_path(),
+            std::path::PathBuf::from("/run/cratebay/engine.sock")
+        );
+
+        clear_env();
+    }
+
+    #[test]
+    fn legacy_guest_socket_alias_is_still_supported() {
+        let _guard = env_lock();
+        clear_env();
+        std::env::set_var("CRATEBAY_GUEST_DOCKER_SOCK", "/run/cratebay/docker.sock");
+
+        assert_eq!(
+            super::env_engine_socket_path(),
+            std::path::PathBuf::from("/run/cratebay/docker.sock")
+        );
+
+        clear_env();
+    }
 }

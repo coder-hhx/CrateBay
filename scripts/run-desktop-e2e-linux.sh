@@ -76,5 +76,5 @@ TAURI_DRIVER_URL="http://127.0.0.1:4444" \
 cargo test -p cratebay-gui --features custom-protocol --test desktop_smoke -- --ignored --nocapture --test-threads=1 2>&1 | tee "$test_log"
 
 "$repo_root/target/debug/cratebay" runtime status > "$artifact_dir/cratebay-runtime-status.txt" 2>&1 || true
-"$repo_root/target/debug/cratebay" system docker-status > "$artifact_dir/cratebay-docker-status.txt" 2>&1 || true
+"$repo_root/target/debug/cratebay" system engine-status > "$artifact_dir/cratebay-engine-status.txt" 2>&1 || true
 find "$artifact_dir" -maxdepth 2 -type f | sort > "$artifact_dir/artifacts.txt"

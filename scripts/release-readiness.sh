@@ -44,6 +44,7 @@ echo "CrateBay release-readiness gate (stage=$release_stage)"
 echo "Report: $report_file"
 
 run_check "Product surface guard" ./scripts/product-surface-guard.sh
+run_check "Runtime native guard" ./scripts/runtime-native-guard.sh
 run_check "Tauri command surface guard" ./scripts/verify-tauri-command-surface.sh
 run_check "Local CI gate (Rust + frontend + Playwright E2E)" ./scripts/ci-local.sh
 run_check "Tauri GUI check" cargo check -p cratebay-gui

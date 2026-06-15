@@ -1,7 +1,14 @@
 import { create } from "zustand";
 import { invoke, isTauri } from "@/lib/tauri";
 import type { AppSettings } from "@/types/settings";
-import { DEFAULT_REGISTRY_MIRRORS } from "@/types/settings";
+import {
+  DEFAULT_REGISTRY_MIRRORS,
+  DEFAULT_RUNTIME_HTTP_PROXY,
+  DEFAULT_RUNTIME_HTTP_PROXY_BIND_HOST,
+  DEFAULT_RUNTIME_HTTP_PROXY_BIND_PORT,
+  DEFAULT_RUNTIME_HTTP_PROXY_BRIDGE,
+  DEFAULT_RUNTIME_HTTP_PROXY_GUEST_HOST,
+} from "@/types/settings";
 
 export type { AppSettings };
 
@@ -15,11 +22,12 @@ const defaultSettings: AppSettings = {
   language: "en",
   theme: "dark",
   registryMirrors: [...DEFAULT_REGISTRY_MIRRORS],
-  runtimeHttpProxy: "",
-  runtimeHttpProxyBridge: false,
-  runtimeHttpProxyBindHost: "0.0.0.0",
-  runtimeHttpProxyBindPort: 3128,
-  runtimeHttpProxyGuestHost: "192.168.64.1",
+  runtimeHttpProxy: DEFAULT_RUNTIME_HTTP_PROXY,
+  runtimeHttpProxyBridge: DEFAULT_RUNTIME_HTTP_PROXY_BRIDGE,
+  runtimeHttpProxyBindHost: DEFAULT_RUNTIME_HTTP_PROXY_BIND_HOST,
+  runtimeHttpProxyBindPort: DEFAULT_RUNTIME_HTTP_PROXY_BIND_PORT,
+  runtimeHttpProxyGuestHost: DEFAULT_RUNTIME_HTTP_PROXY_GUEST_HOST,
+  includePrereleases: false,
 };
 
 const settingKeys: (keyof AppSettings)[] = [
@@ -31,6 +39,7 @@ const settingKeys: (keyof AppSettings)[] = [
   "runtimeHttpProxyBindHost",
   "runtimeHttpProxyBindPort",
   "runtimeHttpProxyGuestHost",
+  "includePrereleases",
 ];
 
 function parseRegistryMirrors(value: string): string[] {
@@ -53,7 +62,7 @@ function parseSettingValue(key: keyof AppSettings, value: string): AppSettings[k
   if (key === "registryMirrors") {
     return parseRegistryMirrors(value) as AppSettings[keyof AppSettings];
   }
-  if (key === "runtimeHttpProxyBridge") {
+  if (key === "runtimeHttpProxyBridge" || key === "includePrereleases") {
     return (value === "true") as AppSettings[keyof AppSettings];
   }
   if (key === "runtimeHttpProxyBindPort") {

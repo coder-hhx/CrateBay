@@ -12,7 +12,7 @@ GUI (Tauri + React)      CLI (cratebay)
          \               /
           cratebay-core
               |
-      Docker-compatible API
+      CrateBay Engine API
               |
        Built-in runtime
 ```
@@ -21,18 +21,20 @@ GUI (Tauri + React)      CLI (cratebay)
 
 | Crate | Role |
 |---|---|
-| `cratebay-core` | Docker operations, runtime coordination, storage, validation |
+| `cratebay-core` | CrateBay Engine operations, runtime coordination, storage, validation |
 | `cratebay-cli` | Command parsing, table/json/yaml output |
 | `cratebay-gui/src-tauri` | Desktop command wrappers and app lifecycle |
-| `cratebay-gui/src` | React UI for images, containers, settings |
+| `cratebay-gui/src` | React UI for dashboard, containers, images, pods, volumes, networks, settings |
 | `cratebay-vz` | macOS virtualization runtime |
-| `cratebay-guest-agent` | Guest-side Docker socket bridge |
+| `cratebay-guest-agent` | Guest-side CrateBay Engine compatibility bridge |
 
 ## Product Surface
 
 - Images: list, search, pull, inspect, tag, export, import, delete.
 - Containers: create, start, stop, delete, exec, logs, inspect, stats.
 - Pods: managed network groups for related containers.
+- Volumes: persistent Engine volume create, list, inspect, delete.
+- Networks: managed Engine network create, list, inspect, delete.
 - Runtime: status, provision, start, stop.
 - Settings: theme, language, registry mirrors, runtime connectivity.
 
@@ -46,6 +48,6 @@ GUI (Tauri + React)      CLI (cratebay)
 
 ## Pod Model
 
-Pods are Docker bridge networks labeled as CrateBay-managed resources. Containers
-can be attached to or detached from a pod without changing the container image or
-runtime.
+Pods are CrateBay Engine managed CNI network groups labeled as CrateBay-managed
+resources. Containers can be attached to or detached from a pod without changing
+the container image or runtime.

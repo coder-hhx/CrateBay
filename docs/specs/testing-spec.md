@@ -7,12 +7,19 @@ Run from the workspace root:
 ```bash
 cargo fmt --check
 cargo check --workspace
+cargo clippy --workspace --exclude cratebay-gui --exclude cratebay-vz --all-targets -- -D warnings
+cargo clippy -p cratebay-gui --all-targets -- -D warnings
+cargo clippy -p cratebay-vz --all-targets -- -D warnings
 cargo test --workspace --exclude cratebay-gui --exclude cratebay-vz -- --test-threads=1
 cargo test -p cratebay-gui -- --test-threads=1
+cargo test -p cratebay-vz -- --test-threads=1
 ```
 
 Use unit tests for pure parsing and mapping logic. Keep Docker-dependent tests
 ignored or guarded unless CI has a Docker-compatible endpoint available.
+Run `cratebay-vz` clippy/tests on macOS for the real
+Virtualization.framework bridge path; Linux builds only cover the unsupported
+platform stub.
 
 ## Frontend
 
@@ -31,6 +38,11 @@ Tests should cover:
 - container lifecycle store actions
 - settings persistence
 - runtime health display
+
+Default frontend and Playwright Tauri mocks should model the native CrateBay
+Engine contract (`cratebay-containerd` / `cratebay.engine.v1`) as the online
+path. Use Docker-compatible version strings only in tests that explicitly
+exercise the compatibility API.
 
 ## CLI Smoke Checks
 
@@ -63,9 +75,10 @@ where `--json` plus `--no-propagate-exit-code` keeps the CLI process successful
 after a completed run while still reporting `exitCode` and `timedOut` in the
 payload.
 
-The container exec path should use the same caller-friendly structured mode so
-agent-style callers can read `exitCode`, `timedOut`, and truncation flags
-without treating container failures as CLI infrastructure failures.
+The container exec and native `engine exec` paths should use the same
+caller-friendly structured mode so agent-style callers can read `exitCode`,
+`timedOut`, and truncation flags without treating container failures as CLI
+infrastructure failures.
 
 The exec path should also support a bounded timeout, bounded output, and
 surface `124` on timeout, matching the one-shot run contract.
@@ -89,6 +102,10 @@ cratebay pod inspect smoke-pod
 cratebay pod delete smoke-pod --force
 cratebay container delete smoke --force
 ```
+
+CLI surface tests should also parse the lifecycle aliases:
+`container remove|rm`, `image remove|rmi`, `volume delete`, and
+`network delete`.
 
 ## Release Gate
 

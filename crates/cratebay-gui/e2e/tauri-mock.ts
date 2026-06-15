@@ -8,11 +8,20 @@ export interface MockTauriData {
   containerDetails: Record<string, Record<string, unknown>>;
   containerStats: Record<string, Record<string, unknown>>;
   pods: Array<Record<string, any>>;
+  volumes: Array<Record<string, any>>;
+  networks: Array<Record<string, any>>;
   localImages: Array<Record<string, unknown>>;
   imageSearchResults: Array<Record<string, unknown>>;
+  engineStatus: Record<string, unknown>;
+  engineSubstrate: Record<string, unknown>;
+  engineStorageGc: Record<string, unknown>;
+  engineShimTasks: Array<Record<string, unknown>>;
+  /** Compatibility override for older tests exercising docker_status alias. */
   dockerStatus: Record<string, unknown>;
   runtimeStatus: Record<string, unknown>;
   invokedCommands: Array<{ command: string; args?: Record<string, unknown> }>;
+  commandFailures?: Record<string, string | Array<string>>;
+  runtimeAutoStartDisabledCommands?: string[];
 }
 
 const DEFAULT_DATE = new Date("2026-03-23T00:00:00.000Z").toISOString();
@@ -95,6 +104,37 @@ const defaultMockData: MockTauriData = {
       containers: [],
     },
   ],
+  volumes: [
+    {
+      name: "workspace-cache",
+      driver: "local",
+      mountpoint: "/var/lib/cratebay-engine/volumes/workspace-cache/_data",
+      createdAt: DEFAULT_DATE,
+      scope: "local",
+      labels: { "com.cratebay.volume": "true" },
+      options: {},
+      managedBy: "cratebay-engine",
+    },
+  ],
+  networks: [
+    {
+      id: "net-workspace",
+      name: "workspace-net",
+      driver: "bridge",
+      scope: "local",
+      internal: false,
+      attachable: true,
+      labels: { "com.cratebay.network": "true" },
+      containers: {
+        abc123: {
+          name: "node-01",
+          endpointId: "endpoint-abc123",
+          ipv4Address: "172.18.0.2/16",
+        },
+      },
+      managedBy: "cratebay-engine",
+    },
+  ],
   localImages: [
     {
       id: "sha256:node",
@@ -114,26 +154,77 @@ const defaultMockData: MockTauriData = {
       official: true,
     },
   ],
-  dockerStatus: {
+  engineStatus: {
     connected: true,
-    version: "25.0.0",
-    api_version: "1.44",
+    version: "cratebay-containerd",
+    api_version: "cratebay.engine.v1",
     os: "linux",
     arch: "arm64",
-    source: "runtime",
-    socket_path: "/tmp/docker.sock",
+    engine_source: "builtin",
+    source: "builtin",
+    socket_path: "/tmp/cratebay/engine.sock",
   },
+  engineSubstrate: {
+    engine: "CrateBay Engine",
+    shim: {
+      manager: "cratebay-containerd-shim",
+      backend: "containerd task service",
+    },
+    network: {
+      manager: "cratebay-cni",
+      stack: "CNI",
+    },
+    storage: {
+      manager: "cratebay-storage",
+      volumeCount: 1,
+      volumeBytes: 4096,
+    },
+    daemon: {
+      compatibilityEndpoint: "/tmp/cratebay/engine.sock",
+    },
+    compatibility: {
+      dockerDaemon: false,
+    },
+  },
+  engineStorageGc: {
+    api: "cratebay.storage.gc.v1",
+    applied: false,
+    candidateCount: 1,
+    reclaimableBytes: 4096,
+  },
+  engineShimTasks: [
+    {
+      id: "shim-task-abc123",
+      name: "node-01",
+      state: "running",
+      image: "node:20-alpine",
+    },
+  ],
   runtimeStatus: {
     state: "ready",
     platform: "macos-vz",
     cpu_cores: 2,
     memory_mb: 2048,
     disk_gb: 20,
+    engine_responsive: true,
+    compatibility_responsive: true,
+    compatibility_version: "cratebay-containerd",
+    engine_source: "builtin",
+    docker_source: "builtin",
     docker_responsive: true,
     uptime_seconds: 120,
-    resource_usage: null,
+    resource_usage: {
+      cpu_percent: 18.5,
+      memory_used_mb: 768,
+      memory_total_mb: 2048,
+      disk_used_gb: 6.5,
+      disk_total_gb: 20,
+      container_count: 2,
+    },
   },
   invokedCommands: [],
+  commandFailures: {},
+  runtimeAutoStartDisabledCommands: [],
 };
 
 export async function installTauriMock(
@@ -150,15 +241,32 @@ export async function installTauriMock(
     containerDetails: { ...structuredClone(defaultMockData.containerDetails), ...(overrides.containerDetails ?? {}) },
     containerStats: { ...structuredClone(defaultMockData.containerStats), ...(overrides.containerStats ?? {}) },
     pods: overrides.pods ?? structuredClone(defaultMockData.pods),
+    volumes: overrides.volumes ?? structuredClone(defaultMockData.volumes),
+    networks: overrides.networks ?? structuredClone(defaultMockData.networks),
     localImages: overrides.localImages ?? structuredClone(defaultMockData.localImages),
     imageSearchResults: overrides.imageSearchResults ?? structuredClone(defaultMockData.imageSearchResults),
-    dockerStatus: { ...defaultMockData.dockerStatus, ...(overrides.dockerStatus ?? {}) },
+    engineStatus: { ...defaultMockData.engineStatus, ...(overrides.engineStatus ?? {}) },
+    engineSubstrate: { ...structuredClone(defaultMockData.engineSubstrate), ...(overrides.engineSubstrate ?? {}) },
+    engineStorageGc: { ...structuredClone(defaultMockData.engineStorageGc), ...(overrides.engineStorageGc ?? {}) },
+    engineShimTasks: overrides.engineShimTasks ?? structuredClone(defaultMockData.engineShimTasks),
+    dockerStatus: {
+      ...defaultMockData.engineStatus,
+      ...(overrides.engineStatus ?? {}),
+      ...(overrides.dockerStatus ?? {}),
+    },
     runtimeStatus: { ...defaultMockData.runtimeStatus, ...(overrides.runtimeStatus ?? {}) },
     invokedCommands: [],
+    commandFailures: structuredClone(overrides.commandFailures ?? defaultMockData.commandFailures ?? {}),
+    runtimeAutoStartDisabledCommands: [
+      ...(overrides.runtimeAutoStartDisabledCommands ??
+        defaultMockData.runtimeAutoStartDisabledCommands ??
+        []),
+    ],
   };
 
   await page.addInitScript(({ mockData }) => {
     (window as any).__MOCK_TAURI__ = mockData;
+    (window as any).__MOCK_TAURI__.terminalBuffers ??= {};
 
     (window as any).__MOCK_TAURI_INVOKE__ = async (
       command: string,
@@ -167,6 +275,24 @@ export async function installTauriMock(
       const state = (window as any).__MOCK_TAURI__;
       const defaultDate = "2026-03-23T00:00:00.000Z";
       state.invokedCommands.push({ command, args });
+
+      if (
+        state.runtimeAutoStartDisabledCommands?.includes(command) &&
+        state.runtimeStartRequested !== true
+      ) {
+        throw new Error("Implicit runtime start disabled by CRATEBAY_DISABLE_RUNTIME_AUTO_START");
+      }
+
+      const maybeFailure = state.commandFailures?.[command];
+      if (Array.isArray(maybeFailure)) {
+        const message = maybeFailure.shift();
+        if (message !== undefined) {
+          throw new Error(message);
+        }
+      } else if (typeof maybeFailure === "string") {
+        delete state.commandFailures[command];
+        throw new Error(maybeFailure);
+      }
 
       const findContainer = (id: string) =>
         state.containerList.find(
@@ -198,6 +324,60 @@ export async function installTauriMock(
           labels: {},
         };
       };
+
+      const dispatchTerminal = (sessionId: string, payload: Record<string, unknown>) => {
+        if (sessionId.length === 0) return;
+        window.dispatchEvent(
+          new CustomEvent(`terminal:stream:${sessionId}`, {
+            detail: { payload },
+          }),
+        );
+      };
+
+      const markRuntimeStarted = () => {
+        state.runtimeStartRequested = true;
+        state.engineStatus = {
+          ...state.engineStatus,
+          connected: true,
+          version: "cratebay-containerd",
+          api_version: "cratebay.engine.v1",
+          os: "linux",
+          arch: "arm64",
+          engine_source: "builtin",
+          source: "builtin",
+          socket_path: "/tmp/cratebay/engine.sock",
+        };
+        state.dockerStatus = {
+          ...state.dockerStatus,
+          connected: true,
+          version: "cratebay-containerd",
+          api_version: "cratebay.engine.v1",
+          os: "linux",
+          arch: "arm64",
+          engine_source: "builtin",
+          source: "builtin",
+          socket_path: "/tmp/cratebay/engine.sock",
+        };
+        state.runtimeStatus = {
+          ...state.runtimeStatus,
+          state: "ready",
+          engine_responsive: true,
+          compatibility_responsive: true,
+          compatibility_version: "cratebay-containerd",
+          docker_responsive: true,
+          engine_source: "builtin",
+          docker_source: "builtin",
+        };
+      };
+
+      const buildEngineContract = () => ({
+        name: "CrateBay Engine",
+        kind: "cratebay-containerd",
+        adapter: { api: "cratebay.engine.v1" },
+        backend: { runtime: "containerd", ociRuntime: "runc", namespace: "cratebay" },
+        network: { stack: "CNI" },
+        compatibility: { dockerCompatible: true },
+      });
 
       switch (command) {
         case "settings_get": {
@@ -263,6 +443,39 @@ export async function installTauriMock(
           ];
           return created;
         }
+        case "container_run": {
+          const request = (args?.request ?? {}) as any;
+          const name = request.name ?? `mock-run-${Date.now()}`;
+          const image = request.image ?? "alpine:latest";
+          const command = Array.isArray(request.command)
+            ? request.command.map((item: unknown) => String(item)).join(" ")
+            : "";
+          const result = {
+            id: `run-${Date.now()}`,
+            name,
+            image,
+            exitCode: 0,
+            stdout: command ? `mock run: ${command}\n` : "mock run complete\n",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            timedOut: false,
+          };
+          if (request.remove === false) {
+            state.containerList.push({
+              id: result.id,
+              shortId: result.id.slice(0, 12),
+              name,
+              status: "stopped",
+              state: "exited",
+              image,
+              ports: [],
+              createdAt: new Date().toISOString(),
+              labels: { "com.cratebay.run": "true" },
+            });
+          }
+          return result;
+        }
         case "container_exec": {
           const cmd = Array.isArray(args?.cmd)
             ? (args?.cmd as unknown[]).map((item) => String(item))
@@ -271,6 +484,9 @@ export async function installTauriMock(
             exitCode: 0,
             stdout: `mock exec: ${cmd.join(" ")}\n`,
             stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            timedOut: false,
           };
         }
         case "container_exec_stream": {
@@ -293,6 +509,48 @@ export async function installTauriMock(
               );
             }, 0);
           }
+          return null;
+        }
+        case "container_terminal_open": {
+          const sessionId = String(args?.session_id ?? args?.sessionId ?? "");
+          state.terminalBuffers[sessionId] = "";
+          window.setTimeout(() => {
+            dispatchTerminal(sessionId, {
+              type: "Output",
+              data: "CrateBay native PTY ready\n$ ",
+            });
+          }, 0);
+          return null;
+        }
+        case "container_terminal_input": {
+          const sessionId = String(args?.session_id ?? args?.sessionId ?? "");
+          const data = String(args?.data ?? "");
+          state.terminalBuffers[sessionId] = `${state.terminalBuffers[sessionId] ?? ""}${data}`;
+          if (data.includes("\r") || data.includes("\n")) {
+            const rendered = String(state.terminalBuffers[sessionId] ?? "").trim();
+            state.terminalBuffers[sessionId] = "";
+            window.setTimeout(() => {
+              dispatchTerminal(sessionId, {
+                type: "Output",
+                data: `\r\nmock terminal: ${rendered}\r\n$ `,
+              });
+            }, 0);
+          }
+          return null;
+        }
+        case "container_terminal_resize":
+          return {
+            resized: true,
+            transport: "cratebay-native-pty",
+            cols: args?.cols,
+            rows: args?.rows,
+          };
+        case "container_terminal_close": {
+          const sessionId = String(args?.session_id ?? args?.sessionId ?? "");
+          delete state.terminalBuffers[sessionId];
+          window.setTimeout(() => {
+            dispatchTerminal(sessionId, { type: "Done", exit_code: 0 });
+          }, 0);
           return null;
         }
         case "container_logs": {
@@ -481,12 +739,15 @@ export async function installTauriMock(
           return state.pods;
         case "pod_create": {
           const name = String(args?.name ?? "");
+          const driver = String(args?.driver ?? "bridge") || "bridge";
           const pod = {
             id: `pod-${name}`,
             name,
-            driver: "bridge",
+            driver,
             createdAt: new Date().toISOString(),
             containers: [],
+            internal: Boolean(args?.internal),
+            enableIpv6: Boolean(args?.enableIpv6),
           };
           state.pods.push(pod);
           return pod;
@@ -529,13 +790,170 @@ export async function installTauriMock(
           }
           return null;
         }
+        case "volume_list":
+          return state.volumes;
+        case "volume_create": {
+          const name = String(args?.name ?? "");
+          const driver = String(args?.driver ?? "local") || "local";
+          const volume = {
+            name,
+            driver,
+            mountpoint: `/var/lib/cratebay-engine/volumes/${name}/_data`,
+            createdAt: new Date().toISOString(),
+            scope: "local",
+            labels: { "com.cratebay.volume": "true" },
+            options: {},
+            managedBy: "cratebay-engine",
+          };
+          state.volumes.push(volume);
+          return volume;
+        }
+        case "volume_inspect": {
+          const name = String(args?.name ?? "");
+          return state.volumes.find((volume: any) => volume.name === name) ?? null;
+        }
+        case "volume_delete": {
+          const name = String(args?.name ?? "");
+          state.volumes = state.volumes.filter((volume: any) => volume.name !== name);
+          return null;
+        }
+        case "network_list":
+          return state.networks;
+        case "network_create": {
+          const name = String(args?.name ?? "");
+          const driver = String(args?.driver ?? "bridge") || "bridge";
+          const internal = Boolean(args?.internal);
+          const network = {
+            id: `net-${name}`,
+            name,
+            driver,
+            scope: "local",
+            internal,
+            attachable: true,
+            labels: { "com.cratebay.network": "true" },
+            containers: {},
+            enableIpv6: Boolean(args?.enableIpv6),
+            managedBy: "cratebay-engine",
+          };
+          state.networks.push(network);
+          return network;
+        }
+        case "network_inspect": {
+          const id = String(args?.id ?? "");
+          return (
+            state.networks.find(
+              (network: any) => network.id === id || network.name === id,
+            ) ?? null
+          );
+        }
+        case "network_delete": {
+          const id = String(args?.id ?? "");
+          state.networks = state.networks.filter(
+            (network: any) => network.id !== id && network.name !== id,
+          );
+          return null;
+        }
+        case "runtime_diagnostics":
+          return {
+            ok: Boolean(
+              state.runtimeStatus.engine_responsive ??
+                state.runtimeStatus.docker_responsive ??
+                state.engineStatus.connected,
+            ),
+            runtime: structuredClone(state.runtimeStatus),
+            engineContract: { ok: true, value: buildEngineContract(), error: null },
+            substrate: { ok: true, value: structuredClone(state.engineSubstrate), error: null },
+            storageGc: { ok: true, value: structuredClone(state.engineStorageGc), error: null },
+            shimTasks: { ok: true, value: { items: structuredClone(state.engineShimTasks) }, error: null },
+            generatedAtUnix: Math.floor(Date.now() / 1000),
+          };
+        case "engine_contract":
+          return buildEngineContract();
+        case "engine_substrate":
+          return structuredClone(state.engineSubstrate);
+        case "engine_storage_gc": {
+          const apply = Boolean(args?.apply);
+          state.engineStorageGc = {
+            ...state.engineStorageGc,
+            applied: apply,
+            candidateCount: apply ? 0 : state.engineStorageGc.candidateCount,
+            reclaimableBytes: apply ? 0 : state.engineStorageGc.reclaimableBytes,
+          };
+          return structuredClone(state.engineStorageGc);
+        }
+        case "engine_shim_tasks":
+          return { items: structuredClone(state.engineShimTasks) };
+        case "engine_shim_reap_task": {
+          const id = String(args?.id ?? "");
+          if (Boolean(args?.apply)) {
+            state.engineShimTasks = state.engineShimTasks.filter((task: any) => task.id !== id);
+          }
+          return {
+            api: "cratebay.shim.reap.v1",
+            id,
+            applied: Boolean(args?.apply),
+            reclaimableBytes: 4096,
+          };
+        }
+        case "engine_status":
+          return state.engineStatus;
         case "docker_status":
           return state.dockerStatus;
         case "runtime_status":
           return state.runtimeStatus;
         case "runtime_start":
-        case "runtime_stop":
+          markRuntimeStarted();
           return "ok";
+        case "runtime_provision":
+          state.runtimeStatus = {
+            ...state.runtimeStatus,
+            state: "provisioned",
+            engine_responsive: false,
+            compatibility_responsive: false,
+            docker_responsive: false,
+          };
+          return "ok";
+        case "runtime_restart":
+          markRuntimeStarted();
+          return "ok";
+        case "runtime_stop":
+          state.engineStatus = {
+            ...state.engineStatus,
+            connected: false,
+            socket_path: null,
+          };
+          state.dockerStatus = {
+            ...state.dockerStatus,
+            connected: false,
+            socket_path: null,
+          };
+          state.runtimeStatus = {
+            ...state.runtimeStatus,
+            state: "stopped",
+            engine_responsive: false,
+            compatibility_responsive: false,
+            docker_responsive: false,
+          };
+          return "ok";
+        case "app_update_check":
+          return {
+            configured: true,
+            available: false,
+            currentVersion: "0.9.0",
+            version: null,
+            date: null,
+            body: null,
+            channel: "stable",
+            releaseTag: null,
+            releaseName: null,
+            releaseUrl: null,
+            repository: "cratebay/cratebay",
+            message: null,
+          };
+        case "app_update_install":
+          return null;
+        case "app_restart":
+          return null;
         case "system_info":
           return {
             os: "macos",

@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useContainerStore, type ContainerInfo } from "@/stores/containerStore";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ContainerDeleteDialog } from "@/components/container/ContainerDeleteDialog";
 import { Play, Square, Trash2, Box } from "lucide-react";
 
 export function ContainerList() {
@@ -21,7 +23,7 @@ export function ContainerList() {
   if (containers.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-        <Box className="mb-3 h-12 w-12 opacity-20" />
+        <Box className="mb-2 h-8 w-8 opacity-40" />
         <h3 className="text-sm font-medium">{t("containers", "noContainers")}</h3>
         <p className="mt-1 text-xs">{t("containers", "noContainersHint")}</p>
       </div>
@@ -41,8 +43,8 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
   const { t } = useI18n();
   const startContainer = useContainerStore((s) => s.startContainer);
   const stopContainer = useContainerStore((s) => s.stopContainer);
-  const deleteContainer = useContainerStore((s) => s.deleteContainer);
   const selectContainer = useContainerStore((s) => s.selectContainer);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const isRunning = container.status === "running" || container.status === "paused";
 
   const statusDot = getStatusDot(container.status, {
@@ -56,20 +58,20 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
 
   const remove = (event: React.MouseEvent) => {
     event.stopPropagation();
-    if (!window.confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
-    void deleteContainer(container.id);
+    setDeleteOpen(true);
   };
 
   return (
-    <div
-      onClick={() => selectContainer(container.id)}
-      data-testid="container-card"
-      className="group flex cursor-pointer items-center gap-4 border-b border-border/50 px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/50"
-    >
-      {/* Status dot */}
-      <div className="flex-shrink-0">
-        <span className={cn("inline-block h-2.5 w-2.5 rounded-full", statusDot.dotClass)} />
-      </div>
+    <>
+      <div
+        onClick={() => selectContainer(container.id)}
+        data-testid="container-card"
+        className="group flex min-h-[52px] cursor-pointer items-center gap-3 border-b border-border/50 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50"
+      >
+        {/* Status dot */}
+        <div className="flex-shrink-0">
+          <span className={cn("inline-block h-2.5 w-2.5 rounded-full", statusDot.dotClass)} />
+        </div>
 
       {/* Name + image */}
       <div className="min-w-0 flex-1">
@@ -148,7 +150,13 @@ function ContainerRow({ container }: { container: ContainerInfo }) {
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
-    </div>
+      </div>
+      <ContainerDeleteDialog
+        container={container}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
+    </>
   );
 }
 
@@ -157,7 +165,7 @@ function getStatusDot(status: ContainerInfo["status"], labels: Record<string, st
     case "running":
       return {
         label: labels.running,
-        dotClass: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
+        dotClass: "bg-emerald-400",
         textClass: "text-emerald-500",
       };
     case "paused":
@@ -176,8 +184,8 @@ function getStatusDot(status: ContainerInfo["status"], labels: Record<string, st
     case "restarting":
       return {
         label: labels.restarting,
-        dotClass: "bg-blue-400 animate-pulse",
-        textClass: "text-blue-500",
+        dotClass: "bg-cyan-400 animate-pulse",
+        textClass: "text-cyan-500",
       };
     case "exited":
     case "stopped":

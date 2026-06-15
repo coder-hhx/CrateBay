@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { ContainersPageObject } from "./pages";
 import { installTauriMock } from "./tauri-mock";
 
@@ -201,11 +201,23 @@ test.describe("Containers Management", () => {
 
   test("创建容器时会提交环境变量", async ({ page }) => {
     await page.getByRole("button", { name: "Create Container" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Create Container" });
 
-    await page.getByLabel("Name (optional)").fill("env-box");
-    await page.getByLabel("Select image").fill("node:20-alpine");
-    await page.getByRole("textbox", { name: "Environment variable" }).fill("NODE_ENV=production");
-    await page.getByRole("button", { name: "Create Container" }).last().click();
+    await dialog.getByLabel("Name (optional)").fill("env-box");
+    await dialog.getByRole("textbox", { name: "Select image" }).fill("node:20-alpine");
+    await waitForTauriCommand(page, "network_list");
+    await dialog.getByRole("button", { name: "Default" }).click();
+    await expect(dialog.getByText("workspace-net")).toBeVisible();
+    await dialog.getByText("workspace-net").click();
+    await waitForTauriCommand(page, "volume_list");
+    await dialog.getByRole("button", { name: "Select volume" }).click();
+    await expect(dialog.getByText("workspace-cache")).toBeVisible();
+    await dialog.getByText("workspace-cache").click();
+    await dialog.getByPlaceholder("Mount path").fill("/cache");
+    await dialog.getByText("Read-only mount").click();
+    await dialog.getByRole("button", { name: "Add existing volume" }).click();
+    await dialog.getByRole("textbox", { name: "Environment variable" }).fill("NODE_ENV=production");
+    await dialog.getByRole("button", { name: "Create Container" }).click();
 
     await expect
       .poll(async () =>
@@ -220,7 +232,82 @@ test.describe("Containers Management", () => {
         name: "env-box",
         image: "node:20-alpine",
         env: ["NODE_ENV=production"],
+        volumes: [
+          {
+            hostPath: "workspace-cache",
+            containerPath: "/cache",
+            readOnly: true,
+          },
+        ],
+        network: "workspace-net",
         autoStart: true,
+      });
+  });
+
+  test("运行一次性容器时会提交高级参数", async ({ page }) => {
+    await page.getByTestId("container-run").click();
+    const dialog = page.getByRole("dialog", { name: "Run" });
+
+    await dialog.getByLabel("Name (optional)").fill("one-shot");
+    await dialog.getByLabel("Entrypoint").fill("/bin/sh");
+    await dialog.getByRole("textbox", { name: "Select image" }).fill("node:20-alpine");
+    await dialog.getByLabel("Command").fill("node -v");
+    await dialog.getByLabel("Working directory").fill("/workspace");
+    await waitForTauriCommand(page, "network_list");
+    await dialog.getByRole("button", { name: "Default" }).click();
+    await expect(dialog.getByText("workspace-net")).toBeVisible();
+    await dialog.getByText("workspace-net").click();
+    await dialog.getByLabel("User").fill("1000:1000");
+    await dialog.getByRole("textbox", { name: "Environment variable" }).fill("NODE_ENV=test");
+    await dialog.getByRole("button", { name: "Add environment variable" }).click();
+    await waitForTauriCommand(page, "volume_list");
+    await dialog.getByRole("button", { name: "Select volume" }).click();
+    await expect(dialog.getByText("workspace-cache")).toBeVisible();
+    await dialog.getByText("workspace-cache").click();
+    await dialog.getByPlaceholder("Mount path").fill("/cache");
+    await dialog.getByText("Read-only mount").click();
+    await dialog.getByRole("button", { name: "Add existing volume" }).click();
+    await dialog.getByLabel("CPU Cores").fill("2");
+    await dialog.getByLabel("Memory (MB)").fill("1024");
+    await dialog.getByLabel("Timeout (sec)").fill("45");
+    await dialog.getByLabel("Max output bytes").fill("4096");
+    await dialog.getByText("Pull image when missing").click();
+    await dialog.getByText("Read-only root").click();
+    await dialog.getByText("Keep container after exit").click();
+    await dialog.getByRole("button", { name: "Run Container" }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return commands
+            .filter((item: any) => item.command === "container_run")
+            .at(-1)?.args?.request ?? null;
+        }),
+      )
+      .toMatchObject({
+        name: "one-shot",
+        image: "node:20-alpine",
+        entrypoint: "/bin/sh",
+        command: ["sh", "-lc", "node -v"],
+        env: ["NODE_ENV=test"],
+        volumes: [
+          {
+            hostPath: "workspace-cache",
+            containerPath: "/cache",
+            readOnly: true,
+          },
+        ],
+        cpuCores: 2,
+        memoryMb: 1024,
+        workingDir: "/workspace",
+        network: "workspace-net",
+        user: "1000:1000",
+        readOnlyRootfs: true,
+        pull: false,
+        remove: false,
+        timeoutSecs: 45,
+        maxOutputBytes: 4096,
       });
   });
 
@@ -298,7 +385,44 @@ test.describe("Containers Management", () => {
       .toEqual({ inspected: true, stats: true });
   });
 
-  test("容器终端通过流式 exec 返回输出", async ({ page }) => {
+  test("容器详情 Exec tab 可以执行 native 命令", async ({ page }) => {
+    await page
+      .locator('[data-testid="container-card"]')
+      .filter({ hasText: "node-01" })
+      .first()
+      .click();
+
+    await page.getByRole("tab", { name: "Exec" }).click();
+
+    const execPanel = page.locator('[data-testid="container-exec"]');
+    await expect(execPanel).toBeVisible();
+
+    await execPanel.getByLabel("Command").fill("cat /etc/hostname");
+    await execPanel.getByLabel("Working directory").fill("/workspace");
+    await execPanel.getByRole("button", { name: "Execute command" }).click();
+
+    await expect(execPanel).toContainText("mock exec: sh -lc cat /etc/hostname");
+    await expect(execPanel).toContainText("Exit 0");
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+          return commands
+            .filter((item: any) => item.command === "container_exec")
+            .at(-1)?.args ?? null;
+        }),
+      )
+      .toEqual({
+        id: "abc123",
+        cmd: ["sh", "-lc", "cat /etc/hostname"],
+        working_dir: "/workspace",
+        timeout: null,
+        max_output_bytes: 1_048_576,
+      });
+  });
+
+  test("容器终端通过 native PTY 返回输出", async ({ page }) => {
     await page
       .locator('[data-testid="container-card"]')
       .filter({ hasText: "node-01" })
@@ -310,21 +434,24 @@ test.describe("Containers Management", () => {
     const terminal = page.locator('[data-testid="container-terminal"]');
     await expect(terminal).toBeVisible();
 
-    await page.locator('[data-testid="terminal-input"]').fill("echo cratebay");
-    await page.getByRole("button", { name: "Execute command" }).click();
+    await expect(terminal).toContainText("CrateBay native PTY ready");
+    await terminal.click();
+    await page.keyboard.type("echo cratebay");
+    await page.keyboard.press("Enter");
 
-    await expect(terminal).toContainText("$ echo cratebay");
-    await expect(terminal).toContainText("mock exec: echo cratebay");
-    await expect(terminal).toContainText("[exit code: 0]");
+    await expect(terminal).toContainText("mock terminal: echo cratebay");
 
     await expect
       .poll(async () =>
         page.evaluate(() => {
           const commands = (window as any).__MOCK_TAURI__.invokedCommands;
-          return commands.some((item: any) => item.command === "container_exec_stream");
+          return {
+            opened: commands.some((item: any) => item.command === "container_terminal_open"),
+            input: commands.some((item: any) => item.command === "container_terminal_input"),
+          };
         }),
       )
-      .toBe(true);
+      .toEqual({ opened: true, input: true });
   });
 
   test("能够将容器打包为本地镜像", async ({ page }) => {
@@ -420,3 +547,14 @@ test.describe("Containers Management", () => {
     expect(count).toBeGreaterThanOrEqual(0);
   });
 });
+
+async function waitForTauriCommand(page: Page, command: string) {
+  await expect
+    .poll(async () =>
+      page.evaluate((name) => {
+        const commands = (window as any).__MOCK_TAURI__.invokedCommands;
+        return commands.some((item: any) => item.command === name);
+      }, command),
+    )
+    .toBe(true);
+}

@@ -2,7 +2,7 @@
 
 Open-source, cross-platform container and image management.
 
-CrateBay is a desktop alternative to Docker Desktop and OrbStack. It focuses on local container workflows: browse and remove images, search registries, pull new images, create containers, inspect logs, and manage a built-in runtime across macOS, Linux, and Windows.
+CrateBay is a desktop alternative to Docker Desktop and OrbStack. It focuses on local container workflows: browse and remove images, search registries, pull new images, create containers, inspect logs, manage volumes and networks, and run a built-in runtime across macOS, Linux, and Windows.
 
 The CLI and built-in runtime form the minimum usable unit: the desktop app is a
 visual control plane on top of the same core container operations.
@@ -16,7 +16,8 @@ overrides, but the built-in runtime is the default path.
 - **Built-in runtime** — starts a local VM-backed container engine when needed
 - **Image-first workflow** — search, pull, inspect, tag, and remove images from one UI
 - **Container management** — create, start, stop, inspect, exec, and view logs
-- **Pod grouping** — manage Docker network based pods for related containers
+- **Pod grouping** — manage CrateBay/CNI network-backed pods for related containers
+- **Volumes and networks** — create, inspect, and remove persistent volumes and managed networks from GUI or CLI
 - **Registry mirrors** — configure mirror hosts for faster Docker Hub pulls
 
 ## Quick Start
@@ -42,6 +43,8 @@ cratebay image preload-bundled
 cratebay image export --output alpine.tar alpine:latest
 cratebay image import alpine.tar
 cratebay pod create demo-pod
+cratebay volume create demo-cache
+cratebay network create demo-net
 cratebay container create demo --image alpine:latest --entrypoint /bin/sh --command "sleep 3600" --pod demo-pod --publish 8080:80 --volume "$PWD:/workspace:ro"
 cratebay image pack-container demo cratebay/demo:latest
 cratebay image tag cratebay/demo:latest cratebay/demo:dev
@@ -54,7 +57,9 @@ The CrateBay desktop app provides:
 
 - **Containers** — lifecycle actions, templates, logs, terminal access, and resource details
 - **Images** — local image list, registry search, pull progress, inspect, tag, export, import, and delete
-- **Pods** — network-based container grouping inside Containers
+- **Pods** — network-based container grouping
+- **Volumes** — persistent Engine volume lifecycle and inspection
+- **Networks** — managed Engine network lifecycle and inspection
 - **Runtime** — start/stop/restart the built-in engine and configure HTTP proxy settings
 - **Settings** — language, theme, registry mirrors, and runtime connectivity
 
@@ -72,7 +77,7 @@ The CrateBay desktop app provides:
 │                         │                           │
 │              ┌──────────▼──────────┐                │
 │              │   cratebay-core     │                │
-│              │ Docker + storage    │                │
+│              │ Engine + storage    │                │
 │              └──────────┬──────────┘                │
 │                         │                           │
 │              ┌──────────▼──────────┐                │
@@ -84,7 +89,7 @@ The CrateBay desktop app provides:
 └─────────────────────────────────────────────────────┘
 ```
 
-**Tech stack**: Tauri v2 | React 19 | Rust | bollard | SQLite
+**Tech stack**: Tauri v2 | React 19 | Rust | containerd | runc | CNI | bollard compatibility client | SQLite
 
 ## Compared To
 
@@ -99,7 +104,7 @@ The CrateBay desktop app provides:
 
 ## Status
 
-v0.9.0 focuses on image management, pod grouping, container lifecycle, one-shot CLI runs, and the built-in runtime.
+v0.9.0 focuses on image management, pod grouping, volume and network lifecycle, container lifecycle, one-shot CLI runs, and the built-in runtime.
 
 ## License
 

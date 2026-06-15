@@ -3,23 +3,32 @@ import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/lib/i18n";
 import { APP_VERSION } from "@/lib/constants";
 import {
+  Activity,
   Box,
+  Boxes,
+  Circle,
+  Database,
   Layers,
+  Network,
   Settings,
   type LucideIcon,
 } from "lucide-react";
 
-type PageId = "containers" | "images" | "settings";
+type PageId = "dashboard" | "containers" | "images" | "pods" | "volumes" | "networks" | "settings";
 
 interface NavItem {
   id: PageId;
-  labelKey: "containers" | "images" | "settings";
+  labelKey: "dashboard" | "containers" | "images" | "pods" | "volumes" | "networks" | "settings";
   icon: LucideIcon;
 }
 
 const navItems: NavItem[] = [
+  { id: "dashboard", labelKey: "dashboard", icon: Activity },
   { id: "containers", labelKey: "containers", icon: Box },
   { id: "images", labelKey: "images", icon: Layers },
+  { id: "pods", labelKey: "pods", icon: Boxes },
+  { id: "volumes", labelKey: "volumes", icon: Database },
+  { id: "networks", labelKey: "networks", icon: Network },
   { id: "settings", labelKey: "settings", icon: Settings },
 ];
 
@@ -27,30 +36,35 @@ export function Sidebar() {
   const { t } = useI18n();
   const currentPage = useAppStore((s) => s.currentPage);
   const setCurrentPage = useAppStore((s) => s.setCurrentPage);
-  const dockerConnected = useAppStore((s) => s.dockerConnected);
+  const engineConnected = useAppStore((s) => s.engineConnected);
   const runtimeStatus = useAppStore((s) => s.runtimeStatus);
+  const engineLabel = getEngineLabel(engineConnected, runtimeStatus, t);
 
   return (
-    <div className="flex h-full w-full flex-col bg-card">
-      {/* Logo header — aligned with TopBar breadcrumb row */}
-      <div className="flex items-center gap-2.5 px-3 pb-4 pt-[42px]" data-tauri-drag-region>
-        <img
-          src="/logo.png"
-          alt="CrateBay"
-          className="h-7 w-7 flex-shrink-0"
-          draggable={false}
-        />
-        <span
-          data-testid="app-title"
-          className="bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-sm font-semibold text-transparent"
-        >
-          CrateBay
-        </span>
-        <span className="text-[10px] tabular-nums text-muted-foreground">v{APP_VERSION}</span>
+    <div className="flex h-full w-full flex-col bg-card/95">
+      <div className="px-3 pb-3 pt-10" data-tauri-drag-region>
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/logo.png"
+            alt="CrateBay"
+            className="h-7 w-7 flex-shrink-0"
+            draggable={false}
+          />
+          <div className="min-w-0">
+            <div
+              data-testid="app-title"
+              className="truncate text-sm font-semibold leading-4 text-foreground"
+            >
+              CrateBay
+            </div>
+            <div className="mt-0.5 text-[10px] leading-3 text-muted-foreground">
+              v{APP_VERSION}
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Navigation items */}
-      <nav className="flex flex-col gap-1 px-3 pt-2">
+      <nav className="flex flex-col gap-0.5 px-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           const label = t("nav", item.labelKey);
@@ -62,13 +76,13 @@ export function Sidebar() {
               data-testid={`nav-${item.id}`}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors focus:outline-none",
+                "flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-[13px] transition-colors focus:outline-none",
                 active
-                  ? "bg-primary/10 font-medium text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-accent font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
               )}
             >
-              <Icon className="h-4 w-4 flex-shrink-0" />
+              <Icon className={cn("h-4 w-4 flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
               <span className="truncate">{label}</span>
             </button>
           );
@@ -76,10 +90,15 @@ export function Sidebar() {
       </nav>
       <div className="flex-1" />
 
-      {/* Engine status at bottom */}
-      <div className="flex items-center gap-1.5 px-4 py-2.5 text-[11px] text-muted-foreground">
-        <EngineStatusDot connected={dockerConnected} status={runtimeStatus} />
-        <span>{getEngineLabel(dockerConnected, runtimeStatus, t)}</span>
+      <div className="border-t border-border px-3 py-3 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1.5">
+          <EngineStatusDot connected={engineConnected} status={runtimeStatus} />
+          <span className="truncate">{engineLabel}</span>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="truncate">{t("statusbar", "engine")}</span>
+          <span className="tabular-nums">v{APP_VERSION}</span>
+        </div>
       </div>
     </div>
   );
@@ -89,15 +108,17 @@ function EngineStatusDot({ connected, status }: { connected: boolean; status: st
   let colorClass = "bg-zinc-400";
   let pulse = false;
   if (connected) {
-    colorClass = "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]";
+    colorClass = "text-emerald-400";
   } else if (status === "starting") {
-    colorClass = "bg-yellow-400 shadow-[0_0_6px_2px_rgba(250,204,21,0.5)]";
+    colorClass = "text-yellow-400";
     pulse = true;
   } else if (status === "error") {
-    colorClass = "bg-red-400 shadow-[0_0_6px_2px_rgba(248,113,113,0.5)]";
+    colorClass = "text-red-400";
+  } else {
+    colorClass = "text-zinc-400";
   }
   return (
-    <span className={cn("inline-block h-2 w-2 rounded-full", colorClass, pulse && "animate-pulse")} />
+    <Circle className={cn("h-2.5 w-2.5 fill-current stroke-0", colorClass, pulse && "animate-pulse")} />
   );
 }
 

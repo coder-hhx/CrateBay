@@ -30,7 +30,7 @@ export function ContainerMonitoring({
   memoryMb?: number;
   enabled?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [stats, setStats] = React.useState<ContainerStats | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -86,16 +86,20 @@ export function ContainerMonitoring({
       ) : stats ? (
         <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">CPU</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {t("containers", "cpu")}
+            </div>
             <div className="font-mono">
               {cpuPercentOfLimit.toFixed(1)}%{" "}
               {cpuCores !== undefined && cpuCores > 0
-                ? `(${stats.cpuCoresUsed.toFixed(2)} / ${cpuCores} cores)`
-                : `(${stats.cpuCoresUsed.toFixed(2)} cores)`}
+                ? `(${stats.cpuCoresUsed.toFixed(2)} / ${t("containers", "cpuCoresUnit").replace("{count}", String(cpuCores))})`
+                : `(${t("containers", "cpuCoresUnit").replace("{count}", stats.cpuCoresUsed.toFixed(2))})`}
             </div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">MEM</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {t("containers", "memory")}
+            </div>
             <div className="font-mono">
               {stats.memoryUsedMb.toFixed(0)} /{" "}
               {memoryMb !== undefined && memoryMb > 0
@@ -105,7 +109,7 @@ export function ContainerMonitoring({
             </div>
           </div>
           <div className="col-span-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-            {new Date(stats.readAt).toLocaleTimeString("zh-CN", { hour12: false })}
+            {new Date(stats.readAt).toLocaleTimeString(locale, { hour12: false })}
           </div>
         </div>
       ) : (

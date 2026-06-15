@@ -29,12 +29,13 @@ if [ -z "${CRATEBAY_DATA_DIR:-}" ]; then
   export CRATEBAY_DATA_DIR="$PROJECT_ROOT/target/bundle-images-runtime-${suffix}"
   own_data_dir=1
 fi
-if [ -z "${CRATEBAY_DOCKER_SOCKET_PATH:-}" ]; then
-  export CRATEBAY_DOCKER_SOCKET_PATH="/tmp/cratebay-bundle-images-${suffix}.sock"
+if [ -z "${CRATEBAY_ENGINE_SOCKET_PATH:-}" ] && [ -z "${CRATEBAY_DOCKER_SOCKET_PATH:-}" ]; then
+  export CRATEBAY_ENGINE_SOCKET_PATH="/tmp/cratebay-bundle-images-${suffix}.sock"
   own_socket_path=1
 fi
-export CRATEBAY_DOCKER_PROXY_PORT="${CRATEBAY_DOCKER_PROXY_PORT:-$((43000 + ($$ % 10000)))}"
-export CRATEBAY_LINUX_DOCKER_PORT="${CRATEBAY_LINUX_DOCKER_PORT:-$CRATEBAY_DOCKER_PROXY_PORT}"
+export CRATEBAY_ENGINE_PROXY_PORT="${CRATEBAY_ENGINE_PROXY_PORT:-${CRATEBAY_DOCKER_PROXY_PORT:-$((43000 + ($$ % 10000)))}}"
+export CRATEBAY_DOCKER_PROXY_PORT="${CRATEBAY_DOCKER_PROXY_PORT:-$CRATEBAY_ENGINE_PROXY_PORT}"
+export CRATEBAY_LINUX_DOCKER_PORT="${CRATEBAY_LINUX_DOCKER_PORT:-$CRATEBAY_ENGINE_PROXY_PORT}"
 
 cleanup() {
   set +e
@@ -42,7 +43,7 @@ cleanup() {
     "$CRATEBAY_BIN" runtime stop >/dev/null 2>&1 || true
   fi
   if [ "$own_socket_path" = "1" ]; then
-    rm -f "$CRATEBAY_DOCKER_SOCKET_PATH" >/dev/null 2>&1 || true
+    rm -f "${CRATEBAY_ENGINE_SOCKET_PATH:-}" "${CRATEBAY_DOCKER_SOCKET_PATH:-}" >/dev/null 2>&1 || true
   fi
   rm -rf "$TEMP_DIR"
   if [ "$own_data_dir" = "1" ] && [ "${CRATEBAY_KEEP_BUNDLE_RUNTIME:-0}" != "1" ] && [ -d "$CRATEBAY_DATA_DIR" ]; then

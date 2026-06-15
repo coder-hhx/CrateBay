@@ -6,6 +6,7 @@ members = [
     "crates/cratebay-cli",
     "crates/cratebay-vz",
     "crates/cratebay-guest-agent",
+    "crates/cratebay-engine-adapter",
 ]
 
 [workspace.package]
@@ -37,6 +38,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Streaming utilities
 futures-util = "0.3"
+flate2 = "1"
 
 # Logging
 tracing = "0.1"
@@ -63,6 +65,8 @@ clap = { version = "4", features = ["derive"] }
 # Tauri
 tauri = { version = "2", features = [] }
 tauri-build = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"] }
 specta = { version = "=2.0.0-rc.22", features = ["derive"] }
 # specta-typescript pulled in via tauri-specta's "typescript" feature

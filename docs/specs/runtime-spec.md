@@ -9,7 +9,7 @@
 1. [Design Goal](#1-design-goal)
 2. [Platform Strategies](#2-platform-strategies)
 3. [Runtime Lifecycle](#3-runtime-lifecycle)
-4. [Docker Socket Exposure](#4-docker-socket-exposure)
+4. [Engine Compatibility Endpoint Exposure](#4-engine-compatibility-endpoint-exposure)
 5. [VirtioFS / Shared Directory](#5-virtiofs--shared-directory)
 6. [Port Forwarding](#6-port-forwarding)
 7. [Resource Management](#7-resource-management)
@@ -35,7 +35,8 @@ CrateBay has a **single runtime roadmap**:
 
 - The **built-in runtime** is the **primary product path** across macOS, Linux, and Windows.
 - External Docker-compatible hosts are a compatibility override, not a co-equal roadmap track.
-- Container and image management MUST continue to target the **Docker-compatible API boundary** (`bollard`, Docker socket/host semantics).
+- Container, image, pod, network, volume, exec, logs, and terminal management MUST prefer the **native CrateBay Engine API** (`cratebay.engine.v1`) backed by containerd/runc/CNI.
+- The Docker-compatible API/socket remains a compatibility endpoint for existing clients and explicit host overrides; it is not the runtime backend.
 - When runtime-related issues occur, contributors SHOULD fix the built-in runtime path first before expanding external-host behavior.
 - External-engine-specific product features, product flows, or architectural branches are **out of scope** unless explicitly approved by a human maintainer.
 
@@ -76,14 +77,15 @@ CrateBay App
              │             │             │
        Linux VM       Linux VM     WSL2 Distro
              │             │             │
-      Docker Engine   Docker Engine  Docker Engine
+      CrateBay Engine CrateBay Engine CrateBay Engine
+      containerd/runc containerd/runc containerd/runc
              │             │             │
-       Unix Socket    TCP/Socket     TCP/Pipe
+      Engine socket   TCP/Socket     TCP/Pipe
              │             │             │
              └─────────────┼─────────────┘
                            │
-                  bollard connects
-                  via built-in endpoint
+                  Native API first;
+                  Docker-compatible endpoint for legacy clients
 ```
 
 ---
@@ -97,7 +99,7 @@ CrateBay App
 | **Hypervisor** | Apple Virtualization.framework (VZ) |
 | **VM Type** | `VZVirtualMachine` with `VZLinuxBootLoader` |
 | **Guest OS** | Alpine Linux (minimal, ~150 MB) |
-| **Docker** | Docker Engine CE installed inside VM |
+| **Engine** | CrateBay Engine adapter backed by containerd + runc + CNI |
 | **File Sharing** | VirtioFS (`VZVirtioFileSystemDeviceConfiguration`) |
 | **Networking** | NAT via `VZNATNetworkDeviceAttachment` |
 | **Requirements** | macOS 13+ (Ventura), Apple Silicon or Intel |
@@ -114,8 +116,9 @@ macOS Host
 │               ├── (optional) VZVirtioSocketDevice (vsock)
 │               └── VZNATNetworkDeviceAttachment
 │                   └── Alpine Linux
-│                       └── Docker Engine
-│                           └── /var/run/docker.sock
+│                       ├── containerd + runc + CNI
+│                       └── CrateBay Engine adapter
+│                           └── /run/cratebay/engine.sock
 │                               └── Exposed via reverse TCP (default) or vsock (optional) → host socket
 ```
 
@@ -126,7 +129,7 @@ macOS Host
 | **Hypervisor** | KVM (hardware) + QEMU (userspace) |
 | **VM Type** | Lightweight QEMU VM with KVM acceleration |
 | **Guest OS** | Alpine Linux (same image as macOS) |
-| **Docker** | Docker Engine CE installed inside VM |
+| **Engine** | CrateBay Engine adapter backed by containerd + runc + CNI |
 | **File Sharing** | VirtioFS via virtiofsd |
 | **Networking** | User-mode networking (SLIRP) or TAP |
 | **Requirements** | Linux kernel 5.10+, KVM support (`/dev/kvm`) |
@@ -140,11 +143,12 @@ Linux Host
 │               ├── -enable-kvm
 │               ├── -kernel vmlinuz -initrd initrd
 │               ├── -drive file=rootfs.img
-│               ├── -chardev socket for Docker
+│               ├── -chardev socket for CrateBay Engine compatibility endpoint
 │               └── -virtfs for shared directories
 │                   └── Alpine Linux
-│                       └── Docker Engine
-│                           └── Exposed via socket
+│                       ├── containerd + runc + CNI
+│                       └── CrateBay Engine adapter
+│                           └── Exposed via compatibility socket
 ```
 
 ### 2.3 Windows: WSL2
@@ -154,7 +158,7 @@ Linux Host
 | **Hypervisor** | Hyper-V (via WSL2) |
 | **VM Type** | WSL2 lightweight utility VM |
 | **Distro** | Custom WSL2 distro (Alpine-based) |
-| **Docker** | Docker Engine CE inside WSL2 |
+| **Engine** | CrateBay Engine adapter backed by containerd + runc + CNI inside WSL2 |
 | **File Sharing** | Plan 9 (9P) protocol (built into WSL2) |
 | **Networking** | WSL2 NAT networking |
 | **Requirements** | Windows 10 21H2+ or Windows 11, WSL2 enabled |
@@ -166,8 +170,9 @@ Windows Host
 │       └── WSL2 management (wsl.exe commands)
 │           └── CrateBay WSL2 Distro
 │               ├── Alpine Linux
-│               ├── Docker Engine
-│               └── /var/run/docker.sock
+│               ├── containerd + runc + CNI
+│               ├── CrateBay Engine adapter
+│               └── /run/cratebay/engine.sock
 │                   └── Exposed via:
 │                       ├── socat → TCP localhost:2375
 │                       └── or WSL2 interop socket
@@ -199,7 +204,7 @@ Windows Host
                     └────┬────┘
                          │ health_check() passes
                     ┌────▼────┐
-              ┌────→│  READY  │ (Docker available)
+              ┌────→│  READY  │ (CrateBay Engine available)
               │     └────┬────┘
               │          │ stop()
               │     ┌────▼────┐
@@ -233,11 +238,16 @@ pub trait RuntimeManager: Send + Sync {
     /// Stop the runtime VM gracefully
     async fn stop(&self) -> Result<(), AppError>;
 
-    /// Check if runtime is healthy and Docker is responsive
+    /// Check if runtime is healthy and CrateBay Engine is responsive
     async fn health_check(&self) -> Result<HealthStatus, AppError>;
 
-    /// Get the Docker socket path for bollard connection
-    fn docker_socket_path(&self) -> PathBuf;
+    /// Get the host-exposed CrateBay Engine socket path.
+    fn engine_socket_path(&self) -> PathBuf;
+
+    /// Compatibility alias for older callers.
+    fn docker_socket_path(&self) -> PathBuf {
+        self.engine_socket_path()
+    }
 
     /// Get current resource usage
     async fn resource_usage(&self) -> Result<ResourceUsage, AppError>;
@@ -249,7 +259,7 @@ pub enum RuntimeState {
     Provisioning,   // Downloading VM image
     Provisioned,    // Image ready, not running
     Starting,       // VM is booting
-    Ready,          // Docker is available
+    Ready,          // CrateBay Engine is available
     Stopping,       // Shutting down
     Stopped,        // VM stopped
     Error(String),  // Runtime error
@@ -268,11 +278,11 @@ pub struct ProvisionProgress {
 ### 3.3 Automatic Start Flow
 
 ```
-App Launch / First Docker Operation (GUI or CLI)
+App Launch / First Engine Operation (GUI or CLI)
     │
-    ├── engine::ensure_docker()
+    ├── engine::ensure_engine_contract()
     │   ├── Cross-process lock (engine.lock)
-    │   ├── Reuse already-running built-in runtime if responsive
+    │   ├── Reuse already-running built-in runtime if the native contract responds
     │   └── Otherwise provision/start built-in runtime
     │
     ├── runtime.detect()
@@ -281,15 +291,26 @@ App Launch / First Docker Operation (GUI or CLI)
     │   ├── RuntimeState::Stopped → runtime.start()
     │   └── RuntimeState::Ready → already good
     │
-    └── Wait for Docker responsiveness (max 45s)
-        ├── Docker socket responsive → READY (return Docker client)
+    └── Wait for CrateBay Engine responsiveness (max 45s)
+        ├── Native Engine contract responsive → READY
+        ├── Compatibility endpoint responsive → legacy clients can connect
         └── Timeout / error → surface error to user
 ```
 
-`engine::ensure_docker()` is intentionally built-in-runtime-only. Compatibility
-with external Docker-compatible engines is handled outside this path by explicit
-host selection (`--docker-host` or `DOCKER_HOST`), so the default product
-behavior remains deterministic.
+`engine::ensure_engine_contract()` is the primary built-in Engine bring-up path
+for native GUI and CLI management commands. The legacy
+`engine::ensure_docker()`/`ensure_engine_compatibility()` path remains available
+for compatibility clients, but compatibility readiness is not the gate for
+native `/cratebay/*` management calls. External Docker-compatible engines are
+handled outside this path by explicit host selection (`--docker-host`,
+`--engine-host`, or `DOCKER_HOST`), so the default product behavior remains
+deterministic.
+
+Runtime managers must treat `RuntimeState::Ready` as a strict native contract
+state: `/cratebay/engine` must report `adapter.api = cratebay.engine.v1` and
+`kind = cratebay-containerd`. Compatibility `_ping` may be reported for legacy
+clients and may help choose a reachable Windows relay endpoint, but it must not
+be the success gate for native Ready or native auto-start.
 
 ### 3.4 Concurrency & Lifetime
 
@@ -299,11 +320,11 @@ CrateBay must support **GUI + CLI** being used concurrently. To avoid two proces
 provisioning or starting the same VM at the same time, all runtime bring-up is
 guarded by a **cross-process lock**:
 
-- Lock file: `<host_docker_socket_dir>/engine.lock` (colocated with the host-exposed Docker socket; see §4.1)
+- Lock file: `<host_engine_socket_dir>/engine.lock` (colocated with the host-exposed Engine socket; see §4.1)
 
 When `CRATEBAY_DATA_DIR` is explicitly set, CrateBay uses a deterministic short socket path under the system temp directory (to avoid Unix socket path length limits and to isolate multiple runtimes). In that case, the lock file is colocated with that derived temp socket directory.
-- Scope: provision + start + initial Docker wait loop
-- Behavior: second process waits for the lock, then re-checks Docker availability
+- Scope: provision + start + initial Engine wait loop
+- Behavior: second process waits for the lock, then re-checks Engine availability
 
 #### GUI exit does not stop the runtime
 
@@ -317,29 +338,34 @@ Users can stop the runtime explicitly via `runtime_stop` (or the equivalent CLI)
 
 ---
 
-## 4. Docker Socket Exposure
+## 4. Engine Compatibility Endpoint Exposure
 
 ### 4.1 Socket Path Convention
 
 | Platform | Default Socket Location |
 |----------|------------------------|
-| macOS | `~/.cratebay/runtime/docker.sock` |
-| Linux | `~/.cratebay/runtime/docker.sock` |
-| Windows | `\\.\pipe\cratebay-docker` or `localhost:2375` |
+| macOS | `~/.cratebay/runtime/engine.sock` |
+| Linux | `~/.cratebay/runtime/engine.sock` |
+| Windows | `\\.\pipe\cratebay-engine` or `localhost:2375` |
+
+The canonical host-exposed path is named `engine.sock` and is served by the
+CrateBay Engine adapter backed by containerd/runc/CNI. A `docker.sock`
+symlink may be maintained beside it only as a Docker-compatible client alias.
 
 **Socket path resolution (macOS/Linux):**
 
-1. If `CRATEBAY_DOCKER_SOCKET_PATH` is set (non-empty), use it.
-2. Else, if `CRATEBAY_DATA_DIR` is explicitly set, use `/tmp/cratebay-runtime-<hash>/docker.sock` (deterministic hash derived from `CRATEBAY_DATA_DIR`).
-3. Else, use `$HOME/.cratebay/runtime/docker.sock`.
+1. If `CRATEBAY_ENGINE_SOCKET_PATH` is set (non-empty), use it.
+2. Else, if `CRATEBAY_DOCKER_SOCKET_PATH` is set (non-empty), use it as a legacy compatibility override.
+3. Else, if `CRATEBAY_DATA_DIR` is explicitly set, use `/tmp/cratebay-<hash>/engine.sock` (deterministic hash derived from `CRATEBAY_DATA_DIR`).
+4. Else, use `$HOME/.cratebay/runtime/engine.sock`.
 
-The canonical host socket (`docker.sock`) may be a symlink pointing to a per-VM socket (`docker-<vm_id>.sock` or `docker-<vm_id>-<hash>.sock` when `CRATEBAY_DATA_DIR` is set) so multiple isolated runtimes do not collide.
+The canonical host socket (`engine.sock`) may be a symlink pointing to a per-VM socket (`engine-<vm_id>.sock` or `engine-<vm_id>-<hash>.sock` when `CRATEBAY_DATA_DIR` is set) so multiple isolated runtimes do not collide. A colocated `docker.sock` symlink can point to the same target for external compatibility clients.
 
-### 4.2 macOS: Docker Socket Forwarding Modes
+### 4.2 macOS: Engine Endpoint Forwarding Modes
 
-macOS uses Apple's Virtualization.framework (VZ) to run the guest VM. Docker
-API access is exposed as a host Unix socket (`~/.cratebay/runtime/docker.sock`)
-via one of the following forwarding modes:
+macOS uses Apple's Virtualization.framework (VZ) to run the guest VM. CrateBay
+Engine compatibility API access is exposed as a host Unix socket
+(`~/.cratebay/runtime/engine.sock`) via one of the following forwarding modes:
 
 #### 4.2.1 Architecture-Based Default Selection
 
@@ -359,8 +385,8 @@ proxies to the host Unix socket.
 
 ```
 VM (guest)                          Host (macOS)
-Docker Engine                       cratebay-vz runner
-/var/run/docker.sock                ~/.cratebay/runtime/docker.sock
+CrateBay Engine adapter             cratebay-vz runner
+/run/cratebay/engine.sock           ~/.cratebay/runtime/engine.sock
        │                                      │
        └── cratebay-guest-agent ←── vsock ──→ host creates Unix socket
            listens vsock:{port}    AF_VSOCK   proxies ↔ vsock
@@ -369,8 +395,8 @@ Docker Engine                       cratebay-vz runner
 **Flow:**
 1. VZ runner creates a `VZVirtioSocketDevice` and starts listening on host vsock port
 2. Host-side: for each Unix socket connection, VZ runner connects to guest vsock port
-3. Guest-side: `cratebay-guest-agent --vsock --port {port}` listens on vsock
-4. Bidirectional proxy: host vsock ↔ guest Docker socket
+3. Guest-side: `cratebay-guest-agent --port {port} --engine-sock /run/cratebay/engine.sock` listens on vsock
+4. Bidirectional proxy: host vsock ↔ guest CrateBay Engine compatibility socket
 
 **Advantages:**
 - Lower latency than TCP (no network stack overhead)
@@ -384,8 +410,8 @@ forwarding where the guest initiates the connection back to the host.
 
 ```
 VM (guest)                             Host (macOS)
-Docker Engine                          cratebay-vz runner
-/var/run/docker.sock                   ~/.cratebay/runtime/docker.sock
+CrateBay Engine adapter                cratebay-vz runner
+/run/cratebay/engine.sock              ~/.cratebay/runtime/engine.sock
        │                                       │
        └── cratebay-guest-agent ── TCP ─────→  tcp listener (0.0.0.0:6237)
            connect mode                        proxies ↔ unix socket
@@ -393,10 +419,10 @@ Docker Engine                          cratebay-vz runner
 
 **Flow:**
 1. VZ runner binds TCP listener on host (default `0.0.0.0:6237`)
-2. VZ runner binds Unix socket at `~/.cratebay/runtime/docker.sock`
+2. VZ runner binds Unix socket at `~/.cratebay/runtime/engine.sock`
 3. Guest-side: `cratebay-guest-agent --connect {host_gateway}:{port}` dials host TCP
 4. Host-side: for each Unix socket client, wait for guest TCP connection (5s timeout)
-5. Proxy: Unix socket client ↔ guest TCP ↔ Docker socket
+5. Proxy: Unix socket client ↔ guest TCP ↔ CrateBay Engine compatibility socket
 
 **Implementation Details (cratebay-vz `start_tcp_forward`):**
 - Host binds both Unix socket and TCP listener
@@ -411,16 +437,19 @@ Docker Engine                          cratebay-vz runner
 |-----------|-------|-------------|
 | Guest agent (`run_connect`) | Concurrent worker pool | Multiple reverse-TCP workers connect back in parallel; no single-worker serialization |
 | Host VZ runner | Per-connection threads | Each Unix client + guest TCP pair handled in dedicated thread |
-| HTTP handling | Single-shot per tunnel | `Connection: close` is injected in reverse TCP mode so dockerd closes the upstream connection and frees the worker |
+| HTTP handling | Single-shot per tunnel | `Connection: close` is injected in reverse TCP mode so the CrateBay Engine adapter closes the upstream connection and frees the worker |
 
 #### 4.2.4 Configuration (environment variables)
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CRATEBAY_RUNTIME_SOCKET_FORWARD` | Docker socket forwarding mode: `vsock`, `tcp`, or `auto` | `auto` (arm64→vsock, x86_64→tcp) |
-| `CRATEBAY_DOCKER_PROXY_PORT` | Port used by vsock (guest port) or TCP (host listener) | `6237` (if `CRATEBAY_DATA_DIR` is set and no explicit override is provided, a deterministic high port in `42000-51999` is derived) |
-| `CRATEBAY_DOCKER_VSOCK_PORT` | Legacy alias for `CRATEBAY_DOCKER_PROXY_PORT` | — |
-| `CRATEBAY_DOCKER_SOCKET_PATH` | Override the host-exposed Docker Unix socket path (macOS/Linux). | — |
+| `CRATEBAY_RUNTIME_SOCKET_FORWARD` | Engine compatibility endpoint forwarding mode: `vsock`, `tcp`, or `auto` | `auto` (arm64→vsock, x86_64→tcp) |
+| `CRATEBAY_ENGINE_PROXY_PORT` | Port used by vsock (guest port) or TCP (host listener) | `6237` (if `CRATEBAY_DATA_DIR` is set and no explicit override is provided, a deterministic high port in `42000-51999` is derived) |
+| `CRATEBAY_ENGINE_VSOCK_PORT` | Legacy alias for `CRATEBAY_ENGINE_PROXY_PORT` | — |
+| `CRATEBAY_DOCKER_PROXY_PORT` | Legacy alias for `CRATEBAY_ENGINE_PROXY_PORT` | — |
+| `CRATEBAY_DOCKER_VSOCK_PORT` | Legacy alias for `CRATEBAY_ENGINE_PROXY_PORT` | — |
+| `CRATEBAY_ENGINE_SOCKET_PATH` | Override the host-exposed CrateBay Engine Unix socket path (macOS/Linux). | — |
+| `CRATEBAY_DOCKER_SOCKET_PATH` | Legacy alias for `CRATEBAY_ENGINE_SOCKET_PATH`. | — |
 
 #### 4.2.5 Guest Agent Modes
 
@@ -432,16 +461,17 @@ Docker Engine                          cratebay-vz runner
 | tcp (listen) | `--tcp --listen 0.0.0.0:{port}` | Legacy TCP listen mode |
 | connect (dial-back) | `--connect {host}:{port}` | Reverse TCP for Intel Macs |
 
-In both modes, bollard connects to the host Unix socket path.
+In all modes, native CrateBay automation should call the Engine API first. Legacy
+Docker-compatible clients can still connect to the host Unix socket path.
 
-**Kernel cmdline coupling (v1.3.0+):** The host passes `cratebay_docker_proxy_port=<port>` via the VM kernel cmdline so the guest init script can start `cratebay-guest-agent` with the exact same port (including derived ports when `CRATEBAY_DATA_DIR` is set).
+**Kernel cmdline coupling (v1.3.0+):** The host passes `cratebay_engine_proxy_port=<port>` via the VM kernel cmdline so the guest init script can start `cratebay-guest-agent` with the exact same port (including derived ports when `CRATEBAY_DATA_DIR` is set). During upgrades, the host may also pass the legacy `cratebay_docker_proxy_port=<port>` alias for older runtime images.
 
 ### 4.3 Linux: QEMU Socket Forwarding
 
 ```
 VM (guest)                          Host (Linux)
-Docker Engine                       CrateBay Backend
-/var/run/docker.sock                ~/.cratebay/runtime/docker.sock
+CrateBay Engine adapter             CrateBay Backend
+/run/cratebay/engine.sock           ~/.cratebay/runtime/engine.sock
        │                                      │
        └── QEMU -chardev socket  ──────────→  Unix socket
            forwarding                          on host
@@ -451,8 +481,8 @@ Docker Engine                       CrateBay Backend
 
 ```
 WSL2 Distro                         Host (Windows)
-Docker Engine                        CrateBay Backend
-/var/run/docker.sock                 \\.\pipe\cratebay-docker
+CrateBay Engine adapter              CrateBay Backend
+/run/cratebay/engine.sock            \\.\pipe\cratebay-engine
        │                                      │
        └── socat TCP-LISTEN:2375  ──────────→  localhost:2375
            or named pipe proxy                  or named pipe
@@ -546,7 +576,7 @@ The runtime VM reads a kernel cmdline parameter:
 cratebay_http_proxy=<host:port>
 ```
 
-When present, the guest configures HTTP(S) egress (dockerd / containerd / package manager) to use the proxy.
+When present, the guest configures HTTP(S) egress (containerd / CrateBay Engine adapter / package manager) to use the proxy.
 
 **Host-side bridge (macOS VZ)**
 
@@ -570,7 +600,7 @@ This is implemented via the `cratebay-vz` runner argument:
 | `CRATEBAY_RUNTIME_HTTP_PROXY` | Proxy endpoint. In passthrough mode: guest-reachable `<host:port>`. In bridge mode: host proxy target (falls back to `HTTPS_PROXY/HTTP_PROXY`). | — |
 | `CRATEBAY_RUNTIME_HTTP_PROXY_BRIDGE` | Enable host proxy bridge mode (macOS). | `0` |
 | `CRATEBAY_RUNTIME_HTTP_PROXY_BIND_HOST` | Host bind address for the bridge listener. | `0.0.0.0` |
-| `CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT` | Host bind port for the bridge listener. | `3128` |
+| `CRATEBAY_RUNTIME_HTTP_PROXY_BIND_PORT` | Host bind port for the bridge listener. | `3128` (if `CRATEBAY_DATA_DIR` is set and no explicit override is provided, a deterministic high port in `52000-61999` is derived) |
 | `CRATEBAY_RUNTIME_HTTP_PROXY_GUEST_HOST` | Guest-visible host IP for the bridge (VZ shared network). | `192.168.64.1` |
 
 ---
@@ -624,14 +654,33 @@ impl Default for RuntimeConfig {
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourceUsage {
-    pub cpu_percent: f32,       // VM CPU usage (0-100)
-    pub memory_used_mb: u64,    // VM memory in use
+    pub cpu_percent: f32,       // VM or runner CPU usage (0-100+)
+    pub memory_used_mb: u64,    // VM or runner memory in use
     pub memory_total_mb: u64,   // VM memory allocated
-    pub disk_used_gb: f32,      // VM disk usage
+    pub disk_used_gb: f32,      // Host-allocated or guest-reported disk usage
     pub disk_total_gb: f32,     // VM disk capacity
-    pub container_count: u32,   // Running containers inside VM
+    pub container_count: u32,   // CrateBay-managed containers inside VM
 }
 ```
+
+Resource usage is returned by desktop `runtime_status`, CLI
+`cratebay runtime status`, and the `runtime` section of
+`cratebay runtime diagnostics`.
+
+Platform probes:
+
+- macOS/VZ: CPU and memory are host-side `cratebay-vz` runner process
+  approximations; disk usage is the host-allocated size of the sparse
+  `disk.raw`; container count uses the native CrateBay Engine container list
+  first and the compatibility endpoint only as a fallback.
+- Linux/KVM: CPU and memory are QEMU process `/proc` metrics; disk usage is
+  the host-allocated size of the sparse runtime disk image; container count
+  uses the native CrateBay Engine container list first and the compatibility
+  endpoint only as a fallback.
+- Windows/WSL2: CPU and disk are sampled from guest `/proc/stat` and
+  `df -B1`; memory is queried inside the WSL distro; container count uses the
+  native CrateBay Engine container list first and the compatibility endpoint
+  only as a fallback.
 
 ---
 
@@ -654,16 +703,16 @@ First App Launch
     │
     ├── Stage 2: Extract and Configure
     │   ├── Extract rootfs image
-    │   ├── Configure Docker Engine
+    │   ├── Configure containerd, runc, CNI, and CrateBay Engine adapter
     │   └── Show: "Configuring runtime..."
     │
     ├── Stage 3: Start Runtime
     │   ├── Boot VM
-    │   ├── Start Docker Engine inside VM
+    │   ├── Start CrateBay Engine inside VM
     │   └── Show: "Starting container engine..."
     │
     ├── Stage 4: Health Check
-    │   ├── Verify Docker socket is responsive
+    │   ├── Verify native Engine contract and compatibility endpoint are responsive
     │   └── Show: "Verifying..."
     │
     └── Complete: "CrateBay is ready!"
@@ -698,13 +747,21 @@ first run during `runtime.provision()`.
 ### 8.3 Image Contents
 
 The VM image is a minimal Alpine Linux with:
-- Docker Engine CE
-- containerd
-- socat (for socket forwarding)
-- Standard container networking (iptables, bridge-utils)
+- containerd + ctr
+- runc
+- CrateBay Engine adapter (`cratebay.engine.v1`)
+- CrateBay guest-agent for host/guest endpoint forwarding
+- CNI plugins and CrateBay-managed CNI config
+- Standard container networking (iptables, bridge/portmap/firewall plugins)
 - Minimal shell utilities
 
 No GUI, no unnecessary packages — optimized for size and boot speed.
+
+Runtime asset builders and bundled runtime resource docs are covered by
+`scripts/runtime-native-guard.sh`, which prevents the built-in runtime path from
+adding real Docker daemon packages or services. Docker-compatible socket names,
+legacy fields, Docker Hub registry references, and explicit `DOCKER_HOST`
+overrides remain compatibility surfaces rather than runtime backends.
 
 ---
 
@@ -716,10 +773,15 @@ No GUI, no unnecessary packages — optimized for size and boot speed.
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthStatus {
     pub runtime_state: RuntimeState,
-    pub docker_responsive: bool,
-    pub docker_version: Option<String>,
+    pub engine_responsive: bool,
+    pub compatibility_responsive: bool,
+    pub compatibility_version: Option<String>,
+    pub docker_responsive: bool, // legacy compatibility field
+    pub docker_version: Option<String>, // legacy compatibility field
     pub uptime_seconds: Option<u64>,
     pub last_check: String, // RFC3339 timestamp
+    pub engine_source: Option<String>,
+    pub docker_source: Option<String>, // legacy compatibility field
 }
 
 /// Perform a health check on the runtime
@@ -727,33 +789,42 @@ pub async fn health_check(&self) -> Result<HealthStatus, AppError> {
     // 1. Check if VM process is running
     let vm_running = self.is_vm_process_alive();
 
-    // 2. Check if Docker socket exists
-    let socket_exists = self.docker_socket_path().exists();
+    // 2. Check if the Engine compatibility socket exists
+    let socket_exists = self.engine_socket_path().exists();
 
-    // 3. Try Docker ping
-    let docker_responsive = if socket_exists {
-        let docker = Docker::connect_with_unix(
-            self.docker_socket_path().to_str().unwrap(),
+    // 3. Try native Engine contract first.
+    let engine_responsive = socket_exists
+        && engine_http_get_json_unix_socket(self.engine_socket_path(), "/cratebay/engine").is_ok();
+
+    // 4. Try Engine compatibility ping for legacy clients.
+    let compatibility_responsive = if socket_exists {
+        let compatibility = Docker::connect_with_unix(
+            self.engine_socket_path().to_str().unwrap(),
             5, // 5 second timeout
             API_DEFAULT_VERSION,
         )?;
-        docker.ping().await.is_ok()
+        compatibility.ping().await.is_ok()
     } else {
         false
     };
 
     Ok(HealthStatus {
-        runtime_state: if docker_responsive {
+        runtime_state: if engine_responsive {
             RuntimeState::Ready
         } else if vm_running {
             RuntimeState::Starting
         } else {
             RuntimeState::Stopped
         },
-        docker_responsive,
-        docker_version: None, // filled if responsive
+        engine_responsive,
+        compatibility_responsive,
+        compatibility_version: None, // filled if responsive
+        docker_responsive: compatibility_responsive,
+        docker_version: None, // legacy compatibility field
         uptime_seconds: None,
         last_check: Utc::now().to_rfc3339(),
+        engine_source: Some("builtin".to_string()),
+        docker_source: Some("builtin".to_string()),
     })
 }
 ```
@@ -762,7 +833,8 @@ pub async fn health_check(&self) -> Result<HealthStatus, AppError> {
 
 - `last_check` MUST always be a valid RFC3339 timestamp (including when emitting an error status).
 - To avoid transient UI flicker (e.g., `Ready → Starting` due to brief socket jitter), implementations SHOULD:
-  - Retry Docker ping a small number of times (e.g., 3 attempts with short backoff), and
+  - Retry the Engine compatibility ping a small number of times (e.g., 3 attempts with short backoff), and
+  - Use the native Engine contract as the authoritative `Ready` signal, and
   - Use a short failure threshold (e.g., 2–3 consecutive failed checks) before downgrading from `Ready`.
 
 ### 9.2 Periodic Health Monitoring
@@ -786,10 +858,15 @@ pub fn start_health_monitor(
                     tracing::warn!("Health check failed: {}", e);
                     let _ = app.emit("runtime:health", &HealthStatus {
                         runtime_state: RuntimeState::Error(e.to_string()),
+                        engine_responsive: false,
+                        compatibility_responsive: false,
+                        compatibility_version: None,
                         docker_responsive: false,
                         docker_version: None,
                         uptime_seconds: None,
                         last_check: Utc::now().to_rfc3339(),
+                        engine_source: Some("builtin".to_string()),
+                        docker_source: Some("builtin".to_string()),
                     });
                 }
             }
@@ -905,7 +982,7 @@ impl MacOSRuntime {
            .arg("--cmdline").arg(&cmdline)
            .arg("--ready-file").arg(&ready_file);
 
-        // Set up Docker socket forwarding based on mode
+        // Set up Engine compatibility endpoint forwarding based on mode
         let forward_spec = format!("{}:{}", port, sock_path.to_string_lossy());
         match forward_mode.as_str() {
             "vsock" => {
@@ -924,7 +1001,7 @@ impl RuntimeManager for MacOSRuntime {
     async fn start(&self) -> Result<(), AppError> {
         // ... check state, cleanup stray processes
         let child = self.spawn_runner()?;
-        // ... wait for ready file, wait for Docker
+        // ... wait for ready file, wait for CrateBay Engine
     }
 
     // ... other trait methods
@@ -979,11 +1056,11 @@ impl LinuxRuntime {
             "-nodefaults".to_string(),
         ];
 
-        // Docker socket forwarding
-        let socket_path = self.docker_socket_path();
+        // Engine compatibility endpoint forwarding
+        let socket_path = self.engine_socket_path();
         args.extend_from_slice(&[
             "-chardev".to_string(),
-            format!("socket,id=docker,path={},server=on,wait=off", socket_path.display()),
+            format!("socket,id=engine,path={},server=on,wait=off", socket_path.display()),
         ]);
 
         // Shared directories (VirtioFS)
@@ -1025,7 +1102,7 @@ impl RuntimeManager for LinuxRuntime {
             .map_err(|e| AppError::Runtime(format!("Failed to start QEMU: {}", e)))?;
 
         self.qemu_process = Some(child);
-        self.wait_for_docker(Duration::from_secs(30)).await?;
+        self.wait_for_engine(Duration::from_secs(30)).await?;
         Ok(())
     }
 
@@ -1091,16 +1168,16 @@ impl RuntimeManager for WindowsRuntime {
             ));
         }
 
-        // Start the distro
+        // Start the distro and launch CrateBay Engine (containerd + adapter)
         Command::new("wsl")
-            .args(["-d", Self::DISTRO_NAME, "--", "dockerd", "&"])
+            .args(["-d", Self::DISTRO_NAME, "--", "/usr/local/bin/cratebay-engine-start"])
             .spawn()
-            .map_err(|e| AppError::Runtime(format!("Failed to start WSL distro: {}", e)))?;
+            .map_err(|e| AppError::Runtime(format!("Failed to start CrateBay Engine: {}", e)))?;
 
-        // Set up socket forwarding (Docker socket → named pipe)
-        self.setup_socket_forward().await?;
+        // Set up compatibility API forwarding (CrateBay Engine socket → named pipe)
+        self.setup_engine_forward().await?;
 
-        self.wait_for_docker(Duration::from_secs(30)).await?;
+        self.wait_for_engine(Duration::from_secs(30)).await?;
         Ok(())
     }
 
@@ -1168,8 +1245,8 @@ impl RuntimeManager for WindowsRuntime {
 | Memory overhead | ~200 MB | ~200 MB | ~150 MB (shared) |
 | File sharing perf | Excellent (VirtioFS) | Excellent (VirtioFS) | Good (9P) |
 | Port forwarding | Automatic (NAT) | Manual (hostfwd) | Automatic (Win11) |
-| Docker socket (arm64) | **vsock → Unix** | chardev → Unix | socat → pipe |
-| Docker socket (x86_64) | **reverse TCP → Unix** | chardev → Unix | socat → pipe |
+| Engine endpoint (arm64) | **vsock → Unix** | chardev → Unix | TCP/pipe |
+| Engine endpoint (x86_64) | **reverse TCP → Unix** | chardev → Unix | TCP/pipe |
 | First-run download | ~400 MB | ~400 MB | ~350 MB |
 | Min OS version | macOS 13 | Kernel 5.10 | Win10 21H2 |
 
@@ -1190,10 +1267,10 @@ The VM images are built in CI and published as GitHub Release assets:
 
 ```
 1. Start with Alpine Linux minimal rootfs
-2. Install Docker Engine CE + containerd
-3. Install socat, iptables, bridge-utils
-4. Configure Docker to start on boot
-5. Configure socket forwarding service
+2. Install containerd, runc, CNI plugins, iptables, and iproute2
+3. Install CrateBay Engine adapter and guest-agent
+4. Configure containerd root/state, CNI networks, and CrateBay storage directories
+5. Configure Engine compatibility endpoint forwarding service
 6. Strip unnecessary files
 7. Package:
    - macOS/Linux: vmlinuz + initrd + rootfs.img/qcow2
@@ -1209,6 +1286,6 @@ The VM images are built in CI and published as GitHub Release assets:
 | "KVM not available" | Linux | Enable virtualization in BIOS/UEFI |
 | "VZ.framework error" | macOS | Ensure macOS 13+, check System Preferences > Security |
 | "WSL2 not available" | Windows | Run `wsl --install` in admin PowerShell |
-| Docker socket timeout | All | Check `~/.cratebay/runtime/` for socket file; restart runtime |
+| Engine endpoint timeout | All | Check `~/.cratebay/runtime/` for socket file and CrateBay Engine adapter logs; restart runtime |
 | VM won't start | All | Delete `~/.cratebay/runtime/` and re-provision |
 | Port forwarding fails | Linux | Check iptables rules inside VM |

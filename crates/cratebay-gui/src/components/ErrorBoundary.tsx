@@ -1,8 +1,17 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { createI18n, useI18n } from "@/lib/i18n";
+
+interface ErrorBoundaryText {
+  title: string;
+  description: string;
+  details: string;
+  reload: string;
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  text?: ErrorBoundaryText;
 }
 
 interface ErrorBoundaryState {
@@ -36,6 +45,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         return this.props.fallback;
       }
 
+      const text = this.props.text ?? defaultErrorBoundaryText;
+
       return (
         <div
           style={{
@@ -59,10 +70,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             }}
           >
             <h1 style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}>
-              Something went wrong
+              {text.title}
             </h1>
             <p style={{ color: "#a1a1aa", marginBottom: "1.5rem" }}>
-              CrateBay encountered an unexpected error. Please try restarting the application.
+              {text.description}
             </p>
 
             {this.state.error && (
@@ -77,7 +88,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 }}
               >
                 <summary style={{ cursor: "pointer", color: "#ef4444", fontWeight: 500 }}>
-                  Error Details
+                  {text.details}
                 </summary>
                 <pre
                   style={{
@@ -109,7 +120,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 fontWeight: 500,
               }}
             >
-              Reload Application
+              {text.reload}
             </button>
           </div>
         </div>
@@ -118,4 +129,33 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     return this.props.children;
   }
+}
+
+const defaultCommonText = createI18n("en").t("common");
+const defaultErrorBoundaryText: ErrorBoundaryText = {
+  title: defaultCommonText.unexpectedErrorTitle,
+  description: defaultCommonText.unexpectedErrorDesc,
+  details: defaultCommonText.errorDetails,
+  reload: defaultCommonText.reloadApplication,
+};
+
+export function LocalizedErrorBoundary({
+  children,
+  fallback,
+}: Omit<ErrorBoundaryProps, "text">) {
+  const { t } = useI18n();
+
+  return (
+    <ErrorBoundary
+      fallback={fallback}
+      text={{
+        title: t("common", "unexpectedErrorTitle"),
+        description: t("common", "unexpectedErrorDesc"),
+        details: t("common", "errorDetails"),
+        reload: t("common", "reloadApplication"),
+      }}
+    >
+      {children}
+    </ErrorBoundary>
+  );
 }

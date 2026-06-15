@@ -24,102 +24,26 @@ import {
 } from "@/components/ui/select";
 import { Plus, ChevronDown, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  envKey,
+  formatPortMapping,
+  formatVolumeMount,
+  isBuiltInNetworkMode,
+  parseEnvVar,
+  parsePortMapping,
+  parseVolumeMount,
+} from "@/lib/containerForm";
 import type { PodInfo } from "@/types/pod";
+import type { NetworkInfo } from "@/types/network";
+import type { VolumeInfo } from "@/types/volume";
 import type { PortMapping, VolumeMount } from "@/types/container";
 
-type NetworkMode = "" | "bridge" | "none" | "host";
+type NetworkMode = string;
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function parsePortMapping(input: string): PortMapping {
-  const spec = input.trim();
-  if (!spec) throw new Error("empty");
-
-  const slashIndex = spec.lastIndexOf("/");
-  const portPart = slashIndex >= 0 ? spec.slice(0, slashIndex) : spec;
-  const protocol = (slashIndex >= 0 ? spec.slice(slashIndex + 1) : "tcp").toLowerCase();
-  if (protocol !== "tcp" && protocol !== "udp") {
-    throw new Error("protocol");
-  }
-
-  const parts = portPart.split(":");
-  if (parts.length !== 1 && parts.length !== 2) {
-    throw new Error("format");
-  }
-  const containerPort = parsePort(parts[parts.length - 1]);
-  const hostPort = parts.length === 2 ? parsePort(parts[0]) : containerPort;
-
-  return { hostPort, containerPort, protocol };
-}
-
-function parsePort(value: string): number {
-  const port = Number(value.trim());
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("port");
-  }
-  return port;
-}
-
-function formatPortMapping(port: PortMapping): string {
-  const prefix =
-    port.hostPort === port.containerPort
-      ? `${port.containerPort}`
-      : `${port.hostPort}:${port.containerPort}`;
-  return `${prefix}/${port.protocol}`;
-}
-
-function parseVolumeMount(input: string): VolumeMount {
-  const spec = input.trim();
-  if (!spec) throw new Error("empty");
-
-  const parts = spec.split(":");
-  if (parts.length !== 2 && parts.length !== 3) {
-    throw new Error("format");
-  }
-  const [hostPath, containerPath, mode] = parts.map((part) => part.trim());
-  if (!hostPath || !containerPath || !containerPath.startsWith("/")) {
-    throw new Error("path");
-  }
-  if (mode && mode !== "ro" && mode !== "rw") {
-    throw new Error("mode");
-  }
-
-  return {
-    hostPath,
-    containerPath,
-    readOnly: mode === "ro" ? true : mode === "rw" ? false : undefined,
-  };
-}
-
-function formatVolumeMount(volume: VolumeMount): string {
-  const mode = volume.readOnly ? ":ro" : "";
-  return `${volume.hostPath}:${volume.containerPath}${mode}`;
-}
-
-function parseEnvVar(input: string): string {
-  const spec = input.trim();
-  if (!spec) throw new Error("empty");
-
-  const separatorIndex = spec.indexOf("=");
-  if (separatorIndex <= 0) {
-    throw new Error("format");
-  }
-
-  const key = spec.slice(0, separatorIndex).trim();
-  const value = spec.slice(separatorIndex + 1).trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-    throw new Error("key");
-  }
-
-  return `${key}=${value}`;
-}
-
-function envKey(envVar: string): string {
-  return envVar.split("=", 1)[0];
 }
 
 export function ContainerCreate() {
@@ -142,10 +66,17 @@ export function ContainerCreate() {
   const [readOnlyRootfs, setReadOnlyRootfs] = useState(false);
   const [pods, setPods] = useState<PodInfo[]>([]);
   const [podsLoading, setPodsLoading] = useState(false);
+  const [networks, setNetworks] = useState<NetworkInfo[]>([]);
+  const [networksLoading, setNetworksLoading] = useState(false);
+  const [availableVolumes, setAvailableVolumes] = useState<VolumeInfo[]>([]);
+  const [volumesLoading, setVolumesLoading] = useState(false);
   const [portInput, setPortInput] = useState("");
   const [ports, setPorts] = useState<PortMapping[]>([]);
   const [volumeInput, setVolumeInput] = useState("");
   const [volumes, setVolumes] = useState<VolumeMount[]>([]);
+  const [selectedVolume, setSelectedVolume] = useState("");
+  const [selectedVolumePath, setSelectedVolumePath] = useState("/workspace");
+  const [selectedVolumeReadOnly, setSelectedVolumeReadOnly] = useState(false);
   const [envInput, setEnvInput] = useState("");
   const [envVars, setEnvVars] = useState<string[]>([]);
   const [cpuCores, setCpuCores] = useState(2);
@@ -170,6 +101,30 @@ export function ContainerCreate() {
       })
       .finally(() => {
         if (active) setPodsLoading(false);
+      });
+
+    setNetworksLoading(true);
+    invoke<NetworkInfo[]>("network_list")
+      .then((result) => {
+        if (active) setNetworks(result);
+      })
+      .catch(() => {
+        if (active) setNetworks([]);
+      })
+      .finally(() => {
+        if (active) setNetworksLoading(false);
+      });
+
+    setVolumesLoading(true);
+    invoke<VolumeInfo[]>("volume_list")
+      .then((result) => {
+        if (active) setAvailableVolumes(result);
+      })
+      .catch(() => {
+        if (active) setAvailableVolumes([]);
+      })
+      .finally(() => {
+        if (active) setVolumesLoading(false);
       });
 
     return () => {
@@ -222,6 +177,9 @@ export function ContainerCreate() {
     setPorts([]);
     setVolumeInput("");
     setVolumes([]);
+    setSelectedVolume("");
+    setSelectedVolumePath("/workspace");
+    setSelectedVolumeReadOnly(false);
     setEnvInput("");
     setEnvVars([]);
     setCpuCores(2);
@@ -237,7 +195,8 @@ export function ContainerCreate() {
         ? t("containers", "networkNone")
         : network === "host"
           ? t("containers", "networkHost")
-          : t("containers", "defaultNetwork");
+          : network || t("containers", "defaultNetwork");
+  const customNetworks = networks.filter((item) => !isBuiltInNetworkMode(item.name));
 
   const addPort = useCallback(() => {
     try {
@@ -260,6 +219,25 @@ export function ContainerCreate() {
       setFormError(t("containers", "invalidVolume"));
     }
   }, [volumeInput, t]);
+
+  const addExistingVolume = useCallback(() => {
+    const containerPath = selectedVolumePath.trim();
+    if (!selectedVolume || !containerPath.startsWith("/")) {
+      setFormError(t("containers", "invalidVolume"));
+      return;
+    }
+    setVolumes((current) => [
+      ...current,
+      {
+        hostPath: selectedVolume,
+        containerPath,
+        readOnly: selectedVolumeReadOnly || undefined,
+      },
+    ]);
+    setSelectedVolumePath("/workspace");
+    setSelectedVolumeReadOnly(false);
+    setFormError(null);
+  }, [selectedVolume, selectedVolumePath, selectedVolumeReadOnly, t]);
 
   const addEnvVar = useCallback(() => {
     try {
@@ -416,7 +394,7 @@ export function ContainerCreate() {
               {imageDropdownOpen && imageOptions.length > 0 && (
                 <div
                   ref={dropdownRef}
-                  className="mt-1 max-h-40 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
+                  className="absolute z-50 mt-1 max-h-40 w-full overflow-y-auto rounded-md border border-border bg-popover shadow-md"
                 >
                   {imageOptions.map((item) => (
                     <button
@@ -443,7 +421,7 @@ export function ContainerCreate() {
               {imageDropdownOpen && imageOptions.length === 0 && !imagesLoading && image.trim().length > 0 && (
                 <div
                   ref={dropdownRef}
-                  className="mt-1 rounded-md border border-border bg-popover p-3 shadow-md"
+                  className="absolute z-50 mt-1 w-full rounded-md border border-border bg-popover p-3 shadow-md"
                 >
                   <p className="text-xs text-muted-foreground">
                     {t("containers", "missingImagePrefix")} <span className="font-mono font-medium text-foreground">{image.trim()}</span>
@@ -555,8 +533,16 @@ export function ContainerCreate() {
                   <SelectItem value="bridge">{t("containers", "networkBridge")}</SelectItem>
                   <SelectItem value="none">{t("containers", "networkNone")}</SelectItem>
                   <SelectItem value="host">{t("containers", "networkHost")}</SelectItem>
+                  {customNetworks.map((item) => (
+                    <SelectItem key={item.id || item.name} value={item.name}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {networksLoading && (
+                <span className="text-xs text-muted-foreground">{t("common", "loading")}</span>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="container-user">{t("containers", "user")}</Label>
@@ -651,6 +637,48 @@ export function ContainerCreate() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="volume-mount">{t("containers", "volumeMount")}</Label>
+              <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
+                <Select
+                  value={selectedVolume || "__none"}
+                  onValueChange={(value) => setSelectedVolume(value === "__none" ? "" : value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      {selectedVolume || (volumesLoading ? t("common", "loading") : t("containers", "selectVolume"))}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="w-full">
+                    <SelectItem value="__none">{t("containers", "selectVolume")}</SelectItem>
+                    {availableVolumes.map((item) => (
+                      <SelectItem key={item.name} value={item.name}>
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={selectedVolumePath}
+                  onChange={(e) => setSelectedVolumePath(e.target.value)}
+                  placeholder={t("containers", "mountPath")}
+                />
+                <label className="flex min-h-9 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                  <Checkbox
+                    checked={selectedVolumeReadOnly}
+                    onCheckedChange={(checked) => setSelectedVolumeReadOnly(checked === true)}
+                  />
+                  <span>{t("containers", "readOnlyMount")}</span>
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={addExistingVolume}
+                  disabled={!selectedVolume}
+                  aria-label={t("containers", "addExistingVolume")}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
               <div className="flex gap-2">
                 <Input
                   id="volume-mount"

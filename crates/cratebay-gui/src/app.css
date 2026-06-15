@@ -34,31 +34,31 @@ div[style*="background-color:red"] {
 }
 
 :root {
-  /* shadcn/ui tokens (Light) — mapped from existing CrateBay palette */
-  --background: 210 40% 98%;
-  --foreground: 222 47% 11%;
+  /* shadcn/ui tokens (Light) — quiet operational palette */
+  --background: 210 20% 97%;
+  --foreground: 220 18% 12%;
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 210 40% 96%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 262 83% 58%;
+  --card-foreground: 220 18% 12%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 18% 12%;
+  --primary: 173 75% 28%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 19% 35%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222 47% 11%;
+  --secondary: 210 14% 93%;
+  --secondary-foreground: 220 18% 12%;
+  --muted: 210 14% 93%;
+  --muted-foreground: 218 10% 38%;
+  --accent: 204 16% 90%;
+  --accent-foreground: 220 18% 12%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 262 83% 58%;
-  --radius: 0.75rem;
+  --border: 210 13% 84%;
+  --input: 210 13% 84%;
+  --ring: 173 75% 28%;
+  --radius: 0.5rem;
 
   /* Brand accents */
-  --brand-cyan: 192 91% 36%;
-  --brand-green: 161 94% 30%;
+  --brand-cyan: 190 70% 34%;
+  --brand-green: 156 58% 34%;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -66,30 +66,30 @@ div[style*="background-color:red"] {
 }
 
 .dark {
-  /* shadcn/ui tokens (Dark) — mapped from existing CrateBay palette */
-  --background: 229 27% 8%;
-  --foreground: 214 32% 91%;
-  --card: 231 28% 14%;
-  --card-foreground: 214 32% 91%;
-  --popover: 234 29% 19%;
-  --popover-foreground: 214 32% 91%;
-  --primary: 258 90% 66%;
+  /* shadcn/ui tokens (Dark) — graphite with small teal accents */
+  --background: 220 10% 10%;
+  --foreground: 210 14% 89%;
+  --card: 220 9% 13%;
+  --card-foreground: 210 14% 89%;
+  --popover: 220 8% 16%;
+  --popover-foreground: 210 14% 89%;
+  --primary: 172 68% 43%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 234 29% 19%;
-  --secondary-foreground: 214 32% 91%;
-  --muted: 234 29% 19%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 234 29% 19%;
-  --accent-foreground: 214 32% 91%;
+  --secondary: 220 8% 18%;
+  --secondary-foreground: 210 14% 89%;
+  --muted: 220 8% 18%;
+  --muted-foreground: 214 9% 62%;
+  --accent: 216 8% 21%;
+  --accent-foreground: 210 14% 89%;
   --destructive: 0 91% 71%;
   --destructive-foreground: 0 0% 100%;
-  --border: 233 24% 22%;
-  --input: 233 24% 22%;
-  --ring: 258 90% 66%;
+  --border: 220 8% 24%;
+  --input: 220 8% 24%;
+  --ring: 172 68% 43%;
 
   /* Brand accents */
-  --brand-cyan: 188 86% 53%;
-  --brand-green: 158 64% 52%;
+  --brand-cyan: 190 72% 49%;
+  --brand-green: 156 58% 48%;
 }
 
 @theme inline {

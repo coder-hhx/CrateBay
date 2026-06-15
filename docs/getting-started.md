@@ -57,8 +57,9 @@ cratebay container list --all
 Container and image commands use the built-in runtime by default. If the runtime
 is not already running, CrateBay provisions and starts it on demand.
 
-For compatibility or diagnostics, pass `--docker-host` or set `DOCKER_HOST` to
-target an explicit Docker-compatible endpoint.
+For compatibility or diagnostics, pass `--engine-host` to target an explicit
+Engine-compatible endpoint. `--docker-host` and `DOCKER_HOST` remain legacy
+aliases for compatibility smoke tests.
 
 ## Verification
 

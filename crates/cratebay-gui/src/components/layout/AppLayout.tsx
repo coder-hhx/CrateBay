@@ -15,10 +15,9 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <TooltipProvider>
       <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-        {/* Sidebar */}
         <aside
           className={cn(
-            "flex-shrink-0 border-r border-border transition-[width] duration-200 ease-in-out overflow-y-auto overflow-x-hidden",
+            "flex-shrink-0 overflow-y-auto overflow-x-hidden border-r border-border transition-[width] duration-200 ease-in-out",
             !sidebarOpen && "w-0 border-r-0",
           )}
           style={sidebarOpen ? { width: `${sidebarWidth}px` } : undefined}
@@ -26,8 +25,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <Sidebar />
         </aside>
 
-        {/* Main content area */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col bg-background">
           <TopBar />
 
           <main className="flex-1 overflow-hidden">{children}</main>

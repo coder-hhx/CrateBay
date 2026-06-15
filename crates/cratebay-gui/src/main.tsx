@@ -1,9 +1,15 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { LocalizedErrorBoundary } from "./components/ErrorBoundary";
+import { createI18n } from "./lib/i18n";
 import { useAppStore } from "./stores/appStore";
+import { useSettingsStore } from "./stores/settingsStore";
 import App from "./App";
 import "./app.css";
+
+function commonText(key: "operationFailed" | "applicationError") {
+  return createI18n(useSettingsStore.getState().settings.language).t("common", key);
+}
 
 // ─── Suppress WebView default error overlay ─────────────────────────────
 // Tauri's WebView (and some Chromium builds) inject inline error banners
@@ -56,7 +62,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
   useAppStore.getState().addNotification({
     type: "error",
-    title: "操作失败",
+    title: commonText("operationFailed"),
     message,
     dismissable: true,
   });
@@ -70,7 +76,7 @@ window.addEventListener("error", (event) => {
   console.warn("[CrateBay] Uncaught error:", event.message);
   useAppStore.getState().addNotification({
     type: "error",
-    title: "应用错误",
+    title: commonText("applicationError"),
     message: event.message || "Unknown error",
     dismissable: true,
   });
@@ -86,8 +92,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <ErrorBoundary>
+    <LocalizedErrorBoundary>
       <App />
-    </ErrorBoundary>
+    </LocalizedErrorBoundary>
   </StrictMode>,
 );

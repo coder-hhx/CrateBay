@@ -1,21 +1,22 @@
 //! Windows runtime — WSL2 integration.
 //!
-//! Uses a custom WSL2 distro containing Docker Engine for the built-in
-//! container runtime. All WSL2 management is done via `wsl.exe`.
+//! Uses a custom WSL2 distro containing the CrateBay Engine
+//! (containerd + runc + CrateBay adapter) for the built-in container runtime.
+//! All WSL2 management is done via `wsl.exe`.
 //!
 //! Architecture overview:
 //!   1. **Provision**: Import a bundled rootfs tar into WSL2 as a custom distro.
-//!   2. **Start**: Boot the distro, start dockerd (3-layer fallback strategy),
-//!      detect the guest IP (6 strategies), optionally set up a host relay.
-//!   3. **Stop**: Terminate dockerd processes, then `wsl --terminate` the distro.
-//!   4. **Health**: Probe Docker via HTTP `/_ping` over TCP.
+//!   2. **Start**: Boot the distro, start CrateBay Engine, detect the guest IP
+//!      (6 strategies), optionally set up a host relay.
+//!   3. **Stop**: Stop CrateBay Engine processes, then `wsl --terminate` the distro.
+//!   4. **Health**: Probe the CrateBay Engine compatibility API via `/_ping`.
 //!
 //! Ported from `master:crates/cratebay-core/src/runtime.rs` (Windows WSL2
 //! section, ~1300 lines) and `master:crates/cratebay-core/src/windows.rs`
 //! (Hyper-V hypervisor, used for helper utilities).
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,8 +33,11 @@ use super::{HealthStatus, ProvisionProgress, RuntimeConfig, RuntimeManager, Runt
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default WSL2 Docker TCP port (inside the guest, bound to 0.0.0.0).
-const DEFAULT_WSL_DOCKER_PORT: u16 = 2375;
+/// Default WSL2 CrateBay Engine TCP port (inside the guest, bound to 0.0.0.0).
+const DEFAULT_WSL_ENGINE_PORT: u16 = 2375;
+
+/// Compatibility alias for older callers.
+const DEFAULT_WSL_DOCKER_PORT: u16 = DEFAULT_WSL_ENGINE_PORT;
 
 /// Default distro name for the CrateBay WSL2 runtime.
 const DEFAULT_DISTRO_NAME: &str = "cratebay-runtime";
@@ -51,24 +55,60 @@ const HEALTH_PING_RETRY_DELAY: Duration = Duration::from_millis(400);
 /// from `Ready` to `Starting`.
 const READY_DOWNGRADE_FAILURE_THRESHOLD: u8 = 3;
 
+static RESOLVED_WINDOWS_ENGINE_HOST: OnceLock<StdMutex<Option<String>>> = OnceLock::new();
+
+fn resolved_windows_engine_host() -> &'static StdMutex<Option<String>> {
+    RESOLVED_WINDOWS_ENGINE_HOST.get_or_init(|| StdMutex::new(None))
+}
+
+fn cache_windows_engine_host(host: &str) {
+    if host.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut cached) = resolved_windows_engine_host().lock() {
+        *cached = Some(host.to_string());
+    }
+}
+
+pub fn windows_engine_host_candidates() -> Vec<String> {
+    let mut hosts = Vec::new();
+    if let Ok(cached) = resolved_windows_engine_host().lock() {
+        if let Some(host) = cached.as_ref().filter(|host| !host.trim().is_empty()) {
+            hosts.push(host.clone());
+        }
+    }
+
+    let canonical = windows_engine_host();
+    if !hosts.iter().any(|host| host == &canonical) {
+        hosts.push(canonical);
+    }
+    hosts
+}
+
 // ---------------------------------------------------------------------------
 // WindowsRuntime struct
 // ---------------------------------------------------------------------------
 
-/// Windows host Docker endpoint for the built-in runtime.
+/// Windows host Engine-compatible endpoint for the built-in runtime.
 ///
 /// WSL2 supports localhost port forwarding by default, so we connect to the
-/// Docker TCP port as `tcp://127.0.0.1:<port>`.
+/// CrateBay Engine compatibility TCP port as `tcp://127.0.0.1:<port>`.
+pub fn windows_engine_host() -> String {
+    format!("tcp://127.0.0.1:{}", wsl_engine_port())
+}
+
+/// Compatibility alias for Docker-compatible endpoint callers.
 pub fn windows_docker_host() -> String {
-    format!("tcp://127.0.0.1:{}", wsl_docker_port())
+    windows_engine_host()
 }
 
 /// Windows runtime manager using WSL2.
 ///
-/// Manages a custom WSL2 distro that contains Docker Engine. The distro is
-/// imported from a tar archive during provisioning and controlled via
-/// `wsl.exe` commands. Docker is exposed to the host via TCP on the guest's
-/// IP, with an optional localhost relay for NAT-unfriendly configurations.
+/// Manages a custom WSL2 distro that contains the CrateBay Engine. The distro
+/// is imported from a tar archive during provisioning and controlled via
+/// `wsl.exe` commands. The CrateBay Engine compatibility API is exposed to
+/// the host via TCP on the guest's IP, with an optional localhost relay for
+/// NAT-unfriendly configurations.
 pub struct WindowsRuntime {
     config: RuntimeConfig,
     data_dir: PathBuf,
@@ -76,9 +116,9 @@ pub struct WindowsRuntime {
     state: Arc<Mutex<RuntimeState>>,
     /// Cached guest IP from the last successful start.
     guest_ip: Arc<Mutex<Option<String>>>,
-    /// Docker TCP endpoint string (e.g. `tcp://172.28.x.x:2375`).
+    /// Engine compatibility TCP endpoint string (e.g. `tcp://172.28.x.x:2375`).
     docker_host: Arc<Mutex<Option<String>>>,
-    /// Number of consecutive health-check cycles with failed Docker ping.
+    /// Number of consecutive health-check cycles with a failed Engine ping.
     consecutive_health_failures: Arc<Mutex<u8>>,
 }
 
@@ -102,12 +142,12 @@ impl WindowsRuntime {
         }
     }
 
-    /// Ping a Docker TCP endpoint with retries to smooth transient failures.
+    /// Ping an Engine TCP endpoint with retries to smooth transient failures.
     async fn ping_docker_host_with_retry(host: &str) -> bool {
         for attempt in 0..HEALTH_PING_ATTEMPTS {
             let host_c = host.to_string();
             let ping_ok =
-                tokio::task::spawn_blocking(move || common::docker_http_ping_host(&host_c).is_ok())
+                tokio::task::spawn_blocking(move || common::engine_http_ping_host(&host_c).is_ok())
                     .await
                     .unwrap_or(false);
 
@@ -123,12 +163,30 @@ impl WindowsRuntime {
         false
     }
 
-    /// Ping Docker inside WSL guest with retries.
+    async fn native_engine_contract_ready(&self) -> bool {
+        if let Some(host) = self.docker_host.lock().await.clone() {
+            if native_engine_contract_ready_on_host(&host).is_ok() {
+                cache_windows_engine_host(&host);
+                return true;
+            }
+        }
+
+        for host in windows_engine_host_candidates() {
+            if native_engine_contract_ready_on_host(&host).is_ok() {
+                cache_windows_engine_host(&host);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Ping CrateBay Engine inside WSL guest with retries.
     async fn ping_docker_guest_with_retry(distro: String, port: u16) -> bool {
         for attempt in 0..HEALTH_PING_ATTEMPTS {
             let distro_c = distro.clone();
             let ping_ok =
-                tokio::task::spawn_blocking(move || wsl_docker_ping_in_guest(&distro_c, port))
+                tokio::task::spawn_blocking(move || wsl_engine_ping_in_guest(&distro_c, port))
                     .await
                     .unwrap_or(false);
 
@@ -189,15 +247,10 @@ impl RuntimeManager for WindowsRuntime {
             return Ok(RuntimeState::Provisioned);
         }
 
-        // Step 4: Distro is running — check if Docker is responsive
-        let port = wsl_docker_port();
-        let distro = self.distro_name.clone();
-        let docker_ok =
-            tokio::task::spawn_blocking(move || wsl_docker_ping_in_guest(&distro, port))
-                .await
-                .unwrap_or(false);
+        // Step 4: Distro is running — check if the native CrateBay Engine contract is responsive.
+        let engine_responsive = self.native_engine_contract_ready().await;
 
-        if docker_ok {
+        if engine_responsive {
             let mut state = self.state.lock().await;
             *state = RuntimeState::Ready;
             Ok(RuntimeState::Ready)
@@ -320,7 +373,7 @@ impl RuntimeManager for WindowsRuntime {
         }
 
         let distro = self.distro_name.clone();
-        let port = wsl_docker_port();
+        let port = wsl_engine_port();
 
         // 1) Ensure the distro exists (import if missing)
         let distro_c = distro.clone();
@@ -336,25 +389,24 @@ impl RuntimeManager for WindowsRuntime {
             )));
         }
 
-        // 2) Start dockerd (3-layer fallback: OpenRC → detached → compatibility)
+        // 2) Start CrateBay Engine (containerd + adapter + TCP proxy)
         let distro_c = distro.clone();
-        tokio::task::spawn_blocking(move || wsl_start_dockerd(&distro_c, port))
+        tokio::task::spawn_blocking(move || wsl_start_engine(&distro_c, port))
             .await
             .map_err(|e| AppError::Runtime(format!("Join error: {}", e)))?
-            .map_err(|e| AppError::Runtime(format!("Failed to start dockerd: {}", e)))?;
+            .map_err(|e| AppError::Runtime(format!("Failed to start CrateBay Engine: {}", e)))?;
 
-        // 3) Wait for dockerd to become ready inside guest (up to 120s with
-        //    automatic compatibility-mode retry at 30s)
+        // 3) Wait for CrateBay Engine to become ready inside guest
         let distro_c = distro.clone();
         let guest_docker_host = tokio::task::spawn_blocking(move || {
-            wait_for_wsl_dockerd_ready_in_guest(&distro_c, port)
+            wait_for_wsl_engine_ready_in_guest(&distro_c, port)
         })
         .await
         .map_err(|e| AppError::Runtime(format!("Join error: {}", e)))?
-        .map_err(|e| AppError::Runtime(format!("Docker readiness wait failed: {}", e)))?;
+        .map_err(|e| AppError::Runtime(format!("CrateBay Engine readiness wait failed: {}", e)))?;
 
         // Cache guest IP for diagnostics (independent of host connectivity).
-        if let Some((host, _port)) = common::docker_host_tcp_endpoint(&guest_docker_host) {
+        if let Some((host, _port)) = common::engine_host_tcp_endpoint(&guest_docker_host) {
             *self.guest_ip.lock().await = Some(host);
         }
 
@@ -365,10 +417,16 @@ impl RuntimeManager for WindowsRuntime {
         })
         .await
         .map_err(|e| AppError::Runtime(format!("Join error: {}", e)))?
-        .map_err(|e| AppError::Runtime(format!("Docker host resolution failed: {}", e)))?;
+        .map_err(|e| AppError::Runtime(format!("Engine host resolution failed: {}", e)))?;
 
         // Cache the results
         *self.docker_host.lock().await = Some(docker_host.clone());
+
+        if !self.native_engine_contract_ready().await {
+            return Err(AppError::Runtime(
+                "CrateBay Engine compatibility endpoint is reachable, but the native engine contract is not ready".to_string(),
+            ));
+        }
 
         {
             let mut state = self.state.lock().await;
@@ -376,7 +434,7 @@ impl RuntimeManager for WindowsRuntime {
         }
 
         info!(
-            "Windows WSL2 runtime started (distro: {}, docker_host: {})",
+            "Windows WSL2 runtime started (distro: {}, engine_host: {})",
             self.distro_name, docker_host
         );
         Ok(())
@@ -390,9 +448,9 @@ impl RuntimeManager for WindowsRuntime {
 
         let distro = self.distro_name.clone();
 
-        // 1) Stop dockerd processes inside the distro
+        // 1) Stop CrateBay Engine processes inside the distro
         let distro_c = distro.clone();
-        let _ = tokio::task::spawn_blocking(move || wsl_stop_dockerd_processes(&distro_c)).await;
+        let _ = tokio::task::spawn_blocking(move || wsl_stop_engine_processes(&distro_c)).await;
 
         // 2) Terminate the WSL2 distro
         let distro_c = distro.clone();
@@ -435,11 +493,16 @@ impl RuntimeManager for WindowsRuntime {
             }
             return Ok(HealthStatus {
                 runtime_state: RuntimeState::Stopped,
+                engine_responsive: false,
+                compatibility_responsive: false,
+                compatibility_version: None,
                 docker_responsive: false,
                 docker_version: None,
                 uptime_seconds: None,
                 last_check: chrono::Utc::now().to_rfc3339(),
+                engine_source: Some("builtin".to_string()),
                 docker_source: Some("builtin".to_string()),
+                engine: crate::runtime::built_in_engine_status(),
             });
         }
 
@@ -449,9 +512,9 @@ impl RuntimeManager for WindowsRuntime {
             let mut ping_ok = Self::ping_docker_host_with_retry(host).await;
 
             // If the cached endpoint is stale/unreachable, prefer the canonical
-            // localhost-forwarded endpoint (used by `engine::ensure_docker()`).
+            // localhost-forwarded endpoint (used by `engine::ensure_engine_compatibility()`).
             if !ping_ok {
-                let fallback = windows_docker_host();
+                let fallback = windows_engine_host();
                 if host != &fallback {
                     let fallback_ok = Self::ping_docker_host_with_retry(&fallback).await;
                     if fallback_ok {
@@ -475,17 +538,18 @@ impl RuntimeManager for WindowsRuntime {
         } else {
             // No cached host — try guest-side ping
             let distro = self.distro_name.clone();
-            let port = wsl_docker_port();
+            let port = wsl_engine_port();
             let ping_ok = Self::ping_docker_guest_with_retry(distro, port).await;
             (ping_ok, None)
         };
+        let engine_responsive = self.native_engine_contract_ready().await;
 
         let current_state = {
             let state = self.state.lock().await;
             state.clone()
         };
 
-        let runtime_state = if docker_responsive {
+        let runtime_state = if engine_responsive {
             let mut failures = self.consecutive_health_failures.lock().await;
             *failures = 0;
             RuntimeState::Ready
@@ -516,18 +580,23 @@ impl RuntimeManager for WindowsRuntime {
 
         Ok(HealthStatus {
             runtime_state,
+            engine_responsive,
+            compatibility_responsive: docker_responsive,
+            compatibility_version: docker_version.clone(),
             docker_responsive,
             docker_version,
             uptime_seconds,
             last_check: chrono::Utc::now().to_rfc3339(),
+            engine_source: Some("builtin".to_string()),
             docker_source: Some("builtin".to_string()),
+            engine: crate::runtime::built_in_engine_status(),
         })
     }
 
-    fn docker_socket_path(&self) -> PathBuf {
-        // Windows: Docker is accessed via TCP, but we return a conventional
-        // path for the named pipe fallback.
-        PathBuf::from(r"\\.\pipe\cratebay-docker")
+    fn engine_socket_path(&self) -> PathBuf {
+        // Windows: the Engine is accessed via TCP, but return the preferred
+        // named pipe path for future/fallback compatibility.
+        PathBuf::from(r"\\.\pipe\cratebay-engine")
     }
 
     async fn resource_usage(&self) -> Result<ResourceUsage, AppError> {
@@ -537,15 +606,17 @@ impl RuntimeManager for WindowsRuntime {
 
         tokio::task::spawn_blocking(move || {
             let memory_info = wsl_get_memory_info(&distro);
-            let container_count = wsl_get_container_count(&distro);
+            let container_count = wsl_get_container_count();
+            let cpu_percent = wsl_get_cpu_percent(&distro).unwrap_or_default();
+            let disk_used_gb = wsl_get_disk_used_gb(&distro).unwrap_or_default();
 
             let (memory_used_mb, memory_total_mb) = memory_info.unwrap_or((0, config_mem));
 
             Ok(ResourceUsage {
-                cpu_percent: 0.0, // TODO: parse /proc/stat
+                cpu_percent,
                 memory_used_mb,
                 memory_total_mb,
-                disk_used_gb: 0.0, // TODO: parse df output
+                disk_used_gb,
                 disk_total_gb: config_disk as f32,
                 container_count: container_count.unwrap_or(0),
             })
@@ -559,13 +630,18 @@ impl RuntimeManager for WindowsRuntime {
 // WSL2 command execution helpers (blocking, wrapped in spawn_blocking above)
 // ===========================================================================
 
-/// Docker TCP port inside the WSL guest.
-fn wsl_docker_port() -> u16 {
+/// Engine TCP port inside the WSL guest.
+fn wsl_engine_port() -> u16 {
     std::env::var("CRATEBAY_WSL_DOCKER_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
         .filter(|p| *p > 0)
         .unwrap_or(DEFAULT_WSL_DOCKER_PORT)
+}
+
+/// Compatibility alias for older callers.
+fn wsl_docker_port() -> u16 {
+    wsl_engine_port()
 }
 
 /// Check if WSL2 is available by running `wsl --status`.
@@ -980,147 +1056,38 @@ fn wsl_terminate_distro(distro: &str) -> Result<(), String> {
 }
 
 // ===========================================================================
-// Docker daemon startup (3-layer fallback)
+// CrateBay Engine startup
 // ===========================================================================
 
-/// Build the dockerd flags string.
-fn wsl_dockerd_flags(port: u16, compatibility_mode: bool) -> String {
-    let mut flags = format!(
-        "-H tcp://0.0.0.0:{port} -H unix:///var/run/docker.sock --pidfile /var/run/dockerd.pid"
-    );
+fn wsl_engine_command(action: &str, port: u16) -> String {
+    format!("CRATEBAY_DOCKER_PROXY_PORT={port} /usr/local/bin/cratebay-wsl-engine {action}")
+}
 
-    if compatibility_mode {
-        flags.push_str(
-            " --storage-driver=vfs --iptables=false --ip6tables=false \
-             --ip-forward=false --ip-masq=false",
+/// Start CrateBay Engine in the WSL distro.
+fn wsl_start_engine(distro: &str, port: u16) -> Result<(), String> {
+    let command = wsl_engine_command("start", port);
+    let output = wsl_exec_with_timeout(distro, &command, Duration::from_secs(90))?;
+    if output.trim().is_empty() {
+        Ok(())
+    } else {
+        info!(
+            "Windows runtime: CrateBay Engine start output: {}",
+            output.trim()
         );
+        Ok(())
     }
-
-    flags
 }
 
-/// Build a foreground dockerd command for use with `exec`.
-fn wsl_dockerd_foreground_command(port: u16, compatibility_mode: bool) -> String {
-    let flags = wsl_dockerd_flags(port, compatibility_mode);
-    format!(
-        "command -v dockerd >/dev/null 2>&1 || {{ echo 'dockerd not found'; exit 1; }}; \
-         mkdir -p /var/lib/docker /var/run /var/log; \
-         : > /var/log/dockerd.log; \
-         exec dockerd {flags} >> /var/log/dockerd.log 2>&1"
-    )
-}
-
-/// Attempt to start dockerd via OpenRC service manager.
-/// Returns `Ok(true)` if OpenRC started it, `Ok(false)` if OpenRC is not available.
-fn wsl_try_start_dockerd_via_openrc(distro: &str, port: u16) -> Result<bool, String> {
-    let flags = wsl_dockerd_flags(port, false);
-
-    // Write the port config for OpenRC
-    let setup_cmd = format!(
-        "if ! command -v rc-service >/dev/null 2>&1 || [ ! -x /etc/init.d/docker ]; then \
-           echo no-openrc; exit 0; \
-         fi; \
-         mkdir -p /etc/conf.d; \
-         printf 'DOCKER_OPTS=\"{flags}\"\\n' > /etc/conf.d/docker; \
-         rc-service docker start >> /var/log/openrc.log 2>&1 && echo started || echo failed"
-    );
-
-    let output = wsl_exec_with_timeout(distro, &setup_cmd, Duration::from_secs(45))?;
-    Ok(output.lines().any(|line| line.trim() == "started"))
-}
-
-/// Spawn a detached dockerd process inside WSL.
-///
-/// NOTE: On actual Windows, this would use `CREATE_NO_WINDOW` and
-/// `DETACHED_PROCESS` creation flags. For cross-platform compilation,
-/// we use a portable approach with `nohup`.
-fn wsl_spawn_detached_dockerd_process(
-    distro: &str,
-    port: u16,
-    compatibility_mode: bool,
-) -> Result<(), String> {
-    let dockerd_cmd = wsl_dockerd_foreground_command(port, compatibility_mode);
-
-    // Use nohup + background to detach. On real Windows this would use
-    // CommandExt::creation_flags for proper detachment.
-    let mut command = std::process::Command::new("wsl.exe");
-    command.args([
-        "-d",
-        distro,
-        "--",
-        "sh",
-        "-lc",
-        &format!("nohup sh -c '{}' </dev/null >/dev/null 2>&1 &", dockerd_cmd),
-    ]);
-
-    let description = format!("wsl detached dockerd ({})", distro);
-    let out = run_command_with_timeout(&mut command, Duration::from_secs(30), &description)?;
-
-    // Detached spawn: even non-zero exit may be fine (wsl.exe returns
-    // before the background process fully starts).
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if !stderr.is_empty() {
-            warn!("Detached dockerd spawn warning: {}", stderr);
-        }
-    }
-
-    Ok(())
-}
-
-/// Stop all dockerd/containerd processes inside the distro.
-fn wsl_stop_dockerd_processes(distro: &str) {
+/// Stop all CrateBay Engine processes inside the distro.
+fn wsl_stop_engine_processes(distro: &str) {
     let _ = wsl_exec_with_timeout(
         distro,
-        "if command -v rc-service >/dev/null 2>&1; then \
-           rc-service docker stop >/dev/null 2>&1 || true; \
-           rc-service containerd stop >/dev/null 2>&1 || true; \
-         fi; \
-         if [ -f /var/run/dockerd.pid ]; then \
-           kill \"$(cat /var/run/dockerd.pid)\" 2>/dev/null || true; \
-         fi; \
-         pkill -x dockerd 2>/dev/null || killall dockerd 2>/dev/null || true; \
-         pkill -x containerd 2>/dev/null || killall containerd 2>/dev/null || true; \
-         rm -f /var/run/dockerd.pid",
+        "/usr/local/bin/cratebay-wsl-engine stop >/dev/null 2>&1 || true; \
+         pkill -x cratebay-guest-agent 2>/dev/null || true; \
+         pkill -x cratebay-engine-adapter 2>/dev/null || true; \
+         pkill -x containerd 2>/dev/null || true",
         Duration::from_secs(15),
     );
-}
-
-/// Start dockerd with a specific mode (normal or compatibility).
-fn wsl_start_dockerd_with_mode(
-    distro: &str,
-    port: u16,
-    compatibility_mode: bool,
-) -> Result<(), String> {
-    // Prep: create directories, check if already running
-    let prep_cmd = "mkdir -p /var/lib/docker /var/run /var/log; \
-         if [ -f /var/run/dockerd.pid ] && kill -0 \"$(cat /var/run/dockerd.pid)\" 2>/dev/null; then \
-           echo running; \
-           exit 0; \
-         fi; \
-         rm -f /var/run/dockerd.pid; \
-         : > /var/log/dockerd.log; \
-         : > /var/log/openrc.log; \
-         echo start";
-    let prep_output = wsl_exec(distro, prep_cmd)?;
-    if prep_output.lines().any(|line| line.trim() == "running") {
-        return Ok(());
-    }
-
-    // Strategy 1: Try OpenRC (unless compatibility mode)
-    if !compatibility_mode {
-        if let Ok(true) = wsl_try_start_dockerd_via_openrc(distro, port) {
-            return Ok(());
-        }
-    }
-
-    // Strategy 2/3: Detached process (normal or compatibility)
-    wsl_spawn_detached_dockerd_process(distro, port, compatibility_mode)
-}
-
-/// Start dockerd in the distro (normal mode first).
-fn wsl_start_dockerd(distro: &str, port: u16) -> Result<(), String> {
-    wsl_start_dockerd_with_mode(distro, port, false)
 }
 
 // ===========================================================================
@@ -1350,17 +1317,19 @@ fn wsl_guest_ip(distro: &str) -> Result<String, String> {
 }
 
 // ===========================================================================
-// Docker readiness + host relay
+// CrateBay Engine readiness + host relay
 // ===========================================================================
 
-/// Build a wget-based Docker ping command for use inside WSL.
-fn wsl_docker_http_ping_command(port: u16) -> String {
-    format!("wget -qO- http://127.0.0.1:{port}/_ping 2>/dev/null | tr -d '\\r' || true")
+/// Build a CrateBay Engine ping command for use inside WSL.
+fn wsl_engine_http_ping_command(port: u16) -> String {
+    format!(
+        "CRATEBAY_DOCKER_PROXY_PORT={port} /usr/local/bin/cratebay-wsl-engine ping 2>/dev/null | tr -d '\\r' || true"
+    )
 }
 
-/// Check if Docker is responding inside the WSL guest.
-fn wsl_docker_ping_in_guest(distro: &str, port: u16) -> bool {
-    let cmd = wsl_docker_http_ping_command(port);
+/// Check if CrateBay Engine is responding inside the WSL guest.
+fn wsl_engine_ping_in_guest(distro: &str, port: u16) -> bool {
+    let cmd = wsl_engine_http_ping_command(port);
     match wsl_exec_with_timeout(distro, &cmd, Duration::from_secs(10)) {
         Ok(output) => output.lines().any(|line| line.trim() == "OK"),
         Err(_) => false,
@@ -1369,31 +1338,26 @@ fn wsl_docker_ping_in_guest(distro: &str, port: u16) -> bool {
 
 /// Collect diagnostic information from the WSL distro for troubleshooting.
 fn wsl_runtime_diagnostics(distro: &str) -> String {
+    let ping_cmd = wsl_engine_http_ping_command(wsl_engine_port());
     let probes = vec![
-        ("ip -4 route get 1.1.1.1", "ip -4 route get 1.1.1.1 2>/dev/null || true"),
-        ("ip -4 -o addr show", "ip -4 -o addr show 2>/dev/null || true"),
-        ("hostname -I", "hostname -I 2>/dev/null || true"),
-        ("which dockerd", "command -v dockerd 2>/dev/null || true"),
-        ("dockerd --version", "dockerd --version 2>/dev/null || true"),
-        ("docker _ping", &wsl_docker_http_ping_command(wsl_docker_port())),
-        ("rc-service docker status",
-         "if command -v rc-service >/dev/null 2>&1 && [ -x /etc/init.d/docker ]; then rc-service docker status 2>&1 || true; fi"),
-        ("dockerd.pid", "if [ -f /var/run/dockerd.pid ]; then cat /var/run/dockerd.pid; fi"),
-        ("ps | grep dockerd", "ps | grep '[d]ockerd' 2>/dev/null || true"),
-        ("dockerd.log", "tail -n 80 /var/log/dockerd.log 2>/dev/null || true"),
+        ("ip -4 route get 1.1.1.1", "ip -4 route get 1.1.1.1 2>/dev/null || true".to_string()),
+        ("ip -4 -o addr show", "ip -4 -o addr show 2>/dev/null || true".to_string()),
+        ("hostname -I", "hostname -I 2>/dev/null || true".to_string()),
+        ("cratebay-wsl-engine status", "/usr/local/bin/cratebay-wsl-engine status 2>&1 || true".to_string()),
+        ("engine _ping", ping_cmd),
+        ("containerd version", "ctr --address /run/containerd/containerd.sock version 2>&1 || true".to_string()),
+        ("ctr cratebay tasks", "ctr --address /run/containerd/containerd.sock --namespace cratebay tasks list 2>&1 || true".to_string()),
+        ("ps | grep engine", "ps | grep -E '[c]ratebay-engine-adapter|[c]ratebay-guest-agent|[c]ontainerd' 2>/dev/null || true".to_string()),
+        ("containerd.log", "tail -n 80 /var/log/containerd.log 2>/dev/null || true".to_string()),
+        ("cratebay-engine-adapter.log", "tail -n 80 /var/log/cratebay-engine-adapter.log 2>/dev/null || true".to_string()),
+        ("cratebay-guest-agent.log", "tail -n 80 /var/log/cratebay-guest-agent.log 2>/dev/null || true".to_string()),
+        ("cratebay-engine.log", "tail -n 80 /var/log/cratebay-engine.log 2>/dev/null || true".to_string()),
     ];
 
-    let ping_cmd = wsl_docker_http_ping_command(wsl_docker_port());
     let mut diagnostics = Vec::new();
 
     for (label, command) in probes {
-        // The `command` variable may be a reference to the probe or to `ping_cmd`
-        let cmd_str = if command == &wsl_docker_http_ping_command(wsl_docker_port()) {
-            ping_cmd.as_str()
-        } else {
-            command
-        };
-        match wsl_exec_with_timeout(distro, cmd_str, Duration::from_secs(5)) {
+        match wsl_exec_with_timeout(distro, &command, Duration::from_secs(5)) {
             Ok(output) if !output.trim().is_empty() => {
                 diagnostics.push(format!("{}:\n{}", label, output.trim()));
             }
@@ -1405,16 +1369,13 @@ fn wsl_runtime_diagnostics(distro: &str) -> String {
     diagnostics.join("\n\n")
 }
 
-/// Wait for dockerd to become ready inside the WSL guest.
+/// Wait for CrateBay Engine to become ready inside the WSL guest.
 ///
-/// Uses a 120-second timeout with automatic compatibility-mode retry at 30s.
-/// Returns the guest Docker endpoint (e.g. `tcp://172.28.x.x:2375`).
-fn wait_for_wsl_dockerd_ready_in_guest(distro: &str, port: u16) -> Result<String, String> {
+/// Returns the guest Docker-compatible endpoint (e.g. `tcp://172.28.x.x:2375`).
+fn wait_for_wsl_engine_ready_in_guest(distro: &str, port: u16) -> Result<String, String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
-    let mut last_error = "Docker runtime is still starting".to_string();
-    let readiness_probe = wsl_docker_http_ping_command(port);
-    let fallback_deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let mut compatibility_retry_attempted = false;
+    let mut last_error = "CrateBay Engine is still starting".to_string();
+    let readiness_probe = wsl_engine_http_ping_command(port);
 
     while std::time::Instant::now() < deadline {
         match wsl_exec(distro, &readiness_probe) {
@@ -1423,17 +1384,9 @@ fn wait_for_wsl_dockerd_ready_in_guest(distro: &str, port: u16) -> Result<String
                 return Ok(format!("tcp://{}:{}", guest_ip, port));
             }
             Ok(_) => {
-                last_error = "dockerd HTTP API is not responding inside WSL".to_string();
+                last_error = "CrateBay Engine API is not responding inside WSL".to_string();
             }
             Err(e) => last_error = e,
-        }
-
-        // After 30s without success, retry with compatibility mode
-        if !compatibility_retry_attempted && std::time::Instant::now() >= fallback_deadline {
-            info!("Windows runtime: dockerd did not become ready, retrying in compatibility mode");
-            wsl_stop_dockerd_processes(distro);
-            wsl_start_dockerd_with_mode(distro, port, true)?;
-            compatibility_retry_attempted = true;
         }
 
         std::thread::sleep(Duration::from_millis(500));
@@ -1456,29 +1409,32 @@ fn wait_for_wsl_dockerd_ready_in_guest(distro: &str, port: u16) -> Result<String
     Err(message)
 }
 
-/// Try to reach Docker at the given TCP endpoint, then fall back to a
+/// Try to reach the CrateBay Engine compatibility endpoint, then fall back to a
 /// localhost relay if direct connection fails.
 fn resolve_reachable_docker_host(guest_docker_host: &str) -> Result<String, String> {
     // Prefer the localhost-forwarded endpoint, which is the most compatible
     // across Windows networking configurations.
-    let local = windows_docker_host();
-    if common::wait_for_docker_tcp(&local, Duration::from_secs(5)).is_ok() {
+    let local = windows_engine_host();
+    if common::wait_for_engine_tcp(&local, Duration::from_secs(5)).is_ok() {
+        cache_windows_engine_host(&local);
         return Ok(local);
     }
 
     // Try direct connection first
-    if common::wait_for_docker_tcp(guest_docker_host, Duration::from_secs(5)).is_ok() {
+    if common::wait_for_engine_tcp(guest_docker_host, Duration::from_secs(5)).is_ok() {
+        cache_windows_engine_host(guest_docker_host);
         return Ok(guest_docker_host.to_string());
     }
 
     // Extract guest IP and port for relay setup
-    let (guest_ip, port) = common::docker_host_tcp_endpoint(guest_docker_host)
-        .ok_or_else(|| format!("Invalid WSL guest Docker host '{}'", guest_docker_host))?;
+    let (guest_ip, port) = common::engine_host_tcp_endpoint(guest_docker_host)
+        .ok_or_else(|| format!("Invalid WSL guest Engine host '{}'", guest_docker_host))?;
 
     // Set up localhost TCP relay
     let relay_host = setup_localhost_relay(&guest_ip, port)?;
 
-    if common::wait_for_docker_tcp(&relay_host, Duration::from_secs(10)).is_ok() {
+    if common::wait_for_engine_tcp(&relay_host, Duration::from_secs(10)).is_ok() {
+        cache_windows_engine_host(&relay_host);
         return Ok(relay_host);
     }
 
@@ -1493,8 +1449,13 @@ fn resolve_reachable_docker_host(guest_docker_host: &str) -> Result<String, Stri
 fn setup_localhost_relay(guest_ip: &str, port: u16) -> Result<String, String> {
     let target_addr = format!("{}:{}", guest_ip, port);
 
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .map_err(|e| format!("Failed to bind local Docker relay on 127.0.0.1: {}", e))?;
+    let listener =
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(|e| {
+            format!(
+                "Failed to bind local Engine compatibility relay on 127.0.0.1: {}",
+                e
+            )
+        })?;
 
     let relay_port = listener
         .local_addr()
@@ -1561,14 +1522,14 @@ fn proxy_tcp_connection(inbound: std::net::TcpStream, target_addr: &str) -> Resu
 // Utility: resource querying
 // ===========================================================================
 
-/// Get Docker version string from inside the distro.
+/// Get CrateBay Engine version string from inside the distro.
 fn wsl_docker_version(distro: &str) -> Option<String> {
-    let output = wsl_exec_with_timeout(
-        distro,
-        "docker version --format '{{.Server.Version}}' 2>/dev/null",
-        Duration::from_secs(10),
-    )
-    .ok()?;
+    let port = wsl_engine_port();
+    let command = format!(
+        "curl -fsS http://127.0.0.1:{port}/version 2>/dev/null \
+          | sed -n 's/.*\"Version\":\"\\([^\"]*\\)\".*/\\1/p'"
+    );
+    let output = wsl_exec_with_timeout(distro, &command, Duration::from_secs(10)).ok()?;
     let version = output.trim().to_string();
     if version.is_empty() {
         None
@@ -1610,15 +1571,58 @@ fn wsl_get_memory_info(distro: &str) -> Option<(u64, u64)> {
     Some((used_kb / 1024, total_kb / 1024))
 }
 
-/// Get the number of running containers inside the WSL2 distro.
-fn wsl_get_container_count(distro: &str) -> Option<u32> {
-    let output = wsl_exec_with_timeout(
-        distro,
-        "docker ps -q 2>/dev/null | wc -l",
-        Duration::from_secs(10),
-    )
-    .ok()?;
-    output.trim().parse::<u32>().ok()
+/// Get aggregate CPU usage percentage from two short `/proc/stat` samples.
+fn wsl_get_cpu_percent(distro: &str) -> Option<f32> {
+    let previous =
+        wsl_exec_with_timeout(distro, "sed -n '1p' /proc/stat", Duration::from_secs(5)).ok()?;
+    std::thread::sleep(Duration::from_millis(250));
+    let current =
+        wsl_exec_with_timeout(distro, "sed -n '1p' /proc/stat", Duration::from_secs(5)).ok()?;
+    common::linux_proc_stat_cpu_percent(&previous, &current)
+}
+
+/// Get runtime disk usage in GiB from the WSL root filesystem.
+fn wsl_get_disk_used_gb(distro: &str) -> Option<f32> {
+    let output = wsl_exec_with_timeout(distro, "df -B1 /", Duration::from_secs(5)).ok()?;
+    common::linux_df_used_gb(&output)
+}
+
+/// Get the number of containers inside the WSL2 runtime.
+fn wsl_get_container_count() -> Option<u32> {
+    if let Ok(payload) =
+        common::engine_http_get_json_tcp_host(&windows_engine_host(), "/cratebay/containers")
+    {
+        if let Some(count) = native_container_count_from_payload(&payload) {
+            return Some(count);
+        }
+    }
+
+    let payload =
+        common::engine_http_get_json_tcp_host(&windows_engine_host(), "/containers/json?all=true")
+            .ok()?;
+    compatibility_container_count_from_payload(&payload)
+}
+
+fn native_container_count_from_payload(payload: &serde_json::Value) -> Option<u32> {
+    payload
+        .get("count")
+        .and_then(|value| value.as_u64())
+        .map(|count| count as u32)
+        .or_else(|| {
+            payload
+                .get("items")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len() as u32)
+        })
+}
+
+fn compatibility_container_count_from_payload(payload: &serde_json::Value) -> Option<u32> {
+    payload.as_array().map(|containers| containers.len() as u32)
+}
+
+fn native_engine_contract_ready_on_host(host: &str) -> Result<(), String> {
+    let payload = common::engine_http_get_json_tcp_host(host, "/cratebay/engine")?;
+    crate::runtime::built_in_engine_contract_ready(&payload).map_err(|error| error.to_string())
 }
 
 /// Parse a value from a /proc/meminfo line (e.g. "MemTotal:       16384 kB").
@@ -1823,28 +1827,15 @@ Local:
     }
 
     // -----------------------------------------------------------------------
-    // dockerd command tests
+    // CrateBay Engine command tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn wsl_dockerd_foreground_command_uses_exec_start() {
-        let command = wsl_dockerd_foreground_command(2375, false);
-        assert!(command.contains("command -v dockerd"));
-        assert!(command.contains("mkdir -p /var/lib/docker /var/run /var/log"));
-        assert!(command.contains(": > /var/log/dockerd.log"));
-        assert!(command.contains("exec dockerd"));
-        assert!(command.contains("tcp://0.0.0.0:2375"));
-        assert!(!command.contains("--storage-driver=vfs"));
-    }
-
-    #[test]
-    fn wsl_dockerd_foreground_command_adds_compatibility_flags() {
-        let command = wsl_dockerd_foreground_command(2375, true);
-        assert!(command.contains("--storage-driver=vfs"));
-        assert!(command.contains("--iptables=false"));
-        assert!(command.contains("--ip6tables=false"));
-        assert!(command.contains("--ip-forward=false"));
-        assert!(command.contains("--ip-masq=false"));
+    fn wsl_engine_command_uses_cratebay_helper() {
+        let command = wsl_engine_command("start", 2375);
+        assert!(command.contains("CRATEBAY_DOCKER_PROXY_PORT=2375"));
+        assert!(command.contains("/usr/local/bin/cratebay-wsl-engine start"));
+        assert!(!command.contains("dockerd"));
     }
 
     // -----------------------------------------------------------------------
@@ -1880,6 +1871,37 @@ Local:
         assert_eq!(parse_meminfo_value("MemTotal:"), None);
     }
 
+    #[test]
+    fn native_container_count_prefers_count_field() {
+        let payload = serde_json::json!({
+            "api": "cratebay.containers.v1",
+            "count": 3,
+            "items": [{ "id": "one" }],
+        });
+
+        assert_eq!(native_container_count_from_payload(&payload), Some(3));
+    }
+
+    #[test]
+    fn native_container_count_falls_back_to_items_length() {
+        let payload = serde_json::json!({
+            "api": "cratebay.containers.v1",
+            "items": [{ "id": "one" }, { "id": "two" }],
+        });
+
+        assert_eq!(native_container_count_from_payload(&payload), Some(2));
+    }
+
+    #[test]
+    fn compatibility_container_count_reads_array_length() {
+        let payload = serde_json::json!([{ "Id": "one" }, { "Id": "two" }]);
+
+        assert_eq!(
+            compatibility_container_count_from_payload(&payload),
+            Some(2)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Struct tests
     // -----------------------------------------------------------------------
@@ -1893,9 +1915,9 @@ Local:
     }
 
     #[test]
-    fn wsl_docker_port_default() {
+    fn wsl_engine_port_default() {
         // Unless env var is set, should return the default
-        let port = wsl_docker_port();
+        let port = wsl_engine_port();
         assert!(port > 0);
     }
 
@@ -1913,36 +1935,21 @@ Local:
     }
 
     #[test]
-    fn wsl_docker_http_ping_command_format() {
-        let cmd = wsl_docker_http_ping_command(2375);
+    fn wsl_engine_http_ping_command_format() {
+        let cmd = wsl_engine_http_ping_command(2375);
         assert!(cmd.contains("2375"));
         assert!(cmd.contains("_ping"));
-        assert!(cmd.contains("wget"));
+        assert!(cmd.contains("cratebay-wsl-engine ping"));
+        assert!(!cmd.contains("dockerd"));
     }
 
     #[test]
-    fn wsl_dockerd_flags_normal_mode() {
-        let flags = wsl_dockerd_flags(2375, false);
-        assert!(flags.contains("tcp://0.0.0.0:2375"));
-        assert!(flags.contains("unix:///var/run/docker.sock"));
-        assert!(flags.contains("--pidfile"));
-        assert!(!flags.contains("--storage-driver=vfs"));
-    }
-
-    #[test]
-    fn wsl_dockerd_flags_compatibility_mode() {
-        let flags = wsl_dockerd_flags(2375, true);
-        assert!(flags.contains("--storage-driver=vfs"));
-        assert!(flags.contains("--iptables=false"));
-    }
-
-    #[test]
-    fn docker_socket_path_is_windows_pipe() {
+    fn engine_socket_path_is_windows_pipe() {
         let runtime = WindowsRuntime::new();
-        let path = runtime.docker_socket_path();
+        let path = runtime.engine_socket_path();
         let s = path.to_string_lossy();
         assert!(
-            s.contains("pipe") || s.contains("docker"),
+            s.contains("pipe") && s.contains("cratebay-engine"),
             "Expected Windows pipe path, got: {}",
             s
         );

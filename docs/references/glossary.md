@@ -12,23 +12,22 @@ live under `cratebay-core/src/runtime` and `cratebay-vz`.
 
 ## Image
 
-A Docker-compatible image reference, such as `alpine:latest` or
+A container image reference, such as `alpine:latest` or
 `ghcr.io/example/app:1.0`.
 
 ## Image Archive
 
-A tar archive produced by Docker-compatible save/export operations and loaded by
-Docker-compatible import/load operations.
+A tar archive produced by OCI/Docker-compatible save/export operations and
+loaded by OCI/Docker-compatible import/load operations.
 
 ## Container
 
-A running or stopped process environment created from an image and managed by a
-Docker-compatible engine.
+A running or stopped process environment created from an image and managed by
+CrateBay Engine.
 
 ## Pod
 
-A CrateBay-managed container group backed by an attachable Docker bridge
-network.
+A CrateBay-managed container group backed by an attachable Engine network.
 
 ## Bundle Image
 
@@ -41,5 +40,5 @@ A Rust function exposed to the React desktop app through Tauri IPC.
 
 ## Guest Helper
 
-The small binary installed inside the runtime guest to bridge Docker socket
-access back to the host-side app.
+The small binary installed inside the runtime guest to bridge the CrateBay
+Engine compatibility endpoint back to the host-side app.

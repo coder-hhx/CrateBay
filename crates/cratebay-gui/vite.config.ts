@@ -16,6 +16,7 @@ export default defineConfig({
   // Force development mode for React to get full error messages
   define: {
     "process.env.NODE_ENV": JSON.stringify("development"),
+    __CRATEBAY_APP_VERSION__: JSON.stringify(process.env.CRATEBAY_APP_VERSION ?? "0.9.0"),
   },
   // Vite options tailored for Tauri development
   clearScreen: false,

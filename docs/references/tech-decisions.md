@@ -10,21 +10,22 @@ The CLI plus built-in runtime is the minimum supported product shape. Desktop
 features should not be required for basic image, container, pod, or one-shot run
 workflows.
 
-## Docker API Through Bollard
+## Engine Compatibility API Through Bollard
 
 Container, image, volume, network, and pod operations use `bollard` from
 `cratebay-core`. GUI and CLI layers should call core helpers instead of reaching
-directly into Docker APIs.
+directly into compatibility APIs.
 
 ## Pods As Managed Networks
 
-Docker does not provide a native pod object. CrateBay models pods as managed
-attachable bridge networks with labels:
+CrateBay Engine exposes a pod grouping primitive as managed attachable bridge
+networks with labels:
 
 - `com.cratebay.managed=true`
 - `com.cratebay.pod=true`
 
-This gives the app a grouping primitive while staying compatible with Docker.
+This gives the app a grouping primitive while retaining compatibility with
+Docker-shaped clients.
 
 ## SQLite For Local State
 

@@ -1,4 +1,4 @@
-//! Pod/group operations backed by Docker networks.
+//! Pod/group operations backed by CrateBay Engine managed networks.
 //!
 //! Docker does not have a native Pod abstraction like Kubernetes. CrateBay
 //! models a pod as a managed, attachable bridge network with CrateBay labels,
@@ -41,7 +41,7 @@ pub async fn list(docker: &Docker) -> Result<Vec<PodInfo>, AppError> {
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker pod list timed out after {:?}",
+                "CrateBay Engine pod list timed out after {:?}",
                 DOCKER_POD_LIST_TIMEOUT
             ))
         })??;
@@ -87,7 +87,7 @@ pub async fn create(docker: &Docker, name: &str) -> Result<PodInfo, AppError> {
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker pod create timed out after {:?}",
+                "CrateBay Engine pod create timed out after {:?}",
                 DOCKER_POD_CREATE_TIMEOUT
             ))
         })??;
@@ -110,7 +110,7 @@ pub async fn inspect(docker: &Docker, name: &str) -> Result<PodInfo, AppError> {
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker pod inspect timed out after {:?}",
+            "CrateBay Engine pod inspect timed out after {:?}",
             DOCKER_POD_INSPECT_TIMEOUT
         ))
     })??;
@@ -170,7 +170,7 @@ pub async fn delete(docker: &Docker, name: &str, force: bool) -> Result<(), AppE
         .await
         .map_err(|_| {
             AppError::Runtime(format!(
-                "Docker pod delete timed out after {:?}",
+                "CrateBay Engine pod delete timed out after {:?}",
                 DOCKER_POD_DELETE_TIMEOUT
             ))
         })??;
@@ -199,7 +199,7 @@ pub async fn add_container(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker pod connect timed out after {:?}",
+            "CrateBay Engine pod connect timed out after {:?}",
             DOCKER_POD_CONNECT_TIMEOUT
         ))
     })??;
@@ -229,7 +229,7 @@ pub async fn remove_container(
     .await
     .map_err(|_| {
         AppError::Runtime(format!(
-            "Docker pod disconnect timed out after {:?}",
+            "CrateBay Engine pod disconnect timed out after {:?}",
             DOCKER_POD_CONNECT_TIMEOUT
         ))
     })??;

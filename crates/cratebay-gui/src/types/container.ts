@@ -38,10 +38,63 @@ export interface ContainerCreateRequest {
   memoryMb?: number;
   workingDir?: string;
   pod?: string;
-  network?: "bridge" | "none" | "host";
+  network?: string;
   user?: string;
   readOnlyRootfs?: boolean;
   autoStart?: boolean;
+  registryMirrors?: string[];
+}
+
+/**
+ * Request payload for running a one-shot container and collecting output.
+ */
+export interface ContainerRunRequest {
+  name?: string;
+  image: string;
+  entrypoint?: string;
+  command: string[];
+  env?: string[];
+  ports?: PortMapping[];
+  volumes?: VolumeMount[];
+  cpuCores?: number;
+  memoryMb?: number;
+  workingDir?: string;
+  pod?: string;
+  network?: string;
+  user?: string;
+  readOnlyRootfs?: boolean;
+  pull: boolean;
+  remove: boolean;
+  timeoutSecs?: number;
+  maxOutputBytes?: number;
+  registryMirrors?: string[];
+}
+
+/**
+ * Result payload from a one-shot container run.
+ */
+export interface ContainerRunResult {
+  id: string;
+  name: string;
+  image: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  timedOut: boolean;
+}
+
+/**
+ * Result payload from executing a command inside an existing container.
+ */
+export interface ExecResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  timedOut: boolean;
 }
 
 /**
@@ -73,7 +126,7 @@ export interface ContainerFilter {
 export interface PortMapping {
   hostPort: number;
   containerPort: number;
-  protocol: "tcp" | "udp";
+  protocol: "tcp" | "udp" | "sctp";
 }
 
 /**

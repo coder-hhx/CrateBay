@@ -15,26 +15,36 @@ test.describe("Navigation", () => {
     await appLayout.verifyAppLoaded();
   });
 
-  test("app loads on the Containers page", async ({ page }) => {
-    await expect(page.locator('[data-testid="container-list"]')).toBeVisible();
+  test("app loads on the Dashboard page", async ({ page }) => {
+    await expect(page.locator('[data-testid="dashboard-page"]')).toBeVisible();
     await expect(page.locator('[data-testid="app-title"]')).toBeVisible();
   });
 
-  test("sidebar shows container, image, and settings navigation", async ({ page }) => {
+  test("sidebar shows management navigation", async ({ page }) => {
+    await expect(page.locator('[data-testid="nav-dashboard"]')).toBeVisible();
     await expect(page.locator('[data-testid="nav-images"]')).toBeVisible();
     await expect(page.locator('[data-testid="nav-containers"]')).toBeVisible();
+    await expect(page.locator('[data-testid="nav-pods"]')).toBeVisible();
+    await expect(page.locator('[data-testid="nav-volumes"]')).toBeVisible();
+    await expect(page.locator('[data-testid="nav-networks"]')).toBeVisible();
     await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
   });
 
-  test("can navigate between Images, Containers, Pods, and Settings", async ({ page }) => {
+  test("can navigate between Images, Containers, Pods, Volumes, Networks, and Settings", async ({ page }) => {
     await appLayout.navigateToContainers();
     await expect(page.locator('[data-testid="container-list"]')).toBeVisible();
 
     await appLayout.navigateToPods();
     await expect(page.locator('[data-testid="pods-page"]')).toBeVisible();
 
+    await appLayout.navigateToVolumes();
+    await expect(page.locator('[data-testid="volumes-page"]')).toBeVisible();
+
+    await appLayout.navigateToNetworks();
+    await expect(page.locator('[data-testid="networks-page"]')).toBeVisible();
+
     await appLayout.navigateToSettings();
-    await expect(page.locator('[data-testid="settings-tab-general"]')).toBeVisible();
+    await expect(page.locator('[data-testid="settings-section-general"]')).toBeVisible();
 
     await appLayout.navigateToImages();
     await imagesPage.verifyImagesLoaded();
@@ -44,6 +54,8 @@ test.describe("Navigation", () => {
     await appLayout.navigateToContainers();
     await appLayout.navigateToImages();
     await appLayout.navigateToPods();
+    await appLayout.navigateToVolumes();
+    await appLayout.navigateToNetworks();
     await appLayout.navigateToSettings();
     await appLayout.navigateToImages();
 

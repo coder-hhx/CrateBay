@@ -4,6 +4,8 @@ import { invoke } from "@/lib/tauri";
 import { useContainerStore, type ContainerInfo } from "@/stores/containerStore";
 import { useI18n } from "@/lib/i18n";
 import { useAppStore } from "@/stores/appStore";
+import { ContainerDeleteDialog } from "@/components/container/ContainerDeleteDialog";
+import { ContainerExec } from "@/components/container/ContainerExec";
 import { ContainerLogs } from "@/components/container/ContainerLogs";
 import { ContainerMonitoring } from "@/components/container/ContainerMonitoring";
 import { TerminalView } from "@/components/container/TerminalView";
@@ -96,7 +98,7 @@ export function ContainerDetail() {
       <div
         data-testid="container-detail"
         className={cn(
-          "absolute bottom-0 right-0 top-0 z-50 flex flex-col border-l border-border bg-card shadow-2xl transition-transform duration-300 ease-in-out",
+          "absolute bottom-0 right-0 top-0 z-50 flex flex-col border-l border-border bg-card transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "translate-x-full",
         )}
         style={{ width: `${PANEL_WIDTH}px` }}
@@ -120,11 +122,12 @@ function DetailHeader({
   container: ContainerInfo;
   onClose: () => void;
 }) {
-  const { startContainer, stopContainer, deleteContainer, selectContainer, fetchImages } = useContainerStore();
+  const { startContainer, stopContainer, selectContainer, fetchImages } = useContainerStore();
   const { t } = useI18n();
   const { addNotification } = useAppStore();
   const isRunning = container.status === "running" || container.status === "paused";
   const [operating, setOperating] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [packDialogOpen, setPackDialogOpen] = useState(false);
   const [packImage, setPackImage] = useState(defaultPackImageName(container.name));
   const [packing, setPacking] = useState(false);
@@ -142,25 +145,6 @@ function DetailHeader({
       addNotification({
         type: "error",
         title: errorTitle,
-        message: error instanceof Error ? error.message : String(error),
-        dismissable: true,
-      });
-    } finally {
-      setOperating(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
-    setOperating(true);
-    try {
-      await deleteContainer(container.id);
-      selectContainer(null);
-      addNotification({ type: "success", title: t("containers", "deleteSuccess"), message: container.name, dismissable: true });
-    } catch (error) {
-      addNotification({
-        type: "error",
-        title: t("containers", "deleteFailed"),
         message: error instanceof Error ? error.message : String(error),
         dismissable: true,
       });
@@ -211,7 +195,7 @@ function DetailHeader({
             onClick={() => void handleAction(() => stopContainer(container.id), t("containers", "stopSuccess"), t("containers", "stopFailed"))}
             disabled={operating}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-            title="停止"
+            title={t("common", "stop")}
           >
             <Square className="h-3.5 w-3.5" />
           </button>
@@ -220,7 +204,7 @@ function DetailHeader({
             onClick={() => void handleAction(() => startContainer(container.id), t("containers", "startSuccess"), t("containers", "startFailed"))}
             disabled={operating}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-emerald-600 disabled:opacity-40"
-            title="启动"
+            title={t("common", "start")}
           >
             <Play className="h-3.5 w-3.5" />
           </button>
@@ -236,10 +220,10 @@ function DetailHeader({
         </button>
 
         <button
-          onClick={() => void handleDelete()}
+          onClick={() => setDeleteDialogOpen(true)}
           disabled={operating}
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-          title="删除"
+          title={t("common", "delete")}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -252,6 +236,13 @@ function DetailHeader({
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      <ContainerDeleteDialog
+        container={container}
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onDeleted={() => selectContainer(null)}
+      />
 
       <Dialog open={packDialogOpen} onOpenChange={setPackDialogOpen}>
         <DialogContent className="sm:max-w-md">
@@ -286,7 +277,7 @@ function DetailHeader({
 }
 
 function DetailContent({ container }: { container: ContainerInfo }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isRunning = container.status === "running" || container.status === "paused";
   const [inspectDetail, setInspectDetail] = useState<ContainerInspectDetail | null>(null);
   const [inspectError, setInspectError] = useState<string | null>(null);
@@ -317,18 +308,23 @@ function DetailContent({ container }: { container: ContainerInfo }) {
   const mountTargets = collectMountTargets(inspectDetail?.mounts);
 
   return (
-    <div className="flex flex-col gap-5 p-4">
+    <div className="flex flex-col gap-4 p-4">
       {/* Status badge */}
       <StatusBadge status={container.status} />
 
       {/* Overview */}
       <section>
-        <SectionTitle>{t("containers", "overview") ?? "概览"}</SectionTitle>
+        <SectionTitle>{t("containers", "overview")}</SectionTitle>
         <div className="space-y-3">
           <CopyableField label="ID" value={container.shortId} />
           <DetailField label={t("containers", "image")}>{container.image}</DetailField>
           <DetailField label={t("containers", "created")}>
-            {formatRelativeTime(container.createdAt)}
+            {formatRelativeTime(container.createdAt, locale, {
+              justNow: t("containers", "justNow"),
+              minutesAgo: t("containers", "minutesAgo"),
+              hoursAgo: t("containers", "hoursAgo"),
+              daysAgo: t("containers", "daysAgo"),
+            })}
           </DetailField>
           <DetailField label={t("containers", "template")}>{container.labels?.["com.cratebay.template_id"] || "—"}</DetailField>
         </div>
@@ -336,10 +332,12 @@ function DetailContent({ container }: { container: ContainerInfo }) {
 
       {/* Specs — plain text, no cards */}
       <section>
-        <SectionTitle>规格</SectionTitle>
+        <SectionTitle>{t("containers", "specs")}</SectionTitle>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2">
           <DetailField label={t("containers", "cpuCores")}>
-            {container.cpuCores !== undefined ? `${container.cpuCores} 核心` : "—"}
+            {container.cpuCores !== undefined
+              ? t("containers", "cpuCoresUnit").replace("{count}", String(container.cpuCores))
+              : "—"}
           </DetailField>
           <DetailField label={t("containers", "memoryMb")}>
             {container.memoryMb !== undefined ? `${container.memoryMb} MB` : "—"}
@@ -360,7 +358,7 @@ function DetailContent({ container }: { container: ContainerInfo }) {
       <section data-testid="container-inspect">
         <SectionTitle>{t("containers", "runtimeDetails")}</SectionTitle>
         {inspectError !== null ? (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
             {t("containers", "inspectUnavailable")}: {inspectError}
           </div>
         ) : inspectDetail === null ? (
@@ -388,7 +386,7 @@ function DetailContent({ container }: { container: ContainerInfo }) {
       {/* Ports */}
       {container.ports.length > 0 && (
         <section>
-          <SectionTitle>{t("containers", "ports") ?? "端口映射"}</SectionTitle>
+          <SectionTitle>{t("containers", "ports")}</SectionTitle>
           <div className="space-y-1.5">
             {container.ports.map((port) => (
               <div
@@ -402,8 +400,8 @@ function DetailContent({ container }: { container: ContainerInfo }) {
                   <span className={cn(
                     "rounded px-1 py-0.5 text-[10px] font-medium uppercase",
                     port.protocol === "tcp"
-                      ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                      : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                      ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
+                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
                   )}>
                     {port.protocol}
                   </span>
@@ -423,6 +421,9 @@ function DetailContent({ container }: { container: ContainerInfo }) {
             <TabsTrigger value="logs" className="text-xs">
               {t("containers", "logs")}
             </TabsTrigger>
+            <TabsTrigger value="exec" className="text-xs">
+              {t("containers", "exec")}
+            </TabsTrigger>
             <TabsTrigger value="terminal" className="text-xs">
               {t("containers", "terminal")}
             </TabsTrigger>
@@ -430,11 +431,14 @@ function DetailContent({ container }: { container: ContainerInfo }) {
           <TabsContent value="logs">
             <ContainerLogs containerId={container.id} tail={200} />
           </TabsContent>
+          <TabsContent value="exec">
+            <ContainerExec containerId={container.id} enabled={isRunning} />
+          </TabsContent>
           <TabsContent value="terminal">
             {isRunning ? (
               <TerminalView containerId={container.id} />
             ) : (
-              <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                 {t("containers", "terminalUnavailable")}
               </div>
             )}
@@ -512,6 +516,7 @@ function DetailField({ label, children }: { label: string; children: React.React
 }
 
 function CopyButton({ value }: { value: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -528,7 +533,7 @@ function CopyButton({ value }: { value: string }) {
     <button
       onClick={handleCopy}
       className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      title="复制"
+      title={t("containers", "copy")}
     >
       {copied ? (
         <Check className="h-3 w-3 text-emerald-500" />
@@ -614,7 +619,16 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
   );
 }
 
-function formatRelativeTime(isoString: string): string {
+function formatRelativeTime(
+  isoString: string,
+  locale: string,
+  labels: {
+    justNow: string;
+    minutesAgo: string;
+    hoursAgo: string;
+    daysAgo: string;
+  },
+): string {
   try {
     const date = new Date(isoString);
     const now = new Date();
@@ -623,11 +637,11 @@ function formatRelativeTime(isoString: string): string {
     const diffHour = Math.floor(diffMs / 3600000);
     const diffDay = Math.floor(diffMs / 86400000);
 
-    if (diffMin < 1) return "刚刚";
-    if (diffMin < 60) return `${diffMin} 分钟前`;
-    if (diffHour < 24) return `${diffHour} 小时前`;
-    if (diffDay < 7) return `${diffDay} 天前`;
-    return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+    if (diffMin < 1) return labels.justNow;
+    if (diffMin < 60) return labels.minutesAgo.replace("{count}", String(diffMin));
+    if (diffHour < 24) return labels.hoursAgo.replace("{count}", String(diffHour));
+    if (diffDay < 7) return labels.daysAgo.replace("{count}", String(diffDay));
+    return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
   } catch {
     return "—";
   }

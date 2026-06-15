@@ -41,16 +41,16 @@ pnpm run test:unit
 
 ## Module Boundaries
 
-- `cratebay-core`: Docker operations, runtime coordination, storage, validation.
+- `cratebay-core`: CrateBay Engine operations, runtime coordination, storage, validation.
 - `cratebay-cli`: command parsing and output formatting.
 - `cratebay-gui/src-tauri`: Tauri command wrappers and desktop runtime wiring.
 - `cratebay-gui/src`: React pages, stores, and components.
 - `cratebay-vz`: macOS virtualization runtime.
-- `cratebay-guest-agent`: guest-side Docker socket bridge.
+- `cratebay-guest-agent`: guest-side CrateBay Engine compatibility bridge.
 
 ## Review Checklist
 
 - No removed product surface appears in code, command help, tests, or docs.
 - CLI output is useful in table mode and structured mode.
-- Runtime-dependent paths handle unavailable Docker endpoints clearly.
+- Runtime-dependent paths handle unavailable Engine endpoints clearly.
 - GUI text matches the actual pages and controls.

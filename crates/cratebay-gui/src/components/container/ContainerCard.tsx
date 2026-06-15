@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { ContainerInfo } from "@/types/container";
 import { useContainerStore } from "@/stores/containerStore";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ContainerDeleteDialog } from "@/components/container/ContainerDeleteDialog";
 import {
   Play,
   Square,
@@ -19,14 +21,13 @@ interface ContainerCardProps {
 /**
  * Single container card for grid view.
  * Entire card is clickable to open detail panel.
- * Uses glow shadow instead of borders, with hover animation.
  */
 export function ContainerCard({ container }: ContainerCardProps) {
   const { t } = useI18n();
   const startContainer = useContainerStore((s) => s.startContainer);
   const stopContainer = useContainerStore((s) => s.stopContainer);
-  const deleteContainer = useContainerStore((s) => s.deleteContainer);
   const selectContainer = useContainerStore((s) => s.selectContainer);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const isRunning = container.status === "running" || container.status === "paused";
   const isStopped =
     container.status === "stopped" ||
@@ -47,28 +48,25 @@ export function ContainerCard({ container }: ContainerCardProps) {
   const start = (e: React.MouseEvent) => { e.stopPropagation(); void startContainer(container.id); };
   const remove = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm(t("containers", "confirmDelete").replace("{name}", container.name))) return;
-    void deleteContainer(container.id);
+    setDeleteOpen(true);
   };
   const openDetail = (e: React.MouseEvent) => { e.stopPropagation(); selectContainer(container.id); };
 
   return (
-    <div
-      onClick={isCreating ? undefined : handleCardClick}
-      data-testid="container-card"
-      className={cn(
-        "group rounded-xl border border-transparent bg-card p-4 transition-all duration-200",
-        // Glow shadow based on status
-        isRunning && "cursor-pointer shadow-[0_0_0_1px_rgba(52,211,153,0.2),0_2px_12px_rgba(52,211,153,0.08)] hover:shadow-[0_0_0_1px_rgba(52,211,153,0.4),0_4px_20px_rgba(52,211,153,0.15)]",
-        isStopped && "cursor-pointer shadow-[0_0_0_1px_rgba(148,163,184,0.15),0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-[0_0_0_1px_rgba(124,58,237,0.3),0_4px_20px_rgba(124,58,237,0.1)]",
-        isCreating && "animate-pulse shadow-[0_0_0_1px_rgba(124,58,237,0.3),0_2px_12px_rgba(124,58,237,0.12)]",
-        isError && "cursor-pointer shadow-[0_0_0_1px_rgba(248,113,113,0.2),0_2px_12px_rgba(248,113,113,0.08)] hover:shadow-[0_0_0_1px_rgba(248,113,113,0.4),0_4px_20px_rgba(248,113,113,0.15)]",
-        // Hover lift (not for creating)
-        !isCreating && "hover:-translate-y-0.5",
-      )}
-    >
+    <>
+      <div
+        onClick={isCreating ? undefined : handleCardClick}
+        data-testid="container-card"
+        className={cn(
+          "group rounded-md border border-border bg-card p-3 transition-colors",
+          isRunning && "cursor-pointer border-l-2 border-l-emerald-400 hover:border-primary/40",
+          isStopped && "cursor-pointer border-l-2 border-l-zinc-500 hover:border-primary/30",
+          isCreating && "animate-pulse border-l-2 border-l-yellow-400",
+          isError && "cursor-pointer border-l-2 border-l-red-400 hover:border-destructive/40",
+        )}
+      >
       {/* Header: name + status badge */}
-      <div className="mb-2 flex items-start justify-between">
+      <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-sm font-semibold text-foreground">
             {container.name}
@@ -108,7 +106,7 @@ export function ContainerCard({ container }: ContainerCardProps) {
 
       {/* Actions — negative margins extend border to card edge,
            pl-2 (16-2=14px effective) so button icon (with its own pl) aligns with text above */}
-      <div className="-mx-4 -mb-4 flex items-center gap-0.5 border-t border-border/50 pl-2 pr-2 py-2">
+      <div className="-mx-3 -mb-3 flex items-center gap-0.5 border-t border-border/60 px-1.5 py-1.5">
         {isRunning ? (
           <>
             <Button
@@ -167,7 +165,13 @@ export function ContainerCard({ container }: ContainerCardProps) {
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
-    </div>
+      </div>
+      <ContainerDeleteDialog
+        container={container}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
+    </>
   );
 }
 
@@ -180,7 +184,7 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
       case "running":
         return {
           label: t("containers", "running"),
-          dotClass: "bg-emerald-400 shadow-[0_0_4px_1px_rgba(52,211,153,0.5)]",
+          dotClass: "bg-emerald-400",
           textClass: "text-emerald-500",
         };
       case "exited":
@@ -194,7 +198,7 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
       case "created":
         return {
           label: t("containers", "creating"),
-          dotClass: "bg-yellow-400 animate-pulse shadow-[0_0_4px_1px_rgba(250,204,21,0.5)]",
+          dotClass: "bg-yellow-400 animate-pulse",
           textClass: "text-yellow-500",
         };
       case "paused":
@@ -206,19 +210,19 @@ function StatusBadge({ status }: { status: ContainerInfo["status"] }) {
       case "restarting":
         return {
           label: t("containers", "restarting"),
-          dotClass: "bg-blue-400 animate-pulse",
-          textClass: "text-blue-500",
+          dotClass: "bg-cyan-400 animate-pulse",
+          textClass: "text-cyan-500",
         };
       case "dead":
         return {
           label: t("containers", "dead"),
-          dotClass: "bg-red-400 shadow-[0_0_4px_1px_rgba(248,113,113,0.5)]",
+          dotClass: "bg-red-400",
           textClass: "text-red-500",
         };
       default:
         return {
           label: s,
-          dotClass: "bg-red-400 shadow-[0_0_4px_1px_rgba(248,113,113,0.5)]",
+          dotClass: "bg-red-400",
           textClass: "text-red-500",
         };
     }

@@ -5,52 +5,62 @@ import { invoke, listen } from "@/lib/tauri";
 import {
   deriveRuntimeStoreState,
   mapRuntimeState,
-  isBuiltinDockerSource,
-  type DockerStatusResponse,
+  isBuiltinEngineSource,
+  runtimeCompatibilityResponsive,
+  runtimeEngineResponsive,
+  runtimeHealthSource,
+  runtimeHealthState,
+  type EngineEndpointStatusResponse,
   type RuntimeHealthPayload,
   type RuntimeStatusResponse,
 } from "@/lib/runtimeStatus";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ToastContainer } from "@/components/common/Toast";
+import { DashboardPage } from "@/pages/DashboardPage";
 import { ContainersPage } from "@/pages/ContainersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ImagesPage } from "@/pages/ImagesPage";
+import { PodsPage } from "@/pages/PodsPage";
+import { VolumesPage } from "@/pages/VolumesPage";
+import { NetworksPage } from "@/pages/NetworksPage";
 
 const RUNTIME_HEALTH_DOWNGRADE_GRACE_MS = 90_000;
 
 function setEngineState(
   runtimeStatus: "starting" | "running" | "stopped" | "error",
-  dockerConnected: boolean,
-  builtinRuntimeReady: boolean = dockerConnected,
+  engineConnected: boolean,
+  builtinRuntimeReady: boolean = engineConnected,
+  compatibilityConnected: boolean = engineConnected,
 ) {
   useAppStore.setState({
     runtimeStatus,
-    dockerConnected,
+    engineConnected,
+    dockerConnected: compatibilityConnected,
     builtinRuntimeReady,
   });
 }
 
 /**
- * Query Docker and Runtime status on startup.
+ * Query CrateBay Engine and Runtime status on startup.
  * Updates appStore with initial values.
  * Both commands have 5-second timeout to prevent UI from hanging.
  */
 async function initRuntimeStatus() {
-  let dockerStatus: DockerStatusResponse | null = null;
+  let endpointStatus: EngineEndpointStatusResponse | null = null;
 
-  // 5-second timeout for docker_status
+  // 5-second timeout for engine_status
   try {
-    dockerStatus = await Promise.race([
-      invoke<DockerStatusResponse>("docker_status"),
-      new Promise<DockerStatusResponse>((_, reject) =>
+    endpointStatus = await Promise.race([
+      invoke<EngineEndpointStatusResponse>("engine_status"),
+      new Promise<EngineEndpointStatusResponse>((_, reject) =>
         setTimeout(
-          () => reject(new Error("Docker status check timeout")),
+          () => reject(new Error("CrateBay Engine status check timeout")),
           5000,
         ),
       ),
     ]);
   } catch {
-    dockerStatus = null;
+    endpointStatus = null;
   }
 
   // 5-second timeout for runtime_status
@@ -64,9 +74,9 @@ async function initRuntimeStatus() {
         ),
       ),
     ]);
-    useAppStore.setState(deriveRuntimeStoreState(dockerStatus, rtStatus));
+    useAppStore.setState(deriveRuntimeStoreState(endpointStatus, rtStatus));
   } catch {
-    useAppStore.setState(deriveRuntimeStoreState(dockerStatus, null));
+    useAppStore.setState(deriveRuntimeStoreState(endpointStatus, null));
   }
 }
 
@@ -84,7 +94,7 @@ function App() {
     // Load persisted settings (language, theme, etc.)
     void useSettingsStore.getState().fetchSettings();
 
-    // Query initial Docker & Runtime status
+    // Query initial CrateBay Engine & Runtime status
     void initRuntimeStatus();
   }, []);
 
@@ -95,16 +105,19 @@ function App() {
     void listen<RuntimeHealthPayload>(
       "runtime:health",
       (payload) => {
-        const nextRuntimeStatus = mapRuntimeState(payload.runtime_state);
-        const nextDockerConnected = payload.docker_responsive;
+        const nextRuntimeStatus = mapRuntimeState(runtimeHealthState(payload));
+        const nextEngineConnected = runtimeEngineResponsive(payload);
+        const nextCompatibilityConnected =
+          runtimeCompatibilityResponsive(payload) || nextEngineConnected;
         const current = useAppStore.getState();
 
-        // Any confirmed Docker responsiveness means engine is effectively ready.
-        if (nextDockerConnected) {
+        // Native Engine contract responsiveness is the app-ready signal.
+        if (nextEngineConnected) {
           setEngineState(
             "running",
             true,
-            isBuiltinDockerSource(payload.docker_source),
+            isBuiltinEngineSource(runtimeHealthSource(payload)),
+            nextCompatibilityConnected,
           );
           markHealthy();
           return;
@@ -112,7 +125,7 @@ function App() {
 
         const isTransientDowngrade =
           current.runtimeStatus === "running" &&
-          current.dockerConnected &&
+          current.engineConnected &&
           nextRuntimeStatus === "starting" &&
           Date.now() - lastHealthyAtRef.current < RUNTIME_HEALTH_DOWNGRADE_GRACE_MS;
 
@@ -121,7 +134,12 @@ function App() {
           return;
         }
 
-        setEngineState(nextRuntimeStatus, nextDockerConnected, false);
+        setEngineState(
+          nextRuntimeStatus,
+          nextEngineConnected,
+          false,
+          nextCompatibilityConnected,
+        );
       },
     ).then((unsub) => {
       unlisten = unsub;
@@ -132,29 +150,31 @@ function App() {
     };
   }, []);
 
-  // Listen for docker:connected event (emitted after runtime auto-start succeeds)
+  // Listen for engine connection events emitted after runtime auto-start succeeds.
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    const unlisteners: Array<() => void> = [];
 
-    void listen<boolean>(
-      "docker:connected",
-      () => {
-        // Runtime just started Docker — refresh status
-        markHealthy();
-        void initRuntimeStatus();
-      },
-    ).then((unsub) => {
-      unlisten = unsub;
+    const refreshEngineState = () => {
+      markHealthy();
+      void initRuntimeStatus();
+    };
+
+    void listen<boolean>("engine:connected", refreshEngineState).then((unsub) => {
+      unlisteners.push(unsub);
+    });
+    // Backward-compatible alias for older backends during upgrades.
+    void listen<boolean>("docker:connected", refreshEngineState).then((unsub) => {
+      unlisteners.push(unsub);
     });
 
     return () => {
-      unlisten?.();
+      unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
 
   useEffect(() => {
     const state = useAppStore.getState();
-    if (state.runtimeStatus === "running" && state.dockerConnected) {
+    if (state.runtimeStatus === "running" && state.engineConnected) {
       markHealthy();
     }
   }, []);
@@ -180,8 +200,12 @@ function App() {
   return (
     <>
       <AppLayout>
+        {currentPage === "dashboard" && <DashboardPage />}
         {currentPage === "containers" && <ContainersPage />}
         {currentPage === "images" && <ImagesPage />}
+        {currentPage === "pods" && <PodsPage />}
+        {currentPage === "volumes" && <VolumesPage />}
+        {currentPage === "networks" && <NetworksPage />}
         {currentPage === "settings" && <SettingsPage />}
       </AppLayout>
       <ToastContainer />

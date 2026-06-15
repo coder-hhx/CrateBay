@@ -11,7 +11,7 @@ interface Notification {
 
 interface AppState {
   // Navigation
-  currentPage: "containers" | "images" | "settings";
+  currentPage: "dashboard" | "containers" | "images" | "pods" | "volumes" | "networks" | "settings";
   setCurrentPage: (page: AppState["currentPage"]) => void;
 
   // Theme
@@ -24,13 +24,17 @@ interface AppState {
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
 
-  // Global status — dockerConnected = any Docker available
+  // Global status — engineConnected tracks the native CrateBay Engine contract.
+  // dockerConnected is a legacy compatibility endpoint signal and must not imply
+  // native management readiness.
+  engineConnected: boolean;
   dockerConnected: boolean;
   runtimeStatus: "starting" | "running" | "stopped" | "error";
+  setEngineConnected: (connected: boolean) => void;
   setDockerConnected: (connected: boolean) => void;
   setRuntimeStatus: (status: AppState["runtimeStatus"]) => void;
 
-  // Built-in runtime status (decoupled from explicit Docker host overrides)
+  // Built-in runtime status (decoupled from explicit compatibility host overrides)
   // true only when the CrateBay self-hosted VM runtime is ready.
   builtinRuntimeReady: boolean;
   setBuiltinRuntimeReady: (ready: boolean) => void;
@@ -49,7 +53,7 @@ let notificationId = 0;
 
 export const useAppStore = create<AppState>()((set) => ({
   // Navigation
-  currentPage: "containers",
+  currentPage: "dashboard",
   setCurrentPage: (page) => set({ currentPage: page }),
 
   // Theme — default dark
@@ -69,8 +73,14 @@ export const useAppStore = create<AppState>()((set) => ({
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
 
   // Global status
+  engineConnected: false,
   dockerConnected: false,
   runtimeStatus: "stopped",
+  setEngineConnected: (connected) =>
+    set((state) => ({
+      engineConnected: connected,
+      builtinRuntimeReady: connected ? state.builtinRuntimeReady : false,
+    })),
   setDockerConnected: (connected) => set({ dockerConnected: connected }),
   setRuntimeStatus: (status) => set({ runtimeStatus: status }),
 

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { usePullStore } from "@/stores/pullStore";
+import { useI18n } from "@/lib/i18n";
 import type { PullTask } from "@/stores/pullStore";
 import { Button } from "@/components/ui/button";
 import { X, CheckCircle2, XCircle, Download, Loader2, ChevronDown } from "lucide-react";
@@ -18,6 +19,7 @@ function formatSpeed(bytesPerSec: number): string {
 }
 
 export function PullTaskList() {
+  const { t } = useI18n();
   const tasks = usePullStore((s) => s.tasks);
   const removeTask = usePullStore((s) => s.removeTask);
   const clearCompleted = usePullStore((s) => s.clearCompleted);
@@ -58,6 +60,7 @@ export function PullTaskList() {
     <div className="relative" ref={panelRef}>
       {/* Trigger badge */}
       <button
+        aria-label={t("images", "pullTasks")}
         onClick={() => setExpanded((v) => !v)}
         className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none bg-primary/10 text-primary hover:bg-primary/20"
       >
@@ -79,7 +82,13 @@ export function PullTaskList() {
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
             <span className="text-xs font-medium text-foreground">
-              拉取任务 ({activeTasks.length} 进行中{completedCount > 0 ? ` / ${completedCount} 已完成` : ""})
+              {formatPullTaskSummary(
+                t("images", "pullTasks"),
+                activeTasks.length,
+                completedCount,
+                t("images", "pullTasksActive"),
+                t("images", "pullTasksCompleted"),
+              )}
             </span>
             {completedCount > 0 && (
               <Button
@@ -88,7 +97,7 @@ export function PullTaskList() {
                 className="h-5 px-1.5 text-[10px] text-muted-foreground"
                 onClick={clearCompleted}
               >
-                清除
+                {t("images", "pullTasksClear")}
               </Button>
             )}
           </div>
@@ -106,6 +115,7 @@ export function PullTaskList() {
 }
 
 function PullTaskRow({ task, onRemove }: { task: PullTask; onRemove: () => void }) {
+  const { t } = useI18n();
   if (task.complete) {
     return (
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
@@ -117,7 +127,7 @@ function PullTaskRow({ task, onRemove }: { task: PullTask; onRemove: () => void 
           )}
           <span className="truncate text-xs text-foreground">{task.image}</span>
           <span className={`text-[10px] flex-shrink-0 ${task.error !== null ? "text-destructive" : "text-green-600"}`}>
-            {task.error !== null ? "失败" : "完成"}
+            {task.error !== null ? t("images", "pullTasksFailed") : t("images", "pullTasksDone")}
           </span>
         </div>
         <button
@@ -148,10 +158,21 @@ function PullTaskRow({ task, onRemove }: { task: PullTask; onRemove: () => void 
       {/* Stats: downloaded size + speed */}
       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
         <span className="truncate">
-          {downloadedStr || task.status || "准备中..."}
+          {downloadedStr || t("images", "pullTasksPreparing")}
         </span>
         {speedStr && <span className="flex-shrink-0 tabular-nums ml-2">{speedStr}</span>}
       </div>
     </div>
   );
+}
+
+function formatPullTaskSummary(
+  label: string,
+  active: number,
+  completed: number,
+  activeLabel: string,
+  completedLabel: string,
+): string {
+  const completedPart = completed > 0 ? ` / ${completed} ${completedLabel}` : "";
+  return `${label} (${active} ${activeLabel}${completedPart})`;
 }

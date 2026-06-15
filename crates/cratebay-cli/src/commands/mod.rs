@@ -1,8 +1,12 @@
 pub mod container;
+pub mod engine;
 pub mod image;
+pub mod network;
 pub mod pod;
 pub mod runtime;
+pub mod settings;
 pub mod system;
+pub mod update;
 pub mod volume;
 
 use clap::ValueEnum;

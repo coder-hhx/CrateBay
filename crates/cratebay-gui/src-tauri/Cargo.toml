@@ -11,12 +11,16 @@ tauri-build = { workspace = true, features = [] }
 [dependencies]
 cratebay-core = { path = "../../cratebay-core" }
 tauri = { workspace = true, features = [] }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-updater = { workspace = true }
 tauri-specta = { workspace = true }
 specta = { workspace = true }
 tokio = { workspace = true }
 bollard = { workspace = true }
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

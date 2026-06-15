@@ -32,9 +32,13 @@ test.describe("Pods Management", () => {
 
   test("can create a pod", async ({ page }) => {
     await page.getByPlaceholder("pod-name").fill("api-stack");
+    await page.getByPlaceholder("driver").fill("macvlan");
+    await page.getByText("Internal").click();
+    await page.getByText("IPv6").click();
     await page.getByRole("button", { name: "Create" }).click();
 
     await expect(page.getByText("api-stack")).toBeVisible();
+    await expect(page.getByText("macvlan")).toBeVisible();
   });
 
   test("can add, inspect, and remove a container from a pod", async ({ page }) => {
@@ -55,6 +59,7 @@ test.describe("Pods Management", () => {
 
   test("can delete a pod", async ({ page }) => {
     await page.locator('[title="Delete Pod"]').first().click();
+    await page.getByRole("checkbox", { name: "Disconnect containers and delete" }).click();
     await page.getByRole("button", { name: "Delete" }).click();
 
     await expect(page.getByText("web-stack")).toBeHidden();

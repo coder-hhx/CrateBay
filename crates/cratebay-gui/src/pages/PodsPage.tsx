@@ -6,6 +6,7 @@ import { useContainerStore } from "@/stores/containerStore";
 import type { ContainerInfo } from "@/types/container";
 import type { PodContainerInfo, PodInfo } from "@/types/pod";
 import { Button } from "@/components/ui/button";
+import { EngineOfflineCallout } from "@/components/common/EngineOfflineCallout";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatTauriError, isImplicitRuntimeStartDisabled } from "@/lib/runtimeOffline";
 import {
   Boxes,
   Eye,
@@ -44,29 +46,41 @@ export function PodsPage() {
   const [pods, setPods] = useState<PodInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
+  const [newDriver, setNewDriver] = useState("bridge");
+  const [newInternal, setNewInternal] = useState(false);
+  const [newEnableIpv6, setNewEnableIpv6] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busyPod, setBusyPod] = useState<string | null>(null);
   const [containerInputs, setContainerInputs] = useState<Record<string, string>>({});
   const [deleteTarget, setDeleteTarget] = useState<PodInfo | null>(null);
-  const [forceDelete, setForceDelete] = useState(true);
+  const [forceDelete, setForceDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [inspectTarget, setInspectTarget] = useState<PodInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [engineOffline, setEngineOffline] = useState(false);
+  const [startingEngine, setStartingEngine] = useState(false);
 
   const podCount = useMemo(() => pods.length, [pods]);
+  const nameValidationError = useMemo(() => validatePodName(newName, t), [newName, t]);
 
   const fetchPods = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setEngineOffline(false);
     try {
       const result = await invoke<PodInfo[]>("pod_list");
       setPods(result);
     } catch (err) {
       setPods([]);
-      setError(formatError(err));
+      if (isImplicitRuntimeStartDisabled(err)) {
+        setEngineOffline(true);
+      } else {
+        setError(formatTauriError(err, t("common", "operationFailed")));
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void fetchPods();
@@ -76,18 +90,28 @@ export function PodsPage() {
   const handleCreate = useCallback(async () => {
     const name = newName.trim();
     if (name.length === 0) return;
+    const driver = newDriver.trim() || "bridge";
     setCreating(true);
     setError(null);
     try {
-      await invoke<PodInfo>("pod_create", { name });
+      await invoke<PodInfo>("pod_create", {
+        name,
+        driver,
+        internal: newInternal,
+        enableIpv6: newEnableIpv6,
+      });
       setNewName("");
+      setNewDriver("bridge");
+      setNewInternal(false);
+      setNewEnableIpv6(false);
       await fetchPods();
+      await fetchContainers();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatTauriError(err, t("common", "operationFailed")));
     } finally {
       setCreating(false);
     }
-  }, [fetchPods, newName]);
+  }, [fetchContainers, fetchPods, newDriver, newEnableIpv6, newInternal, newName, t]);
 
   const handleAddContainer = useCallback(async (podName: string) => {
     const container = containerInputs[podName]?.trim();
@@ -99,11 +123,11 @@ export function PodsPage() {
       setContainerInputs((prev) => ({ ...prev, [podName]: "" }));
       await fetchPods();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatTauriError(err, t("common", "operationFailed")));
     } finally {
       setBusyPod(null);
     }
-  }, [containerInputs, fetchPods]);
+  }, [containerInputs, fetchPods, t]);
 
   const handleRemoveContainer = useCallback(async (podName: string, container: string) => {
     setBusyPod(podName);
@@ -112,38 +136,58 @@ export function PodsPage() {
       await invoke("pod_remove_container", { name: podName, container, force: true });
       await fetchPods();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatTauriError(err, t("common", "operationFailed")));
     } finally {
       setBusyPod(null);
     }
-  }, [fetchPods]);
+  }, [fetchPods, t]);
 
   const handleDelete = useCallback(async () => {
     if (deleteTarget === null) return;
     setBusyPod(deleteTarget.name);
     setError(null);
+    setDeleteError(null);
     try {
       await invoke("pod_delete", { name: deleteTarget.name, force: forceDelete });
       setDeleteTarget(null);
+      setForceDelete(false);
       await fetchPods();
     } catch (err) {
-      setError(formatError(err));
+      const message = formatTauriError(err, t("common", "operationFailed"));
+      setDeleteError(message);
+      setError(message);
     } finally {
       setBusyPod(null);
     }
-  }, [deleteTarget, fetchPods, forceDelete]);
+  }, [deleteTarget, fetchPods, forceDelete, t]);
+
+  const handleStartEngine = useCallback(async () => {
+    setStartingEngine(true);
+    setError(null);
+    try {
+      await invoke("runtime_start");
+      await fetchPods();
+      await fetchContainers();
+    } catch (err) {
+      setError(formatTauriError(err, t("common", "operationFailed")));
+    } finally {
+      setStartingEngine(false);
+    }
+  }, [fetchContainers, fetchPods, t]);
 
   return (
     <div className="flex h-full flex-col" data-testid="pods-page">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-2.5">
-        <div className="flex min-w-0 flex-col">
-          <h1 className="text-sm font-semibold text-foreground">{t("pods", "title")}</h1>
-          <p className="text-xs text-muted-foreground">{t("pods", "subtitle")}</p>
+      <div className="flex flex-col gap-2 border-b border-border px-6 py-2.5 xl:flex-row xl:items-center">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-0">
+            <h1 className="text-sm font-semibold text-foreground">{t("pods", "title")}</h1>
+            <p className="text-xs text-muted-foreground">{t("pods", "subtitle")}</p>
+          </div>
+          <Badge variant="outline" className="text-[10px]">
+            {podCount} {t("pods", "podCount")}
+          </Badge>
         </div>
-        <Badge variant="outline" className="ml-1 text-[10px]">
-          {podCount} {t("pods", "podCount")}
-        </Badge>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 xl:ml-auto xl:justify-end">
           <Input
             value={newName}
             onChange={(event) => setNewName(event.target.value)}
@@ -154,9 +198,44 @@ export function PodsPage() {
               }
             }}
             placeholder={t("pods", "namePlaceholder")}
-            className="h-8 w-48 text-xs"
+            aria-invalid={nameValidationError !== null}
+            className={cn(
+              "h-8 w-full text-xs sm:w-48",
+              nameValidationError !== null && "border-destructive/60 focus-visible:ring-destructive/30",
+            )}
           />
-          <Button size="sm" onClick={() => void handleCreate()} disabled={creating || newName.trim().length === 0}>
+          <Input
+            value={newDriver}
+            onChange={(event) => setNewDriver(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void handleCreate();
+              }
+            }}
+            placeholder={t("pods", "driverPlaceholder")}
+            className="h-8 w-full font-mono text-xs sm:w-28"
+          />
+          <label className="flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={newInternal}
+              onCheckedChange={(checked) => setNewInternal(checked === true)}
+            />
+            {t("pods", "internal")}
+          </label>
+          <label className="flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={newEnableIpv6}
+              onCheckedChange={(checked) => setNewEnableIpv6(checked === true)}
+            />
+            IPv6
+          </label>
+          <Button
+            size="sm"
+            onClick={() => void handleCreate()}
+            disabled={creating || nameValidationError !== null}
+            title={nameValidationError ?? undefined}
+          >
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
             {t("pods", "create")}
           </Button>
@@ -172,6 +251,16 @@ export function PodsPage() {
           {error}
         </div>
       )}
+      {engineOffline && !loading && (
+        <div className="mx-6 mt-4">
+          <EngineOfflineCallout starting={startingEngine} onStart={() => void handleStartEngine()} />
+        </div>
+      )}
+      {newName.trim().length > 0 && nameValidationError !== null && (
+        <div className="mx-6 mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {nameValidationError}
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto px-6 py-4">
         {loading ? (
@@ -181,13 +270,13 @@ export function PodsPage() {
           </div>
         ) : pods.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-            <Boxes className="mb-3 h-12 w-12 opacity-20" />
+            <Boxes className="mb-2 h-8 w-8 opacity-40" />
             <h3 className="text-sm font-medium">{t("pods", "noPods")}</h3>
             <p className="mt-1 text-xs">{t("pods", "noPodsHint")}</p>
             <p className="mt-3 rounded-md bg-muted px-2 py-1 font-mono text-[11px]">{t("pods", "commandHint")}</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {pods.map((pod) => (
               <PodRow
                 key={pod.id || pod.name}
@@ -202,7 +291,7 @@ export function PodsPage() {
                 onRemoveContainer={(container) => void handleRemoveContainer(pod.name, container)}
                 onInspect={() => setInspectTarget(pod)}
                 onDelete={() => {
-                  setForceDelete(true);
+                  setForceDelete(false);
                   setDeleteTarget(pod);
                 }}
               />
@@ -216,7 +305,11 @@ export function PodsPage() {
       <Dialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
+          if (!open) {
+            setDeleteTarget(null);
+            setForceDelete(false);
+            setDeleteError(null);
+          }
         }}
       >
         <DialogContent className="sm:max-w-[420px]">
@@ -233,6 +326,11 @@ export function PodsPage() {
                 <Checkbox checked={forceDelete} onCheckedChange={(checked) => setForceDelete(checked === true)} />
                 {t("pods", "forceDelete")}
               </label>
+              {deleteError !== null && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {deleteError}
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -284,10 +382,10 @@ function PodRow({
   const selectedValue = selectedContainer?.id ?? "__manual";
 
   return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3">
-      <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <Boxes className="h-[18px] w-[18px]" />
+    <div className="rounded-md border border-border bg-card px-3 py-2.5">
+      <div className="flex items-start gap-2.5">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <Boxes className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -312,7 +410,7 @@ function PodRow({
         </div>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(180px,260px)_minmax(180px,1fr)_auto]">
+      <div className="mt-2.5 grid gap-2 md:grid-cols-[minmax(180px,260px)_minmax(180px,1fr)_auto]">
         <div className="flex flex-col gap-1.5">
           <Label className="text-[11px] text-muted-foreground">{t("pods", "selectContainer")}</Label>
           <Select
@@ -370,11 +468,11 @@ function PodRow({
       </div>
 
       {pod.containers.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {pod.containers.map((container) => (
             <span
               key={container.id}
-              className="inline-flex max-w-full items-center gap-1 rounded-md border bg-muted px-2 py-1 text-xs"
+              className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-muted/60 px-2 py-1 text-xs"
             >
               <span className="truncate font-mono">{container.name || container.id.slice(0, 12)}</span>
               <span className="text-muted-foreground">{container.ipv4Address ?? container.ipv6Address ?? ""}</span>
@@ -398,6 +496,16 @@ function PodRow({
 function formatContainerOption(container: ContainerInfo): string {
   const shortId = container.shortId || container.id.slice(0, 12);
   return `${container.name} · ${shortId}`;
+}
+
+function validatePodName(name: string, t: (namespace: string, key: string) => string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return t("pods", "nameRequired");
+  if (trimmed.length > 63) return t("pods", "nameTooLong");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trimmed)) {
+    return t("pods", "nameInvalid");
+  }
+  return null;
 }
 
 export function isContainerAttachedToPod(
@@ -493,10 +601,4 @@ function PodInspectDialog({ pod, onClose }: { pod: PodInfo | null; onClose: () =
       </DialogContent>
     </Dialog>
   );
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  return "Operation failed";
 }
